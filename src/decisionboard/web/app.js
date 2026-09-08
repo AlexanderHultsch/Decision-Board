@@ -97,6 +97,7 @@
     $("opt-path").textContent = config.config_path ? `Saved to ${config.config_path}` : "";
     const s = config.knowledge_status;
     $("opt-vault-status").textContent = !s.configured ? "Not set." : s.ok ? `${s.notes} notes found.` : s.error;
+    renderRolesStatus(config.roles_status);
     setError("options-error", "");
     $("options-dialog").hidden = false;
   }
@@ -129,6 +130,28 @@
       else if (data.path === null) $("opt-vault-status").textContent = "No folder chosen (or no folder dialog available on this machine - type the path instead).";
     } catch (err) { setError("options-error", err.message); }
     btn.disabled = false; btn.textContent = "Browse…";
+  }
+
+  function renderRolesStatus(r) {
+    const el = $("opt-roles-status");
+    if (!r) { el.textContent = ""; return; }
+    if (r.error) { el.innerHTML = `<span class="error">${esc(r.error)}</span>`; return; }
+    if (!r.expected_folder) { el.textContent = "Set the vault first; the Roles folder lives inside it."; return; }
+    if (r.from_vault.length === 6) el.textContent = `All six profiles found in ${r.folder}.`;
+    else if (r.from_vault.length === 0) el.textContent = `No profiles in ${r.expected_folder} - the built-in examples are used. Install them to edit in Obsidian.`;
+    else el.textContent = `${r.from_vault.length} profile(s) in ${r.folder}; built-in examples for ${r.built_in.join(", ")}.`;
+    $("btn-install-roles").hidden = r.from_vault.length === 6;
+  }
+
+  async function installRoles() {
+    const btn = $("btn-install-roles");
+    btn.disabled = true;
+    try {
+      const r = await api("POST", "/api/roles/install");
+      renderRolesStatus(r);
+      if (r.written && r.written.length) $("opt-roles-status").textContent += ` Written: ${r.written.length} file(s).`;
+    } catch (err) { setError("options-error", err.message); }
+    btn.disabled = false;
   }
 
   async function browseConfigFile() {
@@ -225,9 +248,15 @@
     $("in-options").value = (inp.options || []).join("\n");
     $("in-constraints").value = (inp.constraints || []).join("\n");
     const k = session.knowledge;
-    $("confirm-knowledge").textContent = k && k.vault_path
-      ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. Seven model calls follow.`
-      : "No knowledge source configured. Seven model calls follow.";
+    const r = session.roles || { from_vault: [], built_in: [] };
+    const rolesLine = r.from_vault.length === 6
+      ? `All six role profiles come from your vault (${r.folder}).`
+      : r.from_vault.length === 0
+        ? "Role profiles: built-in examples for all six members - no Roles folder in your vault yet (Options → install)."
+        : `Role profiles: ${r.from_vault.length} from your vault, built-in examples for ${r.built_in.join(", ")}.`;
+    $("confirm-knowledge").textContent = (k && k.vault_path
+      ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
+      : "No knowledge source configured. ") + rolesLine + " Seven model calls follow.";
     show("confirm");
   }
 
@@ -408,6 +437,7 @@
   $("options-form").addEventListener("submit", saveOptions);
   $("btn-browse").addEventListener("click", browse);
   $("btn-browse-occonfig").addEventListener("click", browseConfigFile);
+  $("btn-install-roles").addEventListener("click", installRoles);
   document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
   loadConfig().then(() => show("home")).catch((err) => { $("home-hint").textContent = err.message; show("home"); });

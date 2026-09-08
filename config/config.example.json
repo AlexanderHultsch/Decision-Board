@@ -16,9 +16,10 @@
   },
 
   "knowledge": {
-    "_comment": "The board's knowledge source: a folder of Markdown notes, such as an Obsidian vault. Read for every question, written to only after you confirm a memory entry when closing a topic. token_budget caps how many tokens of notes are sent per model call. Empty vault_path means the board answers from your question alone.",
+    "_comment": "The board's knowledge source: a folder of Markdown notes, such as an Obsidian vault. Read for every question, written to only after you confirm a memory entry when closing a topic. token_budget caps how many tokens of notes are sent per model call. Empty vault_path means the board answers from your question alone. roles_subfolder is the folder inside the vault holding one role profile per member (section 3.4); it is excluded from the ranked selection and read on every run.",
     "vault_path": "",
-    "token_budget": 6000
+    "token_budget": 6000,
+    "roles_subfolder": "Roles"
   },
 
   "server": {

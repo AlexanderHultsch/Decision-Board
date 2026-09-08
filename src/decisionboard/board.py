@@ -31,6 +31,7 @@ from typing import Any, Callable
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
 from .audit import log_run
+from .roles import RoleProfile
 
 BOARD_MEMBERS = ("Finance", "HW Engineering", "Mechanical Engineering",
                  "Manufacturing", "SW Engineering", "KPI Check")
@@ -73,23 +74,38 @@ class BoardConversation:
     result: BoardResult
     turns: list[tuple[str, str]]   # (question, answer), in order
     llm_calls: int = 0             # follow-up calls only; run_board counts its own
+    roles: dict[str, RoleProfile] | None = None   # the profiles the run used
 
 
 def _member_prompt(
-    topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str
+    topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str,
+    role: RoleProfile | None = None,
 ) -> str:
     """The prompt for one member's call.
 
     ``load_prompt("board_members")`` already describes the single-member
-    contract (isolation, response shape) FR-3.3a requires; this appends only
+    contract (isolation, response shape) FR-3.3a requires; this appends
     what that file cannot know in advance - which member this call is for,
-    and the FR-3.1 input."""
+    that member's role profile from the vault (section 3.4: its character,
+    skills, KPIs and vocabulary, and only its own), and the FR-3.1 input."""
     lines = [
         load_prompt("board_members"),
         "",
         "## Member (FR-3.3a)",
         "",
         f"Member: {member}",
+    ]
+    if role is not None and role.body:
+        lines += [
+            "",
+            "## Role profile (section 3.4)",
+            "",
+            "This is who this member is. It is authoritative for this call: assess in this "
+            "character, with these skills, against these KPIs, in this vocabulary.",
+            "",
+            role.body,
+        ]
+    lines += [
         "",
         "## Input (FR-3.1)",
         "",
@@ -139,7 +155,9 @@ def _parse_member_response(text: str) -> dict[str, str] | None:
     }
 
 
-def _synthesis_prompt(assessments: list[MemberAssessment]) -> str:
+def _synthesis_prompt(
+    assessments: list[MemberAssessment], roles: dict[str, RoleProfile] | None = None
+) -> str:
     payload = [
         {
             "member": assessment.member,
@@ -149,7 +167,14 @@ def _synthesis_prompt(assessments: list[MemberAssessment]) -> str:
         }
         for assessment in assessments
     ]
-    return load_prompt("board_synthesis") + "\n\n## Assessments\n\n" + json.dumps(payload, indent=2)
+    prompt = load_prompt("board_synthesis")
+    if roles:
+        # One line per member (section 3.4): the synthesis weighs who said
+        # what; it never receives a member's full profile.
+        prompt += "\n\n## Board members\n\n" + "\n".join(
+            f"- {role.title}: {role.perspective}" for role in roles.values() if role.perspective
+        )
+    return prompt + "\n\n## Assessments\n\n" + json.dumps(payload, indent=2)
 
 
 def _synthesis_text(data: dict[str, Any]) -> str:
@@ -180,6 +205,7 @@ def run_board(
     options: tuple[str, ...] = (),
     constraints: tuple[str, ...] = (),
     on_member: Callable[[str, str], None] | None = None,
+    roles: dict[str, RoleProfile] | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): six isolated member calls, then one
     synthesis call over what they produced.
@@ -241,7 +267,9 @@ def run_board(
     # six calls can see another's response, because none of them has
     # produced one yet when the six are submitted.
     prompts = [
-        _member_prompt(topic, context, options, constraints, member) for member in BOARD_MEMBERS
+        _member_prompt(topic, context, options, constraints, member,
+                       roles.get(member) if roles else None)
+        for member in BOARD_MEMBERS
     ]
 
     def _notify(member: str, state: str) -> None:
@@ -305,7 +333,7 @@ def run_board(
             llm_calls=llm_calls,
         ))
 
-    ai_result = provider.complete(TASK_BOARD, _synthesis_prompt(assessments))
+    ai_result = provider.complete(TASK_BOARD, _synthesis_prompt(assessments, roles))
     llm_calls += 1
 
     try:
@@ -331,9 +359,10 @@ def run_board(
 
 
 def _follow_up_prompt(
-    assessments: list[MemberAssessment], turns: list[tuple[str, str]], question: str
+    assessments: list[MemberAssessment], turns: list[tuple[str, str]], question: str,
+    roles: dict[str, RoleProfile] | None = None,
 ) -> str:
-    lines = [_synthesis_prompt(assessments), "", "## Conversation so far"]
+    lines = [_synthesis_prompt(assessments, roles), "", "## Conversation so far"]
     if turns:
         for turn_question, turn_answer in turns:
             lines.append(f"Q: {turn_question}")
@@ -367,7 +396,8 @@ def ask_follow_up(
             "AI Board has no model configured - set provider.models.board"
         )
 
-    prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question)
+    prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question,
+                               conversation.roles)
     ai_result = provider.complete(TASK_BOARD, prompt)
     answer = ai_result.text
 

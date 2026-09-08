@@ -48,6 +48,7 @@ def cmd_board(config: dict) -> int:
     from .agent.opencode_client import OpenCodeError
     from .agent.provider import AiNotConfiguredError, build_provider
     from .board import BoardConversation, ask_follow_up, render, render_follow_up, run_board
+    from .roles import load_roles
 
     topic = input("Topic: ").strip()
     context = input("Context: ").strip()
@@ -67,10 +68,13 @@ def cmd_board(config: dict) -> int:
         constraints.append(line)
 
     provider = build_provider(config)
+    profiles = load_roles(config)   # section 3.4: fresh on every run
+    from_vault = sum(1 for p in profiles.values() if p.source == "vault")
+    print(f"Role profiles: {from_vault} from the vault, {len(profiles) - from_vault} built-in.")
     try:
         result = run_board(
             config, provider, topic=topic, context=context,
-            options=options, constraints=constraints,
+            options=options, constraints=constraints, roles=profiles,
         )
     except AiNotConfiguredError as exc:
         print(f"Cannot run the AI Board: {exc}", file=sys.stderr)
@@ -83,7 +87,7 @@ def cmd_board(config: dict) -> int:
 
     # The owner decided the conversation lives in the synthesis only (six
     # members are not polled again) and ends when he stops answering.
-    conversation = BoardConversation(result=result, turns=[])
+    conversation = BoardConversation(result=result, turns=[], roles=profiles)
     print(
         f"\nFollow-up question - blank line ends the conversation. The first "
         f"round cost {result.llm_calls} model call(s); each follow-up costs one."

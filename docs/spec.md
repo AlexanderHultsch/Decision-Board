@@ -44,6 +44,25 @@ persistent state:
 | SW Engineering | Software scope, integration and test effort |
 | KPI Check | Which option best fits the four core responsibilities: time tracking, deliverables tracking, cost management, customer satisfaction |
 
+### 3.4 Role profiles
+
+**Decided 8 September 2026.** What a member *is* — character, skills, the
+KPIs it watches, its vocabulary, how it assesses, what it pushes back on —
+is not prompt text in this repository. It is one Markdown note per member
+in `<vault>/Roles/` (`knowledge.roles_subfolder`), written and edited in
+Obsidian, and read fresh on every board run (`roles.py`, `load_roles`).
+Nothing caches it: an edit is in force on the next question.
+
+| Rule | Reason |
+|---|---|
+| One note per member, not one file for all six | A member's call must never contain another member's material (FR-3.3a); a shared file would put all six personalities into every call, six times the tokens and a standing invitation to converge. One note each also gives Obsidian one node per role, and editing one member cannot damage another. |
+| A note claims its member through `member:` in its front matter, else through its file name | So the file can be called what Alex likes. `title:` is shown in the interface; `perspective:` is the one line the synthesis sees. |
+| Each member receives its own note in full, under `## Role profile`, declared authoritative for that call | The profile is the member's personality, not background reading. |
+| The synthesis receives one line per member (`title: perspective`), never the full profiles | It weighs who said what; it does not need to be six people. |
+| The Roles folder is excluded from the knowledge selection (`load_vault(skip_subfolders=…)`) | A profile is mandatory context for one member, not a note competing for the token budget of all of them. |
+| The repository ships one example note per member under `roles/`; a member without a note in the vault uses its example and the run reports it as `built-in` | A half-filled folder is visible in the confirm screen, in Options and in the CLI, never silent. |
+| The setup wizard offers to create `Roles/` and copy the examples in when the folder is missing, and to copy only the missing ones when it is partial; Options has the same button. Existing notes are never overwritten | The examples are a starting point; the vault's copies are the truth. |
+
 ### 3.2 Process
 
 | ID | Requirement |

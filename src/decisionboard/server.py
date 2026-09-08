@@ -35,6 +35,7 @@ from typing import Any
 from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
+from . import roles as roles_mod
 from .agent.provider import AiNotConfiguredError, AiProvider, build_provider
 from .board import BOARD_MEMBERS, BoardConversation, ask_follow_up, run_board
 
@@ -88,6 +89,7 @@ class Session:
         self.knowledge: dict[str, Any] = {"vault_path": None, "selected": 0, "total": 0, "tokens": 0,
                                           "truncated": False, "notes": []}
         self.knowledge_text = ""
+        self.roles: dict[str, Any] = {"from_vault": [], "built_in": list(BOARD_MEMBERS), "folder": None}
         self.clarification: clarify_mod.Clarification | None = None
         self.answers: list[str] = []
         self.inputs: dict[str, Any] = {}
@@ -129,6 +131,7 @@ class Session:
                 "busy": self.busy,
                 "error": self.error,
                 "knowledge": self.knowledge,
+                "roles": self.roles,
                 "clarification": clarification,
                 "answers": self.answers,
                 "inputs": self.inputs,
@@ -189,8 +192,31 @@ class BoardServer:
             "opencode_config": _get(self.config, "provider.opencode.config_file", "") or "",
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "knowledge_status": status,
+            "roles_status": self._roles_status(),
             "members": list(BOARD_MEMBERS),
         }
+
+    def _roles_status(self) -> dict[str, Any]:
+        try:
+            info = roles_mod.summary(roles_mod.load_roles(self.config))
+        except roles_mod.RolesUnavailable as exc:
+            return {"error": str(exc), "from_vault": [], "built_in": list(BOARD_MEMBERS), "folder": None}
+        folder = roles_mod.roles_folder(self.config)
+        info["expected_folder"] = str(folder) if folder else None
+        info["error"] = None
+        return info
+
+    def install_roles(self) -> dict[str, Any]:
+        folder = roles_mod.roles_folder(self.config)
+        if folder is None:
+            raise ApiError(400, "Set the knowledge source first - the Roles folder lives inside it.")
+        try:
+            written = roles_mod.install_examples(folder)
+        except OSError as exc:
+            raise ApiError(500, f"Could not write the role files: {exc}")
+        status = self._roles_status()
+        status["written"] = [str(path) for path in written]
+        return status
 
     def update_config(self, changes: dict[str, Any]) -> dict[str, Any]:
         mapping = {
@@ -242,7 +268,13 @@ class BoardServer:
         except knowledge_mod.KnowledgeUnavailable as exc:
             session.fail(f"{exc}. Check the knowledge source in Options.")
             return
+        try:
+            roles_preview = roles_mod.summary(roles_mod.load_roles(self.config))
+        except roles_mod.RolesUnavailable as exc:
+            session.fail(f"{exc}. Check the knowledge source in Options.")
+            return
         with session.lock:
+            session.roles = roles_preview
             session.knowledge = {
                 "vault_path": str(selection.vault_path) if selection.vault_path else None,
                 "selected": len(selection.notes),
@@ -307,17 +339,22 @@ class BoardServer:
         if session.knowledge_text:
             context = f"{context}\n\n{session.knowledge_text}" if context else session.knowledge_text
         try:
+            # Section 3.4: read fresh on every run, never cached - an edit in
+            # Obsidian is in force on the next question.
+            profiles = roles_mod.load_roles(self.config)
+            with session.lock:
+                session.roles = roles_mod.summary(profiles)
             result = run_board(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
-                on_member=on_member,
+                on_member=on_member, roles=profiles,
             )
         except Exception as exc:
             session.fail(str(exc))
             return
         with session.lock:
-            session.conversation = BoardConversation(result=result, turns=[])
+            session.conversation = BoardConversation(result=result, turns=[], roles=profiles)
             session.result = {
                 "topic": result.topic,
                 "assessments": [asdict(a) for a in result.assessments],
@@ -526,6 +563,8 @@ def make_handler(server: BoardServer):
                 elif path == "/api/pick-folder":
                     chosen = pick_folder(str(body.get("initial") or ""))
                     self._json(200, {"path": chosen})
+                elif path == "/api/roles/install":
+                    self._json(200, server.install_roles())
                 elif path == "/api/pick-file":
                     chosen = pick_folder(str(body.get("initial") or ""), kind="file")
                     self._json(200, {"path": chosen})

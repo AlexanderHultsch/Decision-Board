@@ -484,6 +484,37 @@ class Wizard:
             self.fail(str(exc))
             return
         self.ok(f"knowledge source: {vault} ({len(notes)} notes)")
+        self.check_roles(Path(vault))
+
+    def check_roles(self, vault: Path) -> None:
+        """The board's personality lives in ``<vault>/Roles/`` (section 3.4).
+        Missing folder: offer to create it and install the six examples.
+        Partial folder: say which members fall back to the built-in
+        example, and offer to install the missing ones."""
+        from decisionboard import roles as roles_mod
+        folder = vault / roles_mod.DEFAULT_SUBFOLDER
+        present = roles_mod._profile_files(folder) if folder.is_dir() else {}
+        missing = [m for m in roles_mod.MEMBERS if m not in present]
+        if folder.is_dir() and not missing:
+            self.ok(f"role profiles: all six in {folder}")
+            return
+        if not folder.exists():
+            self.say(f"        no Roles folder in the vault yet ({folder}).")
+            self.say("        The board's personality - each member's character, skills, KPIs and vocabulary -")
+            self.say("        is one note per member in that folder, edited in Obsidian and read on every run.")
+            question = "Create it and copy the six example profiles in?"
+        else:
+            self.say(f"        Roles folder found, but no profile for: {', '.join(missing)} (built-in examples would be used).")
+            question = "Copy the missing example profiles in?"
+        if not self.confirm(question, True):
+            self.warn(f"role profiles: built-in examples in use for {', '.join(missing)} - install them later in Options.")
+            return
+        try:
+            written = roles_mod.install_examples(folder)
+        except OSError as exc:
+            self.fail(f"could not write the role profiles: {exc}")
+            return
+        self.ok(f"role profiles: {len(written)} file(s) written to {folder} - edit them in Obsidian.")
 
     def pick_folder(self, initial: str) -> str | None:
         try:

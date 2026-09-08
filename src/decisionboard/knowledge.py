@@ -124,10 +124,14 @@ def _load_note(vault: Path, path: Path) -> Note:
     return Note(path=path, relative=relative, title=title, tags=tags, body=body)
 
 
-def load_vault(vault_path: Path | str) -> list[Note]:
+def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ()) -> list[Note]:
     """Every ``.md`` note under ``vault_path``, Obsidian's own folders
-    skipped. Raises ``KnowledgeUnavailable`` when the folder cannot be read."""
+    skipped, plus any top-level ``skip_subfolders`` (the Roles folder: a
+    member's profile is mandatory context for that member, section 3.4,
+    not a note competing for the budget). Raises ``KnowledgeUnavailable``
+    when the folder cannot be read."""
     vault = Path(vault_path)
+    skip_lower = {name.lower() for name in skip_subfolders}
     if not vault.exists():
         raise KnowledgeUnavailable(f"knowledge source not found: {vault}")
     if not vault.is_dir():
@@ -135,7 +139,10 @@ def load_vault(vault_path: Path | str) -> list[Note]:
     notes: list[Note] = []
     try:
         for path in sorted(vault.rglob("*.md")):
-            if any(part in _SKIP_DIRS or part.startswith(".") for part in path.relative_to(vault).parts[:-1]):
+            parts = path.relative_to(vault).parts
+            if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
+                continue
+            if len(parts) > 1 and parts[0].lower() in skip_lower:
                 continue
             if not path.is_file():
                 continue
@@ -224,7 +231,8 @@ def gather(config: dict, question: str) -> KnowledgeSelection:
     if not vault_path:
         return KnowledgeSelection(vault_path=None)
     vault = Path(str(vault_path)).expanduser()
-    notes = load_vault(vault)
+    roles_sub = str(_config_value(config, "knowledge.roles_subfolder") or "Roles")
+    notes = load_vault(vault, skip_subfolders=(roles_sub,))
     selection = select_notes(notes, question, int(budget))
     selection.vault_path = vault
     return selection
