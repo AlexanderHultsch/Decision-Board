@@ -1,9 +1,17 @@
 """The setup wizard: ``python scripts/setup.py``.
 
 Checks the machine, writes ``config/config.local.json`` with everything
-preselected, lets Alex pick the knowledge source with the native folder
-dialog, and makes one real test call through OpenCode so that "is the
-model reachable" is answered before the board is ever asked anything.
+preselected, lets the user pick the knowledge source with the native folder
+dialog, and makes two real test calls through OpenCode so that "is the model
+reachable" is answered before the board is ever asked anything.
+
+It is written for any machine, not one: a **company** setup points OpenCode
+at an IT-provided ``opencode.json`` (an internal gateway, no data leaving
+approved infrastructure), a **private** setup logs in to a provider with
+OpenCode's own ``auth login``. Everything after that step - knowledge source,
+model choice, test calls - is the same in both. Windows, macOS and Linux are
+all supported; the folder dialog needs tkinter and falls back to a typed
+path.
 
 Every check prints what it ran and what came back. A failed test call
 shows OpenCode's complete stdout and stderr, because the board's own error
@@ -34,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
 EXAMPLE_CONFIG = CONFIG_DIR / "config.example.json"
 LOCAL_CONFIG = CONFIG_DIR / "config.local.json"
-DEFAULT_MODEL = "azure/Opencode-Kimi-K2.7"
+DEFAULT_MODEL = ""
 TEST_PROMPT = "Reply with the single word OK and nothing else."
 
 OK = "  [ok]  "
@@ -44,11 +52,14 @@ FAIL = "  [XX]  "
 
 class Wizard:
     def __init__(self, *, interactive: bool, vault: str | None, model: str | None,
-                 run_test: bool, out=None, opencode_config: str | None = None) -> None:
+                 run_test: bool, out=None, opencode_config: str | None = None,
+                 profile: str | None = None) -> None:
         self.interactive = interactive
         self.vault_arg = vault
         self.model_arg = model
         self.opencode_config_arg = opencode_config
+        self.profile_arg = profile
+        self.profile = profile or ""
         self.env: dict[str, str] = dict(os.environ)
         self.run_test = run_test
         self.out = out or sys.stdout
@@ -108,13 +119,103 @@ class Wizard:
             import tkinter  # noqa: F401
             self.ok("tkinter available: the folder dialog will open.")
         except Exception:
-            self.warn("tkinter is not available: paths are typed instead of picked.")
+            self.say("        no tkinter: the folder dialog is unavailable, paths are typed instead.")
+
+    def step_profile(self, config_seed: dict | None = None) -> str:
+        """Company or private. The one question that changes what follows:
+        where the model lives and who may see the prompts."""
+        self.say("\n2. How will you use Decision Board?")
+        if self.profile_arg:
+            self.profile = self.profile_arg
+            self.ok(f"profile: {self.profile} (given on the command line)")
+            return self.profile
+        if self.opencode_config_arg:
+            # A company file named on the command line settles the question.
+            self.profile = "company"
+            self.ok(f"profile: company (an opencode.json was given: {self.opencode_config_arg})")
+            return self.profile
+        stored = (config_seed or {}).get("setup", {}).get("profile", "")
+        found_company_file = self.find_opencode_config()
+        default = stored or ("company" if found_company_file else "private")
+        self.say("        1. Company or organisation - your IT provides an opencode.json that points")
+        self.say("           OpenCode at an internal gateway. Prompts and notes stay on approved")
+        self.say("           infrastructure. Nothing to log in to; the file carries the key.")
+        self.say("        2. Private or own account - OpenCode logs in to a provider you choose")
+        self.say("           (Anthropic, OpenAI, and others). Your question and the notes the board")
+        self.say("           selects are sent to that provider, so use it only with content you may")
+        self.say("           send there.")
+        if found_company_file:
+            self.say(f"        (a company opencode.json is already on this machine: {found_company_file})")
+        if not self.interactive:
+            self.profile = default
+        else:
+            while True:
+                answer = self.ask("Choose 1 or 2", "1" if default == "company" else "2")
+                if answer in ("1", "company"):
+                    self.profile = "company"
+                    break
+                if answer in ("2", "private"):
+                    self.profile = "private"
+                    break
+                self.say("        Type 1 or 2.")
+        self.ok(f"profile: {self.profile}")
+        if self.profile == "private":
+            self.say("        Reminder: with a private account, everything the board sends leaves your")
+            self.say("        machine. Point the knowledge source at a vault you may share with the provider.")
+        return self.profile
+
+    def step_login(self, info: dict) -> None:
+        """Private setups only: make sure OpenCode has a provider login."""
+        self.say("\n4. Provider login")
+        if not info.get("found"):
+            self.say("        skipped: opencode not found.")
+            return
+        if info.get("credentials"):
+            self.ok("OpenCode has stored credentials - no login needed.")
+            return
+        self.say("        OpenCode has no stored credentials. `opencode auth login` opens a menu:")
+        self.say("        pick your provider, then paste the API key (or complete the browser login).")
+        if not self.interactive:
+            self.warn("no provider login found - run `opencode auth login` before using the board.")
+            return
+        if not self.confirm("Run `opencode auth login` now?", True):
+            self.warn("no provider login yet - run `opencode auth login` before using the board.")
+            return
+        try:
+            # No capture: this is an interactive menu the user has to see.
+            subprocess.run([self.opencode, "auth", "login"], env=self.env, timeout=900)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.fail(f"`opencode auth login` could not be run: {exc}")
+            return
+        auth = self._run([self.opencode, "auth", "list"], timeout=30)
+        text = ((auth.stdout or "") + (auth.stderr or "")).strip()
+        if "0 credentials" in text or not text:
+            self.warn("still no credentials stored - the test call will show whether it works anyway.")
+        else:
+            self.ok("credentials stored.")
+        listed = self._run([self.opencode, "models"], timeout=60)
+        if listed.returncode == 0 and (listed.stdout or "").strip():
+            info["models"] = listed.stdout.strip()
+            self.ok(f"`opencode models` now lists {len(info['models'].splitlines())} model string(s).")
+
+    def install_hint(self) -> list[str]:
+        """How to install OpenCode on this machine."""
+        if sys.platform == "win32":
+            return ["Install OpenCode:  winget install opencode   (or: npm install -g opencode-ai)",
+                    "then open a NEW terminal so PATH picks it up."]
+        if sys.platform == "darwin":
+            return ["Install OpenCode:  brew install sst/tap/opencode   (or: npm install -g opencode-ai)",
+                    "then open a new terminal."]
+        return ["Install OpenCode:  curl -fsSL https://opencode.ai/install | bash   (or: npm install -g opencode-ai)",
+                "then open a new terminal."]
 
     def step_opencode(self) -> dict:
-        self.say("\n2. OpenCode")
+        self.say("\n3. OpenCode")
         info = {"found": False, "version": "", "flags": [], "models": ""}
         if not self.opencode:
-            self.fail("opencode is not on PATH. Install it (see https://opencode.ai/docs) and open a new terminal.")
+            self.fail("opencode is not on PATH.")
+            for line in self.install_hint():
+                self.say(f"        {line}")
             return info
         info["found"] = True
         self.ok(f"opencode found: {self.opencode}")
@@ -143,13 +244,15 @@ class Wizard:
             self.say("        logins (`opencode auth list`):")
             for line in auth_text.splitlines()[:10]:
                 self.say(f"          {line}")
-            if "0 credentials" in auth_text:
-                if self.opencode_config_arg or self.find_opencode_config():
-                    self.say("        no stored credentials - fine here: the company opencode.json carries the gateway key.")
+            info["credentials"] = "0 credentials" not in auth_text
+            if not info["credentials"]:
+                if self.profile == "company":
+                    self.say("        no stored credentials - expected here: the company opencode.json carries the key.")
                 else:
-                    self.warn("OpenCode has no stored credentials. If the model needs a login, run `opencode auth login`.")
+                    self.say("        no stored credentials yet - the next step offers to log in.")
         else:
-            self.warn("`opencode auth list` printed nothing - if the test call fails, run `opencode auth login`.")
+            info["credentials"] = False
+            self.say("        `opencode auth list` printed nothing.")
         models = self._run([self.opencode, "models"], timeout=60)
         models_text = (models.stdout or "").strip()
         if models.returncode == 0 and models_text:
@@ -163,7 +266,7 @@ class Wizard:
         return info
 
     def step_config(self, info: dict) -> dict:
-        self.say("\n3. Configuration")
+        self.say("\n5. Configuration")
         if LOCAL_CONFIG.exists():
             config = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
             self.ok(f"existing {LOCAL_CONFIG.name} kept; values below are updated in place.")
@@ -182,8 +285,14 @@ class Wizard:
         provider.setdefault("opencode", {}).setdefault("auto_approve", True)
         provider.setdefault("token_limits", {}).setdefault("board", None)
 
+        config.setdefault("setup", {})["profile"] = self.profile
         opencode_cfg = provider.setdefault("opencode", {})
-        config_file = self.step_opencode_config(opencode_cfg.get("config_file") or "")
+        opencode_cfg.setdefault("extra_args", [])
+        if self.profile == "company":
+            config_file = self.step_opencode_config(opencode_cfg.get("config_file") or "")
+        else:
+            config_file = ""
+            self.say("        private setup: OpenCode uses its own configuration and login.")
         opencode_cfg["config_file"] = config_file
         defined = self.describe_opencode_config(config_file) if config_file else []
         if config_file:
@@ -194,16 +303,19 @@ class Wizard:
                 self.ok(f"`opencode models` with that file: {len(info['models'].splitlines())} model string(s)")
 
         current_model = provider.setdefault("models", {}).get("board") or ""
-        if not _looks_like_model_string(current_model) or ("big-pickle" in current_model and defined):
-            current_model = defined[0] if defined else DEFAULT_MODEL
+        if not _looks_like_model_string(current_model):
+            current_model = defined[0] if defined else _first_listed_model(info.get("models", "")) or DEFAULT_MODEL
         model = self.model_arg or self.choose_model(current_model, defined, info.get("models", ""))
         if defined and model not in defined:
             self.warn(f"{model} is not defined in {Path(config_file).name} (defined: {', '.join(defined)}).")
         elif info.get("models") and model not in info["models"]:
             self.warn(f"{model} is not in `opencode models` output - the test call will tell.")
+        if not model:
+            self.fail("no model chosen - set provider.models.board before using the board.")
         provider["models"]["board"] = model
-        if "/" in model and config_file:
-            provider["endpoint"] = f"{model.split('/')[0]} (company gateway, see opencode.config_file)"
+        if "/" in model:
+            provider["endpoint"] = (f"{model.split('/')[0]} (company gateway, see opencode.config_file)"
+                                    if config_file else f"{model.split('/')[0]} (private account via OpenCode)")
 
         vault = self.vault_arg
         current_vault = knowledge.get("vault_path") or ""
@@ -388,7 +500,7 @@ class Wizard:
         return path or None
 
     def step_test_call(self, config: dict, info: dict) -> None:
-        self.say("\n4. Test call through OpenCode")
+        self.say("\n6. Test call through OpenCode")
         if not self.run_test:
             self.say("        skipped (--no-test).")
             return
@@ -446,7 +558,7 @@ class Wizard:
         above passes on prompts the board never sends; this is the call that
         actually has to work (8 September 2026, when the board failed with
         "no answer text" after that test had passed)."""
-        self.say("\n4b. Test call shaped like a real board call")
+        self.say("\n6b. Test call shaped like a real board call")
         sys.path.insert(0, str(REPO_ROOT / "src"))
         from decisionboard.agent.opencode_client import OpenCodeError, OpenCodeProvider
         from decisionboard.agent.provider import TASK_BOARD
@@ -544,21 +656,55 @@ class Wizard:
         self.say("Decision Board setup")
         self.say("====================")
         self.step_environment()
+        self.step_profile(_read_json(LOCAL_CONFIG))
         info = self.step_opencode()
+        if self.profile == "private":
+            self.step_login(info)
+        else:
+            self.say("\n4. Provider login")
+            self.say("        not needed: the company opencode.json carries the gateway key.")
         config = self.step_config(info)
         self.step_test_call(config, info)
-        self.say("\n5. Summary")
-        if self.problems:
-            for problem in self.problems:
-                self.say(f"        - {problem}")
-            self.say("\n        Fix the items above, then run this script again.")
-        else:
+        self.say("\n7. Summary")
+        notes = [problem for problem in self.problems if problem not in self.failures]
+        if self.failures:
+            self.say("        Must be fixed before the board can run:")
+            for failure in self.failures:
+                self.say(f"        - {failure}")
+        if notes:
+            self.say("        Worth knowing:")
+            for note in notes:
+                self.say(f"        - {note}")
+        if not self.problems:
             self.ok("everything checked out.")
-        self.say("\n        Start the board:   python scripts/run_board.py serve")
-        if self.interactive and not self.problems and self.confirm("Start the board now?", True):
+        elif self.failures:
+            self.say("\n        Fix the items above, then run this script again.")
+        launcher = "python scripts\\run_board.py serve" if sys.platform == "win32" else "python3 scripts/run_board.py serve"
+        self.say(f"\n        Start the board:   {launcher}")
+        self.say("        Change any of this later in the interface under Options.")
+        if self.interactive and not self.failures and self.confirm("Start the board now?", True):
             from decisionboard.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
         return 1 if self.failures else 0
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _first_listed_model(listed: str) -> str:
+    """A sensible default from ``opencode models``: the first entry that
+    looks like a model string, preferring a well-known strong family."""
+    candidates = [line.strip() for line in (listed or "").splitlines() if _looks_like_model_string(line.strip())]
+    for marker in ("claude-opus", "claude-sonnet", "gpt-5", "gpt-4"):
+        for candidate in candidates:
+            if marker in candidate.lower():
+                return candidate
+    return candidates[0] if candidates else ""
 
 
 def _looks_like_model_string(value: str) -> bool:
@@ -635,6 +781,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault", help="knowledge source folder (skips the dialog)")
     parser.add_argument("--model", help="provider/model string (skips the question)")
     parser.add_argument("--opencode-config", help="path to the company opencode.json ('' for none; skips the dialog)")
+    parser.add_argument("--profile", choices=["company", "private"], help="skip the company/private question")
     parser.add_argument("--no-test", action="store_true", help="do not make the test call")
     parser.add_argument("--yes", action="store_true", help="no questions: take defaults and arguments")
     args = parser.parse_args(argv)
@@ -644,5 +791,5 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     wizard = Wizard(interactive=not args.yes, vault=args.vault, model=args.model, run_test=not args.no_test,
-                    opencode_config=args.opencode_config)
+                    opencode_config=args.opencode_config, profile=args.profile)
     return wizard.run()

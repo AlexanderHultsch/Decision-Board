@@ -274,3 +274,95 @@ class TestAllOnPath(unittest.TestCase):
             result = wizard._run(["opencode", "--version"], timeout=5)
         self.assertEqual(result.returncode, 126)
         self.assertIn("cannot be started", result.stderr)
+
+
+class TestProfiles(unittest.TestCase):
+    """The wizard has to serve a company machine, a private machine and any
+    operating system - not only the one it was first written on."""
+
+    def _run_wizard(self, tmp, profile, models="anthropic/claude-opus-5\nanthropic/claude-sonnet-5"):
+        local = Path(tmp) / "config.local.json"
+        out = io.StringIO()
+
+        def fake_run(command, **kwargs):
+            if command[1:] == ["models"]:
+                return mock.Mock(stdout=models, stderr="", returncode=0)
+            if command[1:] == ["auth", "list"]:
+                return mock.Mock(stdout="anthropic  api key", stderr="", returncode=0)
+            return mock.Mock(stdout="", stderr="", returncode=0)
+
+        with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+             mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
+             mock.patch.object(setup_wizard.subprocess, "run", fake_run):
+            wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
+                                         out=out, profile=profile)
+            wizard.run()
+        return json.loads(local.read_text(encoding="utf-8")), out.getvalue()
+
+    def test_private_profile_needs_no_company_file_and_picks_a_listed_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config, text = self._run_wizard(tmp, "private")
+        self.assertEqual(config["setup"]["profile"], "private")
+        self.assertEqual(config["provider"]["opencode"]["config_file"], "")
+        self.assertEqual(config["provider"]["models"]["board"], "anthropic/claude-opus-5")
+        self.assertIn("private account via OpenCode", config["provider"]["endpoint"])
+        self.assertIn("Provider login", text)
+
+    def test_company_profile_is_recorded_and_login_is_not_asked_for(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            company = Path(tmp) / "opencode.json"
+            company.write_text(json.dumps({"provider": {"gw": {"options": {"baseURL": "https://gw/v1", "apiKey": "k"},
+                                                               "models": {"m1": {}}}}}), encoding="utf-8")
+            local = Path(tmp) / "config.local.json"
+            out = io.StringIO()
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+                 mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
+                 mock.patch.object(setup_wizard.subprocess, "run",
+                                   lambda command, **kw: mock.Mock(stdout="", stderr="", returncode=0)), \
+                 mock.patch.object(setup_wizard.urllib.request, "urlopen", side_effect=OSError("offline")):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
+                                             out=out, opencode_config=str(company))
+                wizard.run()
+            config = json.loads(local.read_text(encoding="utf-8"))
+        self.assertEqual(config["setup"]["profile"], "company")
+        self.assertEqual(config["provider"]["opencode"]["config_file"], str(company))
+        self.assertEqual(config["provider"]["models"]["board"], "gw/m1")
+        self.assertIn("carries the gateway key", out.getvalue())
+
+    def test_a_stored_profile_is_the_default_next_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "config.local.json"
+            local.write_text(json.dumps({"setup": {"profile": "company"}}), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False, out=out)
+                wizard.opencode = None
+                self.assertEqual(wizard.step_profile(setup_wizard._read_json(local)), "company")
+
+    def test_install_hint_matches_the_platform(self):
+        out = io.StringIO()
+        wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False, out=out)
+        for platform_name, expected in (("win32", "winget"), ("darwin", "brew"), ("linux", "curl")):
+            with mock.patch.object(setup_wizard.sys, "platform", platform_name):
+                self.assertIn(expected, " ".join(wizard.install_hint()))
+
+    def test_the_shipped_example_config_names_no_company_and_no_person(self):
+        text = (REPO_ROOT / "config" / "config.example.json").read_text(encoding="utf-8")
+        config = json.loads(text)
+        for word in ("visteon", "ahultsch", "onedrive", "big-pickle", "kimi", "c:/users"):
+            self.assertNotIn(word, text.lower())
+        self.assertEqual(config["provider"]["models"]["board"], "")
+        self.assertEqual(config["knowledge"]["vault_path"], "")
+        self.assertEqual(config["runtime"]["audit_folder"], "")
+
+
+class TestFirstListedModel(unittest.TestCase):
+    def test_a_strong_family_is_preferred_over_the_first_line(self):
+        listed = "openai/gpt-3.5\nanthropic/claude-opus-5\nanthropic/claude-haiku-4-5"
+        self.assertEqual(setup_wizard._first_listed_model(listed), "anthropic/claude-opus-5")
+
+    def test_otherwise_the_first_model_shaped_line_wins(self):
+        self.assertEqual(setup_wizard._first_listed_model("not a model\nvendor/thing"), "vendor/thing")
+
+    def test_nothing_listed_gives_nothing(self):
+        self.assertEqual(setup_wizard._first_listed_model(""), "")

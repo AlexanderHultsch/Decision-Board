@@ -42,24 +42,45 @@ git clone https://github.com/AlexanderHultsch/Decision-Board.git
 cd Decision-Board
 ```
 
-Then run the setup wizard. It checks Python, git and OpenCode, writes
+Then run the setup wizard. It works on Windows, macOS and Linux, and on a
+company machine as well as a private one. It asks first how you will use
+Decision Board:
+
+* **Company or organisation** — your IT provides an `opencode.json` that
+  points OpenCode at an internal gateway. Prompts and notes stay on approved
+  infrastructure, and the file carries the key, so there is nothing to log
+  in to.
+* **Private or your own account** — OpenCode logs in to a provider you
+  choose. Your question and the notes the board selects are sent to that
+  provider, so point the knowledge source at a vault you may share with it.
+
+Everything after that is the same either way. The wizard checks Python, git
+and OpenCode (and tells you how to install OpenCode if it is missing), writes
 `config/config.local.json` with everything preselected, lets you choose the
-knowledge source with the folder dialog, and makes one real test call to the
+knowledge source with the folder dialog, and makes two real test calls to the
 model so you know it is reachable before the board is asked anything:
 
 ```
 python scripts/setup.py
 ```
 
-The wizard also asks for the company-provided `opencode.json` (the file that
-defines the internal LiteLLM gateway as provider `azure`). Its path is stored
-as `provider.opencode.config_file` and passed to every OpenCode call as
-`OPENCODE_CONFIG`, so the board finds it from any folder. The model string
-is then `provider/model` exactly as that file defines it, for example
-`azure/Opencode-Kimi-K2.7`. The wizard lists every model the gateway serves,
-so a stronger model behind the same approved endpoint is visible at a glance.
+In a company setup the wizard asks for that `opencode.json`. Its path is
+stored as `provider.opencode.config_file` and passed to every OpenCode call
+as `OPENCODE_CONFIG`, so the board finds it from any folder, and the model
+string is `provider/model` exactly as the file defines it. The wizard also
+asks the gateway which models it serves, so a stronger model behind the same
+approved endpoint is visible at a glance.
 
-A failed test call prints OpenCode's complete output and the likely causes.
+In a private setup the wizard offers to run `opencode auth login` for you and
+then picks a model from what `opencode models` lists.
+
+The two test calls are a one-word call and a call shaped like a real board
+call, with your notes attached and JSON expected. A failure prints OpenCode's
+complete output and the likely causes. Non-interactive use is supported too:
+
+```
+python scripts/setup.py --yes --profile private --vault "/path/to/vault"
+```
 On a machine without the repository yet, `scripts/install.ps1` does the
 clone as well: it asks for the folder, clones or pulls, then runs the wizard.
 

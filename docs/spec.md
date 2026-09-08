@@ -242,7 +242,28 @@ Greeting, one text box
   -> close             "write to memory?" -> proposal -> edit -> confirm -> written
 ```
 
-### 9.3 Server
+### 9.3 Setup
+
+`scripts/setup.py` (`setup_wizard.py`) is the one entry point for a new
+machine, and is deliberately not written for the machine it was first run on.
+It asks once how the machine is set up and records the answer as
+`setup.profile`:
+
+| Profile | What it means |
+|---|---|
+| `company` | An IT-provided `opencode.json` points OpenCode at an internal gateway (AI-3). The file carries the key, so there is no login; its path is stored as `provider.opencode.config_file` and passed as `OPENCODE_CONFIG` (OC-8). The wizard reads the file, lists the provider/model strings it defines, asks the gateway which models it serves, and flags a placeholder key or a plain-`http` endpoint. |
+| `private` | OpenCode logs in to a provider account of the user's own. The wizard offers to run `opencode auth login`, then picks a model from `opencode models`. The user is told plainly that the question and the selected notes leave the machine for that provider. |
+
+Everything after that step is identical in both: knowledge source, token
+budget, audit folder, port, theme, then two test calls — one word, and one
+shaped like a real board call (the member prompt with the knowledge block,
+JSON expected), because the first passes on prompts the board never sends.
+The wizard installs nothing and changes nothing outside `config.local.json`,
+except the OpenCode database it offers to rename when OpenCode's own schema
+does not match its binary. Nothing in the shipped configuration names a
+company, a person or a machine; `config.example.json` is empty placeholders.
+
+### 9.4 Server
 
 `decisionboard serve [--port N] [--no-browser]` starts `ThreadingHTTPServer`
 on `127.0.0.1` (`server.port`, default 8765) and opens the default browser.
