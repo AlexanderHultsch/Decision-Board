@@ -2,11 +2,16 @@
 """CLI entry point for the AI Board (decision 0005).
 
     decisionboard board
+    decisionboard serve [--port N] [--no-browser]
 
-Loads the local configuration and runs the board on a topic entered at the
-prompt (``board.py``, docs/spec.md chapter 9): six isolated member calls,
-then one synthesis call (FR-3.3a) - it cannot degrade to a partial answer
-without a model and refuses clearly instead (AI-4, K-7).
+``board`` loads the local configuration and runs the board on a topic
+entered at the prompt (``board.py``, docs/spec.md chapter 9): six isolated
+member calls, then one synthesis call (FR-3.3a) - it cannot degrade to a
+partial answer without a model and refuses clearly instead (AI-4, K-7).
+
+``serve`` starts the local browser interface (``server.py``, spec section
+10) on 127.0.0.1 and opens it in the default browser. Both front ends call
+the same ``run_board``.
 """
 
 from __future__ import annotations
@@ -99,8 +104,15 @@ def cmd_board(config: dict) -> int:
     return 0
 
 
-COMMANDS: dict[str, Callable[[dict], int]] = {
+def cmd_serve(config: dict, args: argparse.Namespace) -> int:
+    from .server import serve
+
+    return serve(config, args.config, port=args.port, open_browser=not args.no_browser)
+
+
+COMMANDS: dict[str, Callable[..., int]] = {
     "board": cmd_board,
+    "serve": cmd_serve,
 }
 
 
@@ -116,7 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to the local configuration (default: config/config.local.json)",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("board", help="AI Board")
+    subparsers.add_parser("board", help="AI Board on the command line")
+    serve_parser = subparsers.add_parser("serve", help="AI Board in the browser (local only)")
+    serve_parser.add_argument("--port", type=int, default=None,
+                              help="port on 127.0.0.1 (default: server.port from the config, else 8765)")
+    serve_parser.add_argument("--no-browser", action="store_true",
+                              help="do not open the default browser after starting")
     return parser
 
 
@@ -124,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "serve":
+        if args.port is None:
+            args.port = int(_get(config, "server.port", 8765))
+        return cmd_serve(config, args)
     return COMMANDS[args.command](config)
 
 

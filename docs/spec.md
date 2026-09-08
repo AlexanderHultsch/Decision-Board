@@ -2,17 +2,21 @@
 
 ## 1. Purpose and scope
 
-Decision Board is a standalone command-line decision-support tool. Alex poses a
+Decision Board is a standalone decision-support tool with two front ends: a
+command line and a local browser interface (section 9). Alex poses a
 question — a topic, its context, the options under consideration and any hard
 constraints — and six standing members answer it from six different
 professional perspectives, each in a model call that cannot see any other
 member's answer. A seventh call synthesises the six into one recommendation.
 
 The tool does one thing: run this board and hold the follow-up conversation
-that follows it, for the length of one invocation. It has no data store, no
+that follows it, for the length of one topic. It has no database, no
 scheduler, and no access of its own to Jira, SharePoint, Outlook or Teams.
-Anything the board should reason about — an OIL item, a Jira status, a cost
-figure — is supplied by Alex as free text when he is asked for context.
+Its one source of knowledge is a folder of Markdown notes Alex chooses — an
+Obsidian vault (section 5) — which the board reads for every question and
+writes to only after Alex has confirmed a note. Anything else the board
+should reason about — an OIL item, a Jira status, a cost figure — is
+supplied by Alex as free text.
 
 ## 2. Principles
 
@@ -44,8 +48,8 @@ persistent state:
 
 | ID | Requirement |
 |---|---|
-| FR-3.1 | Input: topic, context, options under consideration, hard constraints. The CLI asks for each of the four in turn (`cli.py`, `cmd_board`). |
-| FR-3.2 | If the topic or the options are unclear, the member prompt (`board_members.md`) instructs the model to ask at least three targeted questions instead of producing an assessment, returning `{"status": "questions", "questions": [...]}`. The response parser (`board._parse_member_response`) currently recognises only the assessment shape (`view`/`risks`/`recommendation`); a `questions` response does not match it and that member is recorded under `failed_members` rather than surfaced to Alex as questions. The instruction is in force in the prompt; the CLI has no dedicated path for it yet. |
+| FR-3.1 | Input: topic, context, options under consideration, hard constraints. The CLI asks for each of the four in turn (`cli.py`, `cmd_board`). The browser interface asks for one free-text question and derives the four through FR-3.2. |
+| FR-3.2 | **Clarification happens before the board, in one call, independent of the members** (decided 8 September 2026). The clarifier (`clarify.py`, prompt `clarifier.md`) reads Alex's question plus the knowledge block selected for it (section 5), extracts the four FR-3.1 inputs, and asks at least one question — always at least one, even for a clear topic: the one whose answer would most change the recommendation. Python enforces the minimum (`FALLBACK_QUESTION` when the model returns none). Alex's answers are folded into the context by string assembly (`merge_answers`), Alex confirms or edits the four inputs, and only then are the members polled. The clarifier's questions never reach the members; the member prompt (`board_members.md`) now tells a member to state an assumption rather than ask back. A member that returns the old `{"status": "questions"}` shape anyway is recorded under `failed_members` with its questions, not silently lost. The CLI `board` command does not run the clarifier; it asks for the four inputs directly. |
 | FR-3.3 | Each member produces a separate, clearly attributed assessment: `view`, `risks`, `recommendation` (`MemberAssessment`). |
 | FR-3.3a | **Members are polled in isolation.** Each member is a separate model call that does not see any other member's answer. All six prompts are built before any of the six calls is dispatched (`run_board`), so isolation is structural, not conventional, even though the six calls run concurrently. Only once all six have returned are the results combined and passed to the synthesis call. |
 | FR-3.4 | A synthesis follows: overall recommendation, decisive criterion, main counter-arguments, and what new information would change the recommendation (`board_synthesis.md`, `_synthesis_text`). |
@@ -76,9 +80,12 @@ what would be needed to answer with confidence is genuinely missing from the
 six assessments and the conversation so far.
 
 The whole conversation — the initial result and every follow-up turn — lives
-only inside the one `board` invocation that produced it. `BoardConversation`
-is an in-memory object; nothing is written to disk, and nothing survives the
-process exiting. Section 5 is the design for changing that.
+only inside the one topic that produced it. `BoardConversation` is an
+in-memory object; nothing is written to disk by the conversation itself, and
+nothing survives the process exiting. In the browser interface a topic ends
+with **Close topic**, which asks whether the decision should be written to
+memory (section 5); the CLI conversation ends at a blank line, without that
+step.
 
 ## 4. AI provider and the OpenCode invocation contract
 
@@ -112,36 +119,35 @@ overhead per call, measured once against OpenCode 1.18.11 in the source
 project and carried over as the basis for the ≈56,000-token figure quoted
 there for one board's initial round.
 
-## 5. Memory
+## 5. Knowledge source and memory
 
-**Designed in decision 0005. Not built.** No code in this repository reads or
-writes a memory folder; `ask_follow_up` and `run_board` work only from the
-current invocation's own assessments and conversation. What follows is the
-design as decided, not a description of running code.
-
-```
-memory/
-  index.md              # one line per topic note, maintained by the board
-  topics/<slug>.md      # one note per topic the board has been consulted on
-  principles.md         # standing positions Alex has confirmed - never re-argued
-```
-
-This is a folder of Markdown files, which makes it an Obsidian vault by
-construction — Obsidian opens any folder of `.md` files, so "Obsidian or a
-text file" was never a real choice. Alex would open it in Obsidian for the
-graph and the backlinks, or in Notepad if he did not want either; the board
-would read the same files either way.
+**Decided 8 September 2026, built in `knowledge.py` and `memory_writer.py`.**
+Alex selects one knowledge source: a folder of Markdown notes, which is what
+an Obsidian vault is on disk. Alex's own is an Obsidian vault in an
+offline-synced OneDrive folder. The board reads it for every question and
+writes to it only after Alex confirms a note.
 
 | Rule | Reason |
 |---|---|
-| Every note carries YAML front matter: `title`, `tags`, `created`, `last_consulted` | Deterministic selection (AP-1): Python would pick the notes whose title or tags overlap the new topic; the model would never search the vault itself |
-| A session would receive at most the notes Python selected, plus `principles.md`, capped by a configured token budget | The same reasoning as AP-3/AP-9 in the source project: reason on the delta the topic actually touches, not on the whole vault |
-| After the synthesis, the board would propose memory entries; each is written only after Alex confirms it individually | The same per-entry decision the source project's workbook context (WB-3) and import flow (6.2) already use — never a blanket "remember all of this." A memory that fills itself with whatever the model found notable stops being trusted within a month |
-| The `memory/` folder is git-ignored | It will hold program content once it exists; the repository is on GitHub and must stay free of it. `.gitignore` already reserves the path today, ahead of the folder existing |
+| The source is one folder, chosen in the browser interface's Options with a native folder dialog or typed in; stored as `knowledge.vault_path` | One thing to configure. "Obsidian or a text file" was never a real choice: Obsidian opens any folder of `.md` files, and a single `.md` file in a folder of its own is a vault of one note. |
+| No backup source. A configured folder that cannot be read stops the run with an error naming the folder | Alex's decision: an error message, not a fallback. A board that silently answered without its knowledge would look like a board that had read it. |
+| The whole vault is read; every `.md` file under the folder, Obsidian's own `.obsidian` and `.trash` folders skipped | Alex's decision: the whole memory, no folder selection. |
+| Selection is deterministic Python (AP-1): notes are ranked by how many of the question's terms appear in their title, tags, file name and body, and packed best-first into `knowledge.token_budget` (default 6,000 tokens per call). When the whole vault fits, the whole vault is sent | The model never lists or reads files itself. Reason on what the question touches, not on everything ever written. |
+| The selected notes go to the clarifier and, appended to `Context`, to every member (FR-3.7). The synthesis call does not receive them | The synthesis reasons over the six assessments only, as before. |
+| Every note the board writes carries YAML front matter: `title`, `tags` (always including `decision-board`), `created`, `source: decision-board` | The board's own notes stay findable in Obsidian's search and graph. |
+| On **Close topic**, Alex is asked whether the decision should be remembered. Yes: one model call (`memory_proposal.md`) receives the topic, the synthesis, the conversation and an outline of the vault — folders and existing note titles — and proposes a path and a note. Alex sees exactly what would be written and where, edits path, title, tags and body, and confirms; only then is the file written | AP-4: propose, do not execute. "Show him what will be written and where" was the decision, and the proposal step is the small dedicated agent Alex asked for: it finds the spot in the network, Python writes. |
+| A proposed path is validated in Python: inside the vault, a `.md` file, no traversal. Proposing an existing note's path appends a new section to that note; the board never overwrites | A note Alex wrote by hand is never replaced by one the board proposed. |
+| The `memory/` folder in `.gitignore` stays reserved but is no longer where notes go; notes go into the vault, next to what they are about | The vault is outside this repository by construction. |
+| Past topics are not listed in the interface | Alex's decision. The vault is the history; Obsidian is the browser for it. |
 
-The board never writes to its own memory on its own initiative — that rule is
-designed in now, before there is anything to write, so it is never a later
-retrofit.
+The board never writes to the vault on its own initiative — every write goes
+through the confirmation step, and the proposal call has no file access.
+
+**Cost.** One topic in the browser interface is one clarifier call, seven
+board calls, one call per follow-up, and one memory-proposal call if Alex
+says yes to remembering. Each call carries the fixed overhead described in
+section 4 plus up to `knowledge.token_budget` tokens of notes for the
+clarifier and member calls.
 
 ## 6. Audit trail
 
@@ -185,12 +191,76 @@ decision 0005, or was never part of the board to begin with:
 | Item | Why it is not here |
 |---|---|
 | GOV-1..GOV-5, the approval-token gate, action classes C–E | The board has no class C–E action: it never contacts a person and never writes to an external system. Section 6's `action_class: "B"` is the only class this tool ever logs. |
-| Reading OIL, Jira, Confluence, SharePoint, Outlook or Teams | This repository has no data store and no connector code. Anything the board should know is typed or pasted into `Context` by Alex (FR-3.7, 3.2). |
+| Reading OIL, Jira, Confluence, SharePoint, Outlook or Teams | This repository has no connector code. Anything the board should know is in the vault (section 5) or is typed into the question by Alex (FR-3.7, 3.2). |
 | Adaptive prioritisation, the import flow, the progress-check engine, the email briefing | These are TR-1/TR-2/TR-3 of the source project and never belonged to the board. |
 | Model tiering across task types | The source project's `Config` names five task types with different model classes; this repository has exactly one task type (`ai_board`) and one configuration key (`provider.models.board`). |
-| Session resumption across separate CLI invocations | The one open question phase 7 of the source project left behind. The memory design in section 5 is the answer that does not depend on it: what was worth keeping goes into a note; the rest was not meant to survive the process exiting anyway. |
+| Session resumption across separate invocations, and a list of past topics in the interface | The one open question phase 7 of the source project left behind, and answered on 8 September 2026 by section 5 rather than by a session store: what was worth keeping goes into a note in the vault; the rest was not meant to survive the process exiting anyway. Alex decided against a past-topics sidebar. |
+| Reaching the browser interface from another machine | Local only (section 9). The vault's content and every prompt would otherwise cross the network. |
 
-## 9. Origin
+## 9. Browser interface
+
+**Decided 8 September 2026** in answer to seventeen questions; the answers
+are recorded here so the draft they came from (`docs/hmi-spec-draft.md`)
+could be deleted. Built in `server.py` and `web/`.
+
+### 9.1 Decisions
+
+| # | Decision |
+|---|---|
+| 1 | One text box. The clarifier (FR-3.2) extracts topic, context, options and constraints and shows them for confirmation; the four are editable before the board runs. All six individual answers are kept and shown; the synthesis is shown first. |
+| 2 | Always at least one clarification question. |
+| 3 | The clarifier is one call in front of the board, independent of the members. Its questions never reach them; the members get only the aligned input. |
+| 4 | Simple icons as avatars: a dollar sign for Finance, a chip for HW Engineering, a gear for Mechanical Engineering, a factory for Manufacturing, code brackets for SW Engineering, a target for KPI Check, a check mark for the synthesis. Inline SVG, no image files. |
+| 5 | Close topic asks whether to write to memory, shows what would be written and where, and writes only on confirmation (section 5). |
+| 6 | No list of past topics. |
+| 7 | English throughout (LN-1). |
+| 8 | Alex selects the knowledge source: a folder, in his case an Obsidian vault on an offline-synced OneDrive folder. The board reads it and writes to it after approval. |
+| 10 | No backup file. A source that cannot be read is an error. |
+| 11 | The whole vault. |
+| 12 | 6,000 tokens of notes per call, configurable. |
+| 13 | Dependencies are allowed if they run on any company machine. None is needed: the server is `http.server`, the page is one HTML file with plain JavaScript and CSS, no build step. |
+| 14 | The folder picker is the native folder dialog, opened through tkinter in a separate Python process; on Windows that is the Explorer folder dialog. If tkinter is missing, the path is typed. |
+| 15 | Options holds the knowledge source, the token budget, the model string, the token limit, the audit folder, auto-approve and the theme, and writes `config.local.json` on save. |
+| 16 | Local only: the server binds to 127.0.0.1 and nothing else, so there is no login. |
+| 17 | The CLI `board` command stays, unchanged. Both front ends call the same `run_board`. |
+
+### 9.2 Flow
+
+```
+Greeting, one text box
+  -> clarifying        knowledge selected (section 5), one clarifier call (FR-3.2)
+  -> questions         at least one; answers optional
+  -> confirm           topic / context / options / constraints, editable
+  -> running           six avatars fill in as members return (FR-3.3a)
+  -> synthesising      the seventh call
+  -> result            synthesis first; click a member's icon to read its
+                       view, risks and recommendation; disagreements listed
+  -> follow-ups        one call each, until Close topic
+  -> close             "write to memory?" -> proposal -> edit -> confirm -> written
+```
+
+### 9.3 Server
+
+`decisionboard serve [--port N] [--no-browser]` starts `ThreadingHTTPServer`
+on `127.0.0.1` (`server.port`, default 8765) and opens the default browser.
+Every model call runs in a background thread; the page polls
+`GET /api/sessions/<id>` once a second. `run_board` reports each member's
+start and finish through an `on_member` callback that carries state only,
+never text — a progress display does not weaken member isolation.
+
+| Route | Purpose |
+|---|---|
+| `GET /` and `/static/*` | The page, its script and stylesheet, served from `web/`. |
+| `GET`/`POST /api/config` | Read and update the options; a write saves `config.local.json`. |
+| `POST /api/pick-folder` | Opens the native folder dialog; returns the chosen path or `null`. |
+| `POST /api/sessions` | Start a topic from one question: knowledge selection plus the clarifier call. |
+| `POST /api/sessions/<id>/answers`, `/run`, `/follow-up`, `/close`, `/memory`, `/discard-memory` | One step of the flow each; a step out of order is refused with 409. |
+
+Sessions live in memory for the life of the process. The server writes
+nothing to disk except the audit entry `run_board` already writes and the
+one vault note Alex confirms.
+
+## 10. Origin
 
 Decision Board was TR-4 of the Program Lead Cockpit, a single-user automation
 system for a Program Lead at Visteon Electronics running the MB32829 Gen6

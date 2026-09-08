@@ -21,6 +21,8 @@ from pathlib import Path
 PROMPT_NAMES: tuple[str, ...] = (
     "board_members",
     "board_synthesis",
+    "clarifier",
+    "memory_proposal",
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parent

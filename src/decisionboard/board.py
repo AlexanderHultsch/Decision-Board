@@ -26,7 +26,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
@@ -61,6 +61,7 @@ class BoardResult:
     failed_members: list[str]     # member plus why, short strings
     ai_result: AiResult | None    # the synthesis call's AiResult, for AI-2
     llm_calls: int = 0
+    synthesis_data: dict[str, Any] | None = None   # the parsed synthesis JSON, for the HMI
 
 
 @dataclass
@@ -103,6 +104,22 @@ def _member_prompt(
         lines.append("Hard constraints:")
         lines.extend(f"- {constraint}" for constraint in constraints)
     return "\n".join(lines)
+
+
+def _member_questions(text: str) -> list[str] | None:
+    """The questions a member returned instead of an assessment, if that
+    is what it did (the ``{"status": "questions"}`` shape). Since the
+    clarifier step in front of the board, members are told not to do this;
+    when one does anyway, the questions are recorded against that member
+    rather than lost."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, dict) and data.get("status") == "questions":
+        questions = data.get("questions")
+        return [str(item) for item in questions] if isinstance(questions, list) else []
+    return None
 
 
 def _parse_member_response(text: str) -> dict[str, str] | None:
@@ -162,9 +179,15 @@ def run_board(
     context: str = "",
     options: tuple[str, ...] = (),
     constraints: tuple[str, ...] = (),
+    on_member: Callable[[str, str], None] | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): six isolated member calls, then one
     synthesis call over what they produced.
+
+    ``on_member(member, state)`` is called from the worker threads as each
+    member starts (``"running"``) and finishes (``"done"`` or ``"failed"``),
+    so a front end can show progress. It carries no answer text - member
+    isolation (FR-3.3a) is not weakened by a progress callback.
 
     Raises ``AiNotConfiguredError`` when no provider is given or
     ``provider.models.board`` has no model configured - unlike the other
@@ -221,10 +244,29 @@ def run_board(
         _member_prompt(topic, context, options, constraints, member) for member in BOARD_MEMBERS
     ]
 
+    def _notify(member: str, state: str) -> None:
+        if on_member is not None:
+            try:
+                on_member(member, state)
+            except Exception:   # a progress display must never take a run down
+                pass
+
+    def _call(member: str, prompt: str) -> AiResult:
+        _notify(member, "running")
+        try:
+            result = provider.complete(TASK_BOARD, prompt)
+        except Exception:
+            _notify(member, "failed")
+            raise
+        _notify(member, "done" if _parse_member_response(result.text) is not None else "failed")
+        return result
+
     results: list[AiResult | None] = [None] * len(BOARD_MEMBERS)
     errors: list[BaseException | None] = [None] * len(BOARD_MEMBERS)
     with ThreadPoolExecutor(max_workers=len(BOARD_MEMBERS)) as executor:
-        futures = [executor.submit(provider.complete, TASK_BOARD, prompt) for prompt in prompts]
+        futures = [
+            executor.submit(_call, member, prompt) for member, prompt in zip(BOARD_MEMBERS, prompts)
+        ]
         for index, future in enumerate(futures):
             try:
                 results[index] = future.result()
@@ -239,9 +281,14 @@ def run_board(
             continue
         parsed = _parse_member_response(result.text)
         if parsed is None:
-            failed_members.append(
-                f"{member}: response did not parse as JSON with view/risks/recommendation"
-            )
+            questions = _member_questions(result.text)
+            if questions is not None:
+                asked = " | ".join(questions) if questions else "(none listed)"
+                failed_members.append(f"{member}: asked questions instead of assessing: {asked}")
+            else:
+                failed_members.append(
+                    f"{member}: response did not parse as JSON with view/risks/recommendation"
+                )
             continue
         assessments.append(MemberAssessment(member=member, **parsed))
 
@@ -270,6 +317,7 @@ def run_board(
         synthesis = _synthesis_text(synthesis_data)
     else:
         synthesis = f"Synthesis response did not parse as JSON: {ai_result.text}"
+        synthesis_data = None
 
     return _log(BoardResult(
         topic=topic,
@@ -278,6 +326,7 @@ def run_board(
         failed_members=failed_members,
         ai_result=ai_result,
         llm_calls=llm_calls,
+        synthesis_data=synthesis_data,
     ))
 
 

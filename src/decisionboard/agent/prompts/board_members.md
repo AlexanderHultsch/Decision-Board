@@ -1,6 +1,7 @@
 # AI Board – member assessment
 
-Implements spec 9.1, 9.2, 9.3, FR-3.1, FR-3.2, FR-3.3, FR-3.3a, FR-3.7.
+Implements spec 9.1, 9.2, 9.3, FR-3.1, FR-3.3, FR-3.3a, FR-3.7 (FR-3.2 is
+the clarifier's, see `clarifier.md`).
 
 The AI Board is a permanently available function, not a scheduled event - it
 is consulted whenever Alex brings a topic, on any topic, at any time. The
@@ -25,11 +26,15 @@ hard constraints (FR-3.1). If current OIL status, Jira status or cost figures
 are supplied alongside that input, use them as context for the assessment
 (FR-3.7).
 
-**FR-3.2 - the governing rule of this prompt.** If the topic or the options
-under consideration are unclear, ask **at least three targeted questions**
-before producing any assessment. Do not guess at what Alex means, and do not
-produce an assessment with placeholder content to fill the gap. In that case,
-return only the questions - no assessment.
+**FR-3.2 has already happened.** Before this call, a separate clarifier
+step read Alex's question, asked him what was missing and folded his
+answers into the context above (decision of 8 September 2026: clarification
+is one call in front of the board, independent of the members, and its
+questions never reach them). Do not ask questions back. Where something is
+still ambiguous, state the assumption you make - in `view`, in one
+sentence - and assess on it. An assessment on a stated assumption is
+useful; a list of questions at this point is not, because nobody will
+answer it.
 
 When the topic and options are clear enough to assess, produce this member's
 assessment covering view, risks and recommendation (FR-3.3), from this
@@ -50,15 +55,7 @@ rather than only stating it. A terse conclusion here cannot be expanded on
 later.
 
 Respond with **only** a single JSON object, no prose before or after it, no
-markdown code fences, in one of these two exact shapes.
-
-When the topic or options are unclear:
-
-```
-{"status": "questions", "questions": ["...", "...", "..."]}
-```
-
-When ready to assess:
+markdown code fences, in this exact shape:
 
 ```
 {"view": "...", "risks": "...", "recommendation": "..."}

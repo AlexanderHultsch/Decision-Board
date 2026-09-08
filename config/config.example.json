@@ -10,6 +10,21 @@
     "audit_folder": "C:/Users/<you>/…/decision-board/audit"
   },
 
+  "knowledge": {
+    "_comment": "The board's knowledge source: a folder of Markdown notes (an Obsidian vault). Read for every question, written only after you confirm a memory entry on closing a topic. token_budget caps the notes sent per model call. Both are editable in the browser interface's Options.",
+    "vault_path": "C:/Users/<you>/OneDrive/<your vault>",
+    "token_budget": 6000
+  },
+
+  "server": {
+    "_comment": "The browser interface listens on 127.0.0.1 only.",
+    "port": 8765
+  },
+
+  "ui": {
+    "theme": "system"
+  },
+
   "provider": {
     "_comment": "The endpoint is decided: K-7 closed on opencode/big-pickle. It stays here as the record of which endpoint was approved under AI-3, even though it is not read per call. token_limits stays null until a limit is decided. auto_approve is discussed in the source project's spec 3.8 (OC-6).",
     "endpoint": "opencode/big-pickle",

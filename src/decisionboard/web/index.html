@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision Board</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Crect width=%2724%27 height=%2724%27 rx=%276%27 fill=%27%232563eb%27/%3E%3Cpath d=%27M6 8h12M6 12h12M6 16h7%27 stroke=%27white%27 stroke-width=%272%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+    <span>Decision Board</span>
+  </div>
+  <div class="topbar-right">
+    <span id="knowledge-chip" class="chip" title="Knowledge source"></span>
+    <button id="btn-options" class="icon-btn" title="Options" aria-label="Options">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="app" class="page">
+
+  <!-- Home -->
+  <section id="screen-home" class="screen">
+    <h1 id="greeting" class="greeting">Good day.</h1>
+    <p class="lede">What should the board decide? Describe the situation in your own words. The board will ask what it needs to know before it answers.</p>
+    <form id="ask-form" class="ask">
+      <textarea id="question" rows="5" placeholder="For example: We must choose between reworking the Gen6 housing tooling or switching supplier. Budget is tight and the SOP date cannot move."></textarea>
+      <div class="row between">
+        <span id="home-hint" class="muted small"></span>
+        <button type="submit" class="primary">Ask the board</button>
+      </div>
+    </form>
+    <p id="home-error" class="error" hidden></p>
+  </section>
+
+  <!-- Clarifying -->
+  <section id="screen-clarifying" class="screen" hidden>
+    <div class="card centered">
+      <div class="spinner"></div>
+      <h2>Reading your question</h2>
+      <p id="clarifying-detail" class="muted"></p>
+    </div>
+  </section>
+
+  <!-- Questions -->
+  <section id="screen-questions" class="screen" hidden>
+    <h2>Before the board answers</h2>
+    <p class="muted">A few things would change the recommendation. Answer what you can; leave the rest blank.</p>
+    <form id="questions-form" class="stack"></form>
+    <div class="row end">
+      <button id="btn-back-home" type="button" class="ghost">Start over</button>
+      <button id="btn-answers" type="button" class="primary">Continue</button>
+    </div>
+  </section>
+
+  <!-- Confirm -->
+  <section id="screen-confirm" class="screen" hidden>
+    <h2>This is what the board will be asked</h2>
+    <p class="muted">Edit anything that is wrong. The six members answer this, and only this.</p>
+    <form id="confirm-form" class="stack">
+      <label>Topic<input id="in-topic" type="text"></label>
+      <label>Context<textarea id="in-context" rows="8"></textarea></label>
+      <label>Options under consideration <span class="muted small">one per line</span><textarea id="in-options" rows="4"></textarea></label>
+      <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
+    </form>
+    <p id="confirm-knowledge" class="muted small"></p>
+    <div class="row end">
+      <button id="btn-back-questions" type="button" class="ghost">Back</button>
+      <button id="btn-run" type="button" class="primary">Run the board</button>
+    </div>
+  </section>
+
+  <!-- Running -->
+  <section id="screen-running" class="screen" hidden>
+    <h2 id="running-title">The board is in session</h2>
+    <p id="running-detail" class="muted">Six members, each answering without seeing the others.</p>
+    <div id="member-grid" class="member-grid"></div>
+  </section>
+
+  <!-- Result -->
+  <section id="screen-result" class="screen" hidden>
+    <p class="eyebrow">Topic</p>
+    <h2 id="result-topic"></h2>
+
+    <div id="synthesis-card" class="card synthesis">
+      <div class="card-head">
+        <span class="avatar avatar-synthesis" aria-hidden="true"></span>
+        <div><div class="card-title">Board recommendation</div><div class="muted small">Synthesis of six independent assessments</div></div>
+      </div>
+      <div id="synthesis-body"></div>
+    </div>
+
+    <p class="eyebrow">Individual assessments <span class="muted small">click a member to read</span></p>
+    <div id="member-chips" class="member-chips"></div>
+    <div id="member-cards" class="stack"></div>
+    <p id="failed-members" class="error small" hidden></p>
+
+    <p class="eyebrow">Ask back</p>
+    <div id="turns" class="stack"></div>
+    <form id="followup-form" class="ask compact">
+      <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
+      <div class="row between">
+        <span id="result-hint" class="muted small"></span>
+        <div class="row">
+          <button id="btn-close" type="button" class="ghost">Close topic</button>
+          <button type="submit" class="primary" id="btn-followup">Ask</button>
+        </div>
+      </div>
+    </form>
+    <p id="result-error" class="error" hidden></p>
+  </section>
+
+  <!-- Proposing -->
+  <section id="screen-proposing" class="screen" hidden>
+    <div class="card centered">
+      <div class="spinner"></div>
+      <h2>Finding the right place in your vault</h2>
+      <p class="muted">One model call proposes where the note belongs and what it says. Nothing is written yet.</p>
+    </div>
+  </section>
+
+  <!-- Proposal -->
+  <section id="screen-proposal" class="screen" hidden>
+    <h2>Write this to memory?</h2>
+    <p class="muted">This is exactly what would be written, and where. Edit it, then confirm. Nothing is written until you do.</p>
+    <form id="proposal-form" class="stack">
+      <label>Vault<input id="prop-vault" type="text" readonly></label>
+      <label>Note path <span id="prop-mode" class="tag"></span><input id="prop-path" type="text"></label>
+      <label>Title<input id="prop-title" type="text"></label>
+      <label>Tags <span class="muted small">comma separated; decision-board is always added</span><input id="prop-tags" type="text"></label>
+      <label>Note<textarea id="prop-body" rows="14"></textarea></label>
+    </form>
+    <details class="preview"><summary>Preview of the file on disk</summary><pre id="prop-preview"></pre></details>
+    <p id="proposal-error" class="error" hidden></p>
+    <div class="row end">
+      <button id="btn-discard" type="button" class="ghost">Don't write</button>
+      <button id="btn-write" type="button" class="primary">Write to vault</button>
+    </div>
+  </section>
+
+  <!-- Done -->
+  <section id="screen-done" class="screen" hidden>
+    <div class="card centered">
+      <h2 id="done-title">Topic closed</h2>
+      <p id="done-detail" class="muted"></p>
+      <button id="btn-new" type="button" class="primary">New topic</button>
+    </div>
+  </section>
+
+  <!-- Error -->
+  <section id="screen-error" class="screen" hidden>
+    <div class="card centered">
+      <h2>The board could not continue</h2>
+      <p id="error-detail" class="error"></p>
+      <div class="row">
+        <button id="btn-error-options" type="button" class="ghost">Open options</button>
+        <button id="btn-error-home" type="button" class="primary">Start over</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Close dialog -->
+<div id="close-dialog" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Close this topic</h2>
+    <p class="muted">Do you want the board to write what was decided into your vault? You will see the note and where it goes before anything is written.</p>
+    <p id="close-error" class="error small" hidden></p>
+    <div class="row end">
+      <button id="btn-close-cancel" type="button" class="ghost">Cancel</button>
+      <button id="btn-close-no" type="button" class="ghost">Close without writing</button>
+      <button id="btn-close-yes" type="button" class="primary">Yes, propose a note</button>
+    </div>
+  </div>
+</div>
+
+<!-- Options dialog -->
+<div id="options-dialog" class="modal" hidden>
+  <div class="modal-card wide">
+    <h2>Options</h2>
+    <form id="options-form" class="stack">
+      <fieldset>
+        <legend>Knowledge source</legend>
+        <label>Obsidian vault folder
+          <div class="row">
+            <input id="opt-vault" type="text" placeholder="C:/Users/you/OneDrive/Vault">
+            <button id="btn-browse" type="button" class="ghost">Browse…</button>
+          </div>
+        </label>
+        <p id="opt-vault-status" class="small muted"></p>
+        <label>Token budget for notes per model call<input id="opt-budget" type="number" min="500" step="500"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Model</legend>
+        <label>Model string <span class="muted small">provider/model, as OpenCode expects it</span><input id="opt-model" type="text"></label>
+        <label>Token limit per call <span class="muted small">observed, never enforced; blank for none</span><input id="opt-limit" type="number" min="0"></label>
+        <label class="check"><input id="opt-auto" type="checkbox"> Auto-approve OpenCode runs (headless runs hang without it)</label>
+      </fieldset>
+      <fieldset>
+        <legend>Runtime</legend>
+        <label>Audit folder<input id="opt-audit" type="text"></label>
+        <label>Theme
+          <select id="opt-theme"><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select>
+        </label>
+      </fieldset>
+      <p id="opt-path" class="muted small"></p>
+      <p id="options-error" class="error small" hidden></p>
+      <div class="row end">
+        <button id="btn-options-cancel" type="button" class="ghost">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
