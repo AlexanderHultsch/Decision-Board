@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,11 @@ from .provider import (
 
 _STDERR_TRIM = 2000
 _LINE_TRIM = 200
+# Windows' CreateProcess rejects a command line above 32,767 characters;
+# the prompt is passed as one argument, so a large knowledge block can
+# reach it. Refuse with a clear message before that happens.
+_WINDOWS_COMMAND_LIMIT = 30000
+_OPTIONAL_FLAGS = ("--auto", "--dir")
 
 
 class OpenCodeError(RuntimeError):
@@ -67,6 +73,7 @@ class OpenCodeProvider(AiProvider):
         self._binary = binary
         self._cwd = cwd
         self._timeout_seconds = timeout_seconds
+        self._supported: frozenset[str] | None = None
 
     def complete(self, task: str, prompt: str) -> AiResult:
         """Runs ``task`` through ``opencode run`` and returns its ``AiResult``.
@@ -114,9 +121,29 @@ class OpenCodeProvider(AiProvider):
             )
         return result
 
+    def _supported_flags(self) -> frozenset[str]:
+        """Which of the optional flags this OpenCode version accepts, read
+        once from ``opencode run --help`` (OC-7). A version that does not
+        know a flag prints its usage text and exits 1 instead of running -
+        seen on the target machine on 8 September 2026, where ``--auto``
+        was not in the list - so a flag is passed only when the installed
+        binary lists it. If the probe itself fails, no optional flag is
+        passed and the run proceeds on the flags every version has."""
+        if self._supported is None:
+            try:
+                probe = subprocess.run(
+                    [self._binary, "run", "--help"], capture_output=True, text=True, timeout=60,
+                )
+                help_text = (probe.stdout or "") + (probe.stderr or "")
+            except (OSError, subprocess.TimeoutExpired):
+                help_text = ""
+            self._supported = frozenset(flag for flag in _OPTIONAL_FLAGS if flag in help_text)
+        return self._supported
+
     def _build_command(self, model_string: str, prompt: str) -> list[str]:
         command = [self._binary, "run", "--format", "json", "--model", model_string]
-        if self._cwd is not None:
+        supported = self._supported_flags()
+        if self._cwd is not None and "--dir" in supported:
             command += ["--dir", str(self._cwd)]
         # Auto-approval defaults to True: a headless run that stops to ask
         # for permission would hang (OC-6). Spec 3.8 records why that is
@@ -124,11 +151,20 @@ class OpenCodeProvider(AiProvider):
         # and outlook.save_draft / outlook.send are not registered at all,
         # only propose_* variants that change nothing. This default is
         # configuration for this tool surface, not a licence to extend the
-        # same treatment to a future tool of class C or above.
+        # same treatment to a future tool of class C or above. The flag is
+        # only passed when the installed version accepts it (OC-7).
         auto_approve = _config_key(self._config, "provider.opencode.auto_approve", True)
-        if auto_approve:
+        if auto_approve and "--auto" in supported:
             command += ["--auto"]
         command.append(prompt)
+        if sys.platform == "win32":
+            length = sum(len(part) + 3 for part in command)
+            if length > _WINDOWS_COMMAND_LIMIT:
+                raise OpenCodeError(
+                    f"the prompt is too long to pass to opencode on Windows ({length:,} characters; "
+                    f"the limit is about {_WINDOWS_COMMAND_LIMIT:,}). Lower the knowledge token budget "
+                    "in Options."
+                )
         return command
 
     def _run(self, command: list[str]) -> tuple[str, float]:

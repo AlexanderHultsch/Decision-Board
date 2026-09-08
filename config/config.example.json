@@ -26,7 +26,7 @@
   },
 
   "provider": {
-    "_comment": "The endpoint is decided: K-7 closed on opencode/big-pickle. It stays here as the record of which endpoint was approved under AI-3, even though it is not read per call. token_limits stays null until a limit is decided. auto_approve is discussed in the source project's spec 3.8 (OC-6).",
+    "_comment": "The endpoint is decided: K-7 closed on opencode/big-pickle. It stays here as the record of which endpoint was approved under AI-3, even though it is not read per call. token_limits stays null until a limit is decided. auto_approve is discussed in the source project's spec 3.8 (OC-6); the --auto flag is only passed when the installed OpenCode version lists it in `opencode run --help` (OC-7).",
     "endpoint": "opencode/big-pickle",
     "models": {
       "board": "opencode/big-pickle"

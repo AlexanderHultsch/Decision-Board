@@ -101,7 +101,7 @@ shared package.
 | AI-3 | Only approved endpoints may be configured; confidential program content must not leave approved infrastructure. `provider.endpoint` in the configuration is not read by any code path — OpenCode is invoked as a fixed subprocess — but stays in the config file as the record of which endpoint was approved. |
 | AI-5 | Until a second endpoint is attested by name and date, every model configuration key resolves to the same approved endpoint. This repository has one key (`board`); nothing here contradicts that. |
 
-**Invocation.** `opencode run --format json --model <provider>/<model> [--dir <path>] [--auto] "<prompt>"`, built by `OpenCodeProvider._build_command`.
+**Invocation.** `opencode run --format json --model <provider>/<model> [--dir <path>] [--auto] "<prompt>"`, built by `OpenCodeProvider._build_command`. The two bracketed flags are passed only when the installed version lists them in `opencode run --help` (OC-7).
 
 **Output is JSON Lines**, parsed line by line, never as one JSON array (`_parse_output`):
 
@@ -113,6 +113,7 @@ shared package.
 | OC-4 | Provider, model, token counts and duration are taken from the run: tokens from `step_finish` events, provider/model from the `--model` string that was passed. |
 | OC-5 | A run that produces no `text` event at all raises `OpenCodeError`, never returns an empty answer. |
 | OC-6 | Whether a headless run hangs without `--auto` is unverified, and so is what `--auto` actually approves. The client sends one prompt and reads one text answer back; it registers no tools of its own. But `--auto` auto-approves whatever OpenCode's own built-in tooling can reach in the working directory, which was never tested here, so the flag is not established as harmless on the basis of this repository exposing no tool surface. `provider.opencode.auto_approve` defaults to `True` because a headless run that stops to ask would hang; confirm on the target machine what a run does without it, and what it can touch with it. |
+| OC-7 | **Optional flags are probed, not assumed.** On 8 September 2026 the OpenCode installed on the target machine printed its usage text and exited 1 on every call: its `run` command did not know `--auto` (nor `--dir`), and a flag it does not know is a fatal argument error, not an ignored one. The client therefore runs `opencode run --help` once per process and passes `--auto` and `--dir` only when that text lists them. With `--auto` absent, `provider.opencode.auto_approve` has nothing to act on; whether that version stops to ask for permission on a headless run is, per OC-6, still unverified - it did not on the first real runs, because the client registers no tools. On Windows the prompt is one command-line argument and the OS limit is 32,767 characters; the client refuses above about 30,000 with a message that names the knowledge token budget as the thing to lower. |
 
 **Cost characteristic.** See 3.2's note on FR-3.3a: 8,025 input tokens of fixed
 overhead per call, measured once against OpenCode 1.18.11 in the source
