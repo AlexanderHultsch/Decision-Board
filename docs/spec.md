@@ -5,9 +5,9 @@
 Decision Board is a standalone decision-support tool with two front ends: a
 command line and a local browser interface (section 9). Alex poses a
 question — a topic, its context, the options under consideration and any hard
-constraints — and six standing members answer it from six different
-professional perspectives, each in a model call that cannot see any other
-member's answer. A seventh call synthesises the six into one recommendation.
+constraints — and the board's members — whoever has a role profile in the roles folder,
+section 3.4 — answer it from their professional perspectives, each in a
+model call that cannot see any other member's answer. One more call synthesises them into one recommendation.
 
 The tool does one thing: run this board and hold the follow-up conversation
 that follows it, for the length of one topic. It has no database, no
@@ -33,35 +33,36 @@ persistent state:
 
 ## 3. The board
 
-### 3.1 Standing members
+### 3.1 Members
 
-| Member | Perspective |
-|---|---|
-| Finance | Cost, budget vs forecast vs actuals, cBOM impact |
-| HW Engineering | Hardware feasibility, maturity, technical risk |
-| Mechanical Engineering | Mechanical feasibility, packaging, tolerances |
-| Manufacturing | Manufacturability, ramp-up, supplier and plant capability |
-| SW Engineering | Software scope, integration and test effort |
-| KPI Check | Which option best fits the four core responsibilities: time tracking, deliverables tracking, cost management, customer satisfaction |
+**The board is whoever has a role profile in the roles folder** (section
+3.4). There is no member list in the code, in the prompts or in this
+document: adding a profile adds a member, removing one removes it, and a
+board needs at least two. The six examples shipped under `roles/` — Finance,
+HW Engineering, Mechanical Engineering, Manufacturing, SW Engineering, KPI
+Check — are the board until a roles folder of Alex's own is chosen, and the
+starting point the setup wizard copies into it. One board run is one call
+per member plus one synthesis call.
 
 ### 3.4 Role profiles
 
 **Decided 8 September 2026.** What a member *is* — character, skills, the
 KPIs it watches, its vocabulary, how it assesses, what it pushes back on —
-is not prompt text in this repository. It is one Markdown note per member
-in `<vault>/Roles/` (`knowledge.roles_subfolder`), written and edited in
-Obsidian, and read fresh on every board run (`roles.py`, `load_roles`).
-Nothing caches it: an edit is in force on the next question.
+is a Markdown note in one folder, written and edited in Obsidian, read
+fresh on every board run (`roles.py`, `load_roles`). Nothing caches it: an
+edit is in force on the next question. The same notes define *who* sits on
+the board (3.1).
 
 | Rule | Reason |
 |---|---|
-| One note per member, not one file for all six | A member's call must never contain another member's material (FR-3.3a); a shared file would put all six personalities into every call, six times the tokens and a standing invitation to converge. One note each also gives Obsidian one node per role, and editing one member cannot damage another. |
-| A note claims its member through `member:` in its front matter, else through its file name | So the file can be called what Alex likes. `title:` is shown in the interface; `perspective:` is the one line the synthesis sees. |
-| Each member receives its own note in full, under `## Role profile`, declared authoritative for that call | The profile is the member's personality, not background reading. |
+| One folder, chosen by Alex: `knowledge.roles_folder`, picked in Options or by the setup wizard with the folder dialog. Empty means `<vault>/Roles` when that exists, else the examples shipped under `roles/` | One place to look. The examples are the only fallback, and they are files, not a list in code. |
+| One file per role, or one file with several roles. A file whose front matter names a `member:`, or with at most one level-one heading, is one role (named by the front matter or the file). A file with two or more level-one headings is several roles, one per heading, with `key: value` lines directly under the heading as that role's metadata | Alex writes the board the way he thinks about it — six notes, or one note called Board. |
+| Metadata per role: `title` (shown), `perspective` (the one line the synthesis sees), `order`, `icon` (from a fixed set: dollar, chip, gear, factory, code, target, scale, people, shield, truck, flask, chart, person; guessed from the name when absent), `color`, `short` | The interface draws any member without a code change. |
+| Each member receives its own note in full, under `## Role profile`, declared authoritative for that call, and nothing about any other member — not even their names | FR-3.3a: a member never sees another member's material, and no longer knows who else is on the board. |
 | The synthesis receives one line per member (`title: perspective`), never the full profiles | It weighs who said what; it does not need to be six people. |
-| The Roles folder is excluded from the knowledge selection (`load_vault(skip_subfolders=…)`) | A profile is mandatory context for one member, not a note competing for the token budget of all of them. |
-| The repository ships one example note per member under `roles/`; a member without a note in the vault uses its example and the run reports it as `built-in` | A half-filled folder is visible in the confirm screen, in Options and in the CLI, never silent. |
-| The setup wizard offers to create `Roles/` and copy the examples in when the folder is missing, and to copy only the missing ones when it is partial; Options has the same button. Existing notes are never overwritten | The examples are a starting point; the vault's copies are the truth. |
+| The roles folder is excluded from the knowledge selection when it lies inside the vault (`knowledge._roles_inside`) | A profile is mandatory context for one member, not a note competing for the token budget of all of them. |
+| Fewer than two profiles is `RolesUnavailable`, shown as an error with the folder named | A board of one is not a board; a misconfigured folder must not silently become the six examples. |
+| The setup wizard proposes `<vault>/Roles`, accepts any other folder, and offers to create it and copy the examples in when it is missing or has fewer than two profiles; Options has the same button. Existing files are never overwritten | The examples are a starting point; the folder's copies are the truth. |
 
 ### 3.2 Process
 
@@ -70,7 +71,7 @@ Nothing caches it: an edit is in force on the next question.
 | FR-3.1 | Input: topic, context, options under consideration, hard constraints. The CLI asks for each of the four in turn (`cli.py`, `cmd_board`). The browser interface asks for one free-text question and derives the four through FR-3.2. |
 | FR-3.2 | **Clarification happens before the board, in one call, independent of the members** (decided 8 September 2026). The clarifier (`clarify.py`, prompt `clarifier.md`) reads Alex's question plus the knowledge block selected for it (section 5), extracts the four FR-3.1 inputs, and asks at least one question — always at least one, even for a clear topic: the one whose answer would most change the recommendation. Python enforces the minimum (`FALLBACK_QUESTION` when the model returns none). Alex's answers are folded into the context by string assembly (`merge_answers`), Alex confirms or edits the four inputs, and only then are the members polled. The clarifier's questions never reach the members; the member prompt (`board_members.md`) now tells a member to state an assumption rather than ask back. A member that returns the old `{"status": "questions"}` shape anyway is recorded under `failed_members` with its questions, not silently lost. The CLI `board` command does not run the clarifier; it asks for the four inputs directly. |
 | FR-3.3 | Each member produces a separate, clearly attributed assessment: `view`, `risks`, `recommendation` (`MemberAssessment`). |
-| FR-3.3a | **Members are polled in isolation.** Each member is a separate model call that does not see any other member's answer. All six prompts are built before any of the six calls is dispatched (`run_board`), so isolation is structural, not conventional, even though the six calls run concurrently. Only once all six have returned are the results combined and passed to the synthesis call. |
+| FR-3.3a | **Members are polled in isolation.** Each member is a separate model call that does not see any other member's answer, nor any other member's profile or name (3.4). All prompts are built before any call is dispatched (`run_board`), so isolation is structural, not conventional, even though the calls run concurrently. Only once all have returned are the results combined and passed to the synthesis call. |
 | FR-3.4 | A synthesis follows: overall recommendation, decisive criterion, main counter-arguments, and what new information would change the recommendation (`board_synthesis.md`, `_synthesis_text`). |
 | FR-3.5 | Output format: one table per member, synthesis as short prose. `board.render` produces this from the structured `BoardResult` in Python; it is never asked of the model. |
 | FR-3.6 | Disagreement between members is stated explicitly, never smoothed over. The synthesis prompt requires a `disagreements` list (empty only where members genuinely agree), and `render` prints it under the synthesis, or states plainly that none were stated. |

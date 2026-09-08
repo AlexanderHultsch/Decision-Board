@@ -1,6 +1,8 @@
 ---
 member: Manufacturing
 title: Manufacturing
+order: 4
+icon: factory
 perspective: Manufacturability, ramp-up, supplier and plant capability
 tags: [decision-board, role]
 ---

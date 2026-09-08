@@ -1,6 +1,8 @@
 ---
 member: KPI Check
 title: KPI Check
+order: 6
+icon: target
 perspective: Which option best fits time tracking, deliverables tracking, cost management and customer satisfaction
 tags: [decision-board, role]
 ---

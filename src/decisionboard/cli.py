@@ -5,7 +5,7 @@
     decisionboard serve [--port N] [--no-browser]
 
 ``board`` loads the local configuration and runs the board on a topic
-entered at the prompt (``board.py``, docs/spec.md chapter 9): six isolated
+entered at the prompt (``board.py``, docs/spec.md chapter 9): isolated
 member calls, then one synthesis call (FR-3.3a) - it cannot degrade to a
 partial answer without a model and refuses clearly instead (AI-4, K-7).
 
@@ -68,9 +68,13 @@ def cmd_board(config: dict) -> int:
         constraints.append(line)
 
     provider = build_provider(config)
-    profiles = load_roles(config)   # section 3.4: fresh on every run
-    from_vault = sum(1 for p in profiles.values() if p.source == "vault")
-    print(f"Role profiles: {from_vault} from the vault, {len(profiles) - from_vault} built-in.")
+    from .roles import RolesUnavailable, folder_of
+    try:
+        profiles = load_roles(config)   # section 3.4: fresh on every run, this is the board
+    except RolesUnavailable as exc:
+        print(f"Cannot run the AI Board: {exc}", file=sys.stderr)
+        return 1
+    print(f"Board of {len(profiles)}: {', '.join(profiles)}  (roles from {folder_of(profiles)})")
     try:
         result = run_board(
             config, provider, topic=topic, context=context,

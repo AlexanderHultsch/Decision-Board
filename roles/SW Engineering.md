@@ -1,6 +1,8 @@
 ---
 member: SW Engineering
 title: SW Engineering
+order: 5
+icon: code
 perspective: Software scope, integration and test effort
 tags: [decision-board, role]
 ---

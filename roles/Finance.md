@@ -1,6 +1,8 @@
 ---
 member: Finance
 title: Finance
+order: 1
+icon: dollar
 perspective: Cost, budget vs forecast vs actuals, cBOM impact
 tags: [decision-board, role]
 ---

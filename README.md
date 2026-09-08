@@ -9,25 +9,26 @@ recommendation, you can ask follow-up questions against that synthesis, and
 when you close the topic the board offers to write the decision into your
 Obsidian vault — after showing you exactly what and where.
 
-| Member | Perspective |
-|---|---|
-| Finance | Cost, budget vs forecast vs actuals, cBOM impact |
-| HW Engineering | Hardware feasibility, maturity, technical risk |
-| Mechanical Engineering | Mechanical feasibility, packaging, tolerances |
-| Manufacturing | Manufacturability, ramp-up, supplier and plant capability |
-| SW Engineering | Software scope, integration and test effort |
-| KPI Check | Which option best fits time tracking, deliverables tracking, cost management and customer satisfaction |
+**Who sits on the board is decided by role profiles, not by code.** One
+folder of Markdown notes — by default `Roles/` inside your vault, or any
+folder you choose in Options — holds one note per member, or one note with
+several members. Each note is that member's personality: character, skills,
+the KPIs it watches, its vocabulary, how it assesses, what it pushes back on.
+The notes are read fresh on every question, so an edit in Obsidian is in
+force immediately. Six example profiles ship in `roles/` (Finance, HW
+Engineering, Mechanical Engineering, Manufacturing, SW Engineering, KPI
+Check); the setup wizard copies them into your folder to start from. See
+`roles/README.md` for the file format.
 
-## Why seven calls
+## Why one call per member
 
-Batching all six perspectives into one call would be cheaper, but a model
-writing the sixth assessment can see the five it has already written and
+Batching all perspectives into one call would be cheaper, but a model
+writing the last assessment can see the ones it has already written and
 converges towards them — the disagreement the board exists to surface would
 be smoothed away before anyone could read it. Isolation costs a known amount:
-each call to the configured OpenCode endpoint carries roughly 8,025 input
-tokens of fixed overhead regardless of prompt size, so one board's initial
-round of seven calls carries roughly 56,000 tokens of overhead before the
-topic itself is counted. Each follow-up question after that costs one call,
+each call to the configured OpenCode endpoint carries several thousand input
+tokens of fixed overhead regardless of prompt size, so a board of six makes
+seven calls per question before the topic itself is counted. Each follow-up question after that costs one call,
 not seven, since only the synthesis is re-run. In the browser interface one
 topic adds one clarifier call before the board and, if you choose to remember
 the decision, one memory-proposal call after it.

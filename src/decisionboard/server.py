@@ -7,7 +7,7 @@ decision of 8 September 2026 allows dependencies that run on any company
 machine, and none is needed for this.
 
 Every model call runs in a background thread and the page polls the
-session's state once a second, so the six member avatars fill in as each
+session's state once a second, so the member avatars fill in as each
 member returns. The board itself is ``board.run_board`` - the same function
 the CLI calls; this module adds the clarifier in front of it, the
 knowledge block from the vault, the follow-up loop, and the confirmed
@@ -37,7 +37,7 @@ from . import knowledge as knowledge_mod
 from . import memory_writer
 from . import roles as roles_mod
 from .agent.provider import AiNotConfiguredError, AiProvider, build_provider
-from .board import BOARD_MEMBERS, BoardConversation, ask_follow_up, run_board
+from .board import BoardConversation, ask_follow_up, run_board
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 DEFAULT_PORT = 8765
@@ -89,11 +89,12 @@ class Session:
         self.knowledge: dict[str, Any] = {"vault_path": None, "selected": 0, "total": 0, "tokens": 0,
                                           "truncated": False, "notes": []}
         self.knowledge_text = ""
-        self.roles: dict[str, Any] = {"from_vault": [], "built_in": list(BOARD_MEMBERS), "folder": None}
+        self.roles: dict[str, Any] = {"members": [], "count": 0, "source": "", "folder": None, "files": []}
+        self.member_meta: list[dict[str, str]] = []
         self.clarification: clarify_mod.Clarification | None = None
         self.answers: list[str] = []
         self.inputs: dict[str, Any] = {}
-        self.members: dict[str, str] = {member: "pending" for member in BOARD_MEMBERS}
+        self.members: dict[str, str] = {}
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
         self.turns: list[dict[str, str]] = []
@@ -132,6 +133,7 @@ class Session:
                 "error": self.error,
                 "knowledge": self.knowledge,
                 "roles": self.roles,
+                "member_meta": self.member_meta,
                 "clarification": clarification,
                 "answers": self.answers,
                 "inputs": self.inputs,
@@ -192,30 +194,40 @@ class BoardServer:
             "opencode_config": _get(self.config, "provider.opencode.config_file", "") or "",
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "knowledge_status": status,
+            "roles_folder": _get(self.config, "knowledge.roles_folder", "") or "",
             "roles_status": self._roles_status(),
-            "members": list(BOARD_MEMBERS),
         }
 
     def _roles_status(self) -> dict[str, Any]:
+        folder, origin = roles_mod.resolve_folder(self.config)
         try:
-            info = roles_mod.summary(roles_mod.load_roles(self.config))
+            profiles = roles_mod.load_roles(self.config)
         except roles_mod.RolesUnavailable as exc:
-            return {"error": str(exc), "from_vault": [], "built_in": list(BOARD_MEMBERS), "folder": None}
-        folder = roles_mod.roles_folder(self.config)
-        info["expected_folder"] = str(folder) if folder else None
+            return {"error": str(exc), "members": [], "count": 0, "source": origin,
+                    "folder": str(folder), "files": [], "member_meta": []}
+        info = roles_mod.summary(profiles)
         info["error"] = None
+        info["member_meta"] = roles_mod.member_meta(profiles)
         return info
 
+    def _install_target(self) -> Path:
+        configured = _get(self.config, "knowledge.roles_folder")
+        if configured:
+            return Path(str(configured)).expanduser()
+        vault = _get(self.config, "knowledge.vault_path")
+        if vault:
+            return Path(str(vault)).expanduser() / roles_mod.DEFAULT_SUBFOLDER
+        raise ApiError(400, "Choose a roles folder (or a knowledge source) first.")
+
     def install_roles(self) -> dict[str, Any]:
-        folder = roles_mod.roles_folder(self.config)
-        if folder is None:
-            raise ApiError(400, "Set the knowledge source first - the Roles folder lives inside it.")
+        folder = self._install_target()
         try:
             written = roles_mod.install_examples(folder)
         except OSError as exc:
             raise ApiError(500, f"Could not write the role files: {exc}")
         status = self._roles_status()
         status["written"] = [str(path) for path in written]
+        status["target"] = str(folder)
         return status
 
     def update_config(self, changes: dict[str, Any]) -> dict[str, Any]:
@@ -227,6 +239,7 @@ class BoardServer:
             "audit_folder": ("runtime.audit_folder", str),
             "auto_approve": ("provider.opencode.auto_approve", bool),
             "opencode_config": ("provider.opencode.config_file", str),
+            "roles_folder": ("knowledge.roles_folder", str),
             "theme": ("ui.theme", str),
         }
         for key, (dotted, cast) in mapping.items():
@@ -269,12 +282,14 @@ class BoardServer:
             session.fail(f"{exc}. Check the knowledge source in Options.")
             return
         try:
-            roles_preview = roles_mod.summary(roles_mod.load_roles(self.config))
+            profiles = roles_mod.load_roles(self.config)
         except roles_mod.RolesUnavailable as exc:
-            session.fail(f"{exc}. Check the knowledge source in Options.")
+            session.fail(f"{exc}. Choose the roles folder in Options.")
             return
         with session.lock:
-            session.roles = roles_preview
+            session.roles = roles_mod.summary(profiles)
+            session.member_meta = roles_mod.member_meta(profiles)
+            session.members = {member: "pending" for member in profiles}
             session.knowledge = {
                 "vault_path": str(selection.vault_path) if selection.vault_path else None,
                 "selected": len(selection.notes),
@@ -324,7 +339,7 @@ class BoardServer:
                 "constraints": [str(c).strip() for c in inputs.get("constraints") or [] if str(c).strip()],
             }
             session.phase = "running"
-            session.members = {member: "pending" for member in BOARD_MEMBERS}
+            session.members = {member: "pending" for member in session.members}
         threading.Thread(target=self._run_board, args=(session,), daemon=True).start()
 
     def _run_board(self, session: Session) -> None:
@@ -344,6 +359,8 @@ class BoardServer:
             profiles = roles_mod.load_roles(self.config)
             with session.lock:
                 session.roles = roles_mod.summary(profiles)
+                session.member_meta = roles_mod.member_meta(profiles)
+                session.members = {member: "pending" for member in profiles}
             result = run_board(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
@@ -457,7 +474,7 @@ class BoardServer:
             session.phase = "closed"
 
 
-def pick_folder(initial: str = "", *, kind: str = "folder") -> str | None:
+def pick_folder(initial: str = "", *, kind: str = "folder", title: str = "") -> str | None:
     """Opens the native folder (or, with ``kind="file"``, file) dialog in a
     separate Python process (tkinter is not safe to drive from a server
     thread) and returns the chosen path, or ``None`` if the dialog was
@@ -474,7 +491,7 @@ def pick_folder(initial: str = "", *, kind: str = "folder") -> str | None:
         "    path = filedialog.askopenfilename(title='Choose the OpenCode configuration (opencode.json)', "
         "initialdir=sys.argv[1] or None, filetypes=[('JSON', '*.json'), ('All files', '*.*')])\n"
         "else:\n"
-        "    path = filedialog.askdirectory(title='Choose the knowledge source (Obsidian vault)', "
+        "    path = filedialog.askdirectory(title=sys.argv[3] or 'Choose a folder', "
         "initialdir=sys.argv[1] or None, mustexist=True)\n"
         "root.destroy()\n"
         "sys.stdout.write(path or '')\n"
@@ -483,7 +500,9 @@ def pick_folder(initial: str = "", *, kind: str = "folder") -> str | None:
         initial = str(Path(initial).expanduser().parent)
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", script, initial, kind], capture_output=True, text=True, timeout=600,
+            [sys.executable, "-c", script, initial, kind,
+             title or "Choose the knowledge source (Obsidian vault)"],
+            capture_output=True, text=True, timeout=600,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -561,7 +580,7 @@ def make_handler(server: BoardServer):
                 if path == "/api/config":
                     self._json(200, server.update_config(body))
                 elif path == "/api/pick-folder":
-                    chosen = pick_folder(str(body.get("initial") or ""))
+                    chosen = pick_folder(str(body.get("initial") or ""), title=str(body.get("title") or ""))
                     self._json(200, {"path": chosen})
                 elif path == "/api/roles/install":
                     self._json(200, server.install_roles())

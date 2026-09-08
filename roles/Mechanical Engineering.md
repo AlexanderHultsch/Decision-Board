@@ -1,6 +1,8 @@
 ---
 member: Mechanical Engineering
 title: Mechanical Engineering
+order: 3
+icon: gear
 perspective: Mechanical feasibility, packaging, tolerances
 tags: [decision-board, role]
 ---

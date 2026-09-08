@@ -5,17 +5,31 @@
 
   const $ = (id) => document.getElementById(id);
 
-  const MEMBERS = {
-    "Finance": { color: "var(--c-finance)", icon: '<path d="M12 3v18"/><path d="M16.5 7.5A3.5 3.5 0 0 0 13 5h-2.5a3 3 0 0 0 0 6h3a3 3 0 0 1 0 6H11a3.5 3.5 0 0 1-3.5-2.5"/>' },
-    "HW Engineering": { color: "var(--c-hw)", icon: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/>' },
-    "Mechanical Engineering": { color: "var(--c-mech)", icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>' },
-    "Manufacturing": { color: "var(--c-manu)", icon: '<path d="M3 21V9l5 3V9l5 3V9l5 3v9H3z"/><path d="M17 12V4h3v8"/><path d="M7 17h2M11 17h2M15 17h2"/>' },
-    "SW Engineering": { color: "var(--c-sw)", icon: '<path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M14 4l-4 16"/>' },
-    "KPI Check": { color: "var(--c-kpi)", icon: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/><path d="M12 3v2M21 12h-2"/>' },
+  const ICONS = {
+    dollar: '<path d="M12 3v18"/><path d="M16.5 7.5A3.5 3.5 0 0 0 13 5h-2.5a3 3 0 0 0 0 6h3a3 3 0 0 1 0 6H11a3.5 3.5 0 0 1-3.5-2.5"/>',
+    chip: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+    factory: '<path d="M3 21V9l5 3V9l5 3V9l5 3v9H3z"/><path d="M17 12V4h3v8"/><path d="M7 17h2M11 17h2M15 17h2"/>',
+    code: '<path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M14 4l-4 16"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/><path d="M12 3v2M21 12h-2"/>',
+    scale: '<path d="M12 3v18M5 21h14"/><path d="M3 7h18"/><path d="M6 7l-3 7a3 3 0 0 0 6 0L6 7zM18 7l-3 7a3 3 0 0 0 6 0l-3-7z"/>',
+    people: '<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 7 -3"/>',
+    shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>',
+    truck: '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="6" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>',
+    flask: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7 15h10"/>',
+    chart: '<path d="M3 21h18"/><path d="M6 17v-5M11 17V7M16 17v-8M21 17V4"/>',
+    person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   };
   const SYNTHESIS_ICON = '<path d="M20 6 9 17l-5-5"/>';
-  const SHORT = { "Finance": "Finance", "HW Engineering": "Hardware", "Mechanical Engineering": "Mechanical",
-                  "Manufacturing": "Manufacturing", "SW Engineering": "Software", "KPI Check": "KPI" };
+  let memberMeta = {};   // name -> {title, short, icon, color, perspective}, from the session
+
+  function meta(name) {
+    return memberMeta[name] || { title: name, short: name.slice(0, 14), icon: "person", color: "#6b7280", perspective: "" };
+  }
+  function setMemberMeta(list) {
+    memberMeta = {};
+    (list || []).forEach((m) => { memberMeta[m.name] = m; });
+  }
 
   let config = null;
   let session = null;
@@ -29,8 +43,9 @@
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
   function avatar(name, cls) {
-    const m = MEMBERS[name];
-    return `<span class="avatar ${cls || ""}" style="background:${m.color}" aria-hidden="true"><svg viewBox="0 0 24 24">${m.icon}</svg></span>`;
+    const m = meta(name);
+    const icon = ICONS[m.icon] || ICONS.person;
+    return `<span class="avatar ${cls || ""}" style="background:${esc(m.color)}" aria-hidden="true"><svg viewBox="0 0 24 24">${icon}</svg></span>`;
   }
   async function api(method, path, body) {
     const response = await fetch(path, {
@@ -87,6 +102,7 @@
 
   function openOptions() {
     $("opt-vault").value = config.vault_path || "";
+    $("opt-roles").value = config.roles_folder || "";
     $("opt-budget").value = config.token_budget || 6000;
     $("opt-model").value = config.model || "";
     $("opt-occonfig").value = config.opencode_config || "";
@@ -107,6 +123,7 @@
     try {
       config = await api("POST", "/api/config", {
         vault_path: $("opt-vault").value,
+        roles_folder: $("opt-roles").value,
         token_budget: Number($("opt-budget").value) || 6000,
         model: $("opt-model").value,
         opencode_config: $("opt-occonfig").value,
@@ -135,21 +152,39 @@
   function renderRolesStatus(r) {
     const el = $("opt-roles-status");
     if (!r) { el.textContent = ""; return; }
-    if (r.error) { el.innerHTML = `<span class="error">${esc(r.error)}</span>`; return; }
-    if (!r.expected_folder) { el.textContent = "Set the vault first; the Roles folder lives inside it."; return; }
-    if (r.from_vault.length === 6) el.textContent = `All six profiles found in ${r.folder}.`;
-    else if (r.from_vault.length === 0) el.textContent = `No profiles in ${r.expected_folder} - the built-in examples are used. Install them to edit in Obsidian.`;
-    else el.textContent = `${r.from_vault.length} profile(s) in ${r.folder}; built-in examples for ${r.built_in.join(", ")}.`;
-    $("btn-install-roles").hidden = r.from_vault.length === 6;
+    if (r.error) {
+      el.innerHTML = `<span class="error">${esc(r.error)}</span>`;
+      $("btn-install-roles").hidden = false;
+      return;
+    }
+    const where = r.source === "built-in" ? "the examples shipped with the program (no roles folder chosen yet)" : r.folder;
+    el.textContent = `Board of ${r.count}: ${r.members.join(", ")} - from ${where}.`;
+    $("btn-install-roles").hidden = r.source !== "built-in";
+  }
+
+  async function browseRoles() {
+    const btn = $("btn-browse-roles");
+    btn.disabled = true; btn.textContent = "Choose in the dialog…";
+    try {
+      const data = await api("POST", "/api/pick-folder", { initial: $("opt-roles").value || $("opt-vault").value,
+        title: "Choose the roles folder (one file per role, or one file with several roles)" });
+      if (data.path) $("opt-roles").value = data.path;
+    } catch (err) { setError("options-error", err.message); }
+    btn.disabled = false; btn.textContent = "Browse…";
   }
 
   async function installRoles() {
     const btn = $("btn-install-roles");
     btn.disabled = true;
     try {
+      // Save the folder typed above first, so the examples land where the user said.
+      if ($("opt-roles").value !== (config.roles_folder || "") || $("opt-vault").value !== (config.vault_path || "")) {
+        config = await api("POST", "/api/config", { roles_folder: $("opt-roles").value, vault_path: $("opt-vault").value });
+      }
       const r = await api("POST", "/api/roles/install");
+      config.roles_status = r;
       renderRolesStatus(r);
-      if (r.written && r.written.length) $("opt-roles-status").textContent += ` Written: ${r.written.length} file(s).`;
+      if (r.written) $("opt-roles-status").textContent += ` Written ${r.written.length} file(s) to ${r.target}.`;
     } catch (err) { setError("options-error", err.message); }
     btn.disabled = false;
   }
@@ -193,6 +228,7 @@
 
   function render() {
     if (!session) return show("home");
+    if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
     if (needsPolling(session)) { if (!pollTimer) startPolling(); } else stopPolling();
     switch (session.phase) {
       case "clarifying": return renderClarifying();
@@ -248,15 +284,13 @@
     $("in-options").value = (inp.options || []).join("\n");
     $("in-constraints").value = (inp.constraints || []).join("\n");
     const k = session.knowledge;
-    const r = session.roles || { from_vault: [], built_in: [] };
-    const rolesLine = r.from_vault.length === 6
-      ? `All six role profiles come from your vault (${r.folder}).`
-      : r.from_vault.length === 0
-        ? "Role profiles: built-in examples for all six members - no Roles folder in your vault yet (Options → install)."
-        : `Role profiles: ${r.from_vault.length} from your vault, built-in examples for ${r.built_in.join(", ")}.`;
+    const r = session.roles || { members: [], count: 0, source: "", folder: null };
+    const rolesLine = r.source === "built-in"
+      ? `Board of ${r.count} (${r.members.join(", ")}) from the example profiles shipped with the program - choose your own roles folder in Options.`
+      : `Board of ${r.count}: ${r.members.join(", ")} (profiles from ${r.folder}).`;
     $("confirm-knowledge").textContent = (k && k.vault_path
       ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
-      : "No knowledge source configured. ") + rolesLine + " Seven model calls follow.";
+      : "No knowledge source configured. ") + rolesLine + ` ${r.count + 1} model calls follow.`;
     show("confirm");
   }
 
@@ -272,16 +306,17 @@
   function renderRunning() {
     const grid = $("member-grid");
     grid.innerHTML = Object.entries(session.members).map(([name, state]) => `
-      <div class="member-tile ${state}" style="color:${MEMBERS[name].color}">
+      <div class="member-tile ${state}" style="color:${esc(meta(name).color)}">
         ${avatar(name)}
-        <div><div style="color:var(--text);font-weight:600">${esc(SHORT[name])}</div><div class="muted small">${esc(name)}</div></div>
+        <div><div style="color:var(--text);font-weight:600">${esc(meta(name).short)}</div><div class="muted small">${esc(meta(name).title)}</div></div>
         <span class="state">${state === "pending" ? "waiting" : state === "running" ? "thinking…" : state === "done" ? "answered" : "failed"}</span>
       </div>`).join("");
     const synthesising = session.phase === "synthesising";
-    $("running-title").textContent = synthesising ? "Consolidating the six assessments" : "The board is in session";
+    const n = Object.keys(session.members).length;
+    $("running-title").textContent = synthesising ? `Consolidating the ${n} assessments` : "The board is in session";
     $("running-detail").textContent = synthesising
-      ? "The seventh call reads all six answers and writes the recommendation."
-      : "Six members, each answering without seeing the others.";
+      ? "One more call reads all the answers and writes the recommendation."
+      : `${n} members, each answering without seeing the others.`;
     show("running");
   }
 
@@ -308,9 +343,11 @@
       $("synthesis-card").querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
       const answered = new Map(r.assessments.map((a) => [a.member, a]));
       const failed = new Map(r.failed_members.map((f) => [f.split(":")[0], f]));
-      $("member-chips").innerHTML = Object.keys(MEMBERS).map((name) => `
-        <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""}" data-member="${esc(name)}" style="color:${MEMBERS[name].color}" ${failed.has(name) ? "disabled" : ""}>
-          ${avatar(name)}<span style="color:var(--text)">${esc(SHORT[name])}</span></button>`).join("");
+      const names = Object.keys(session.members);
+      $("synthesis-card").querySelector(".muted.small").textContent = `Synthesis of ${names.length} independent assessments`;
+      $("member-chips").innerHTML = names.map((name) => `
+        <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${failed.has(name) ? "disabled" : ""}>
+          ${avatar(name)}<span style="color:var(--text)">${esc(meta(name).short)}</span></button>`).join("");
       $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.addEventListener("click", () => {
         const name = chip.dataset.member;
         if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
@@ -333,10 +370,10 @@
 
   function renderMemberCards(answered) {
     $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.classList.toggle("active", openMembers.has(chip.dataset.member)));
-    $("member-cards").innerHTML = Object.keys(MEMBERS).filter((n) => openMembers.has(n) && answered.has(n)).map((name) => {
+    $("member-cards").innerHTML = Object.keys(session.members).filter((n) => openMembers.has(n) && answered.has(n)).map((name) => {
       const a = answered.get(name);
-      return `<div class="card member-card" style="border-left-color:${MEMBERS[name].color}">
-        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div></div></div>
+      return `<div class="card member-card" style="border-left-color:${esc(meta(name).color)}">
+        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(meta(name).title)}</div><div class="muted small">${esc(meta(name).perspective)}</div></div></div>
         <dl><dt>View</dt><dd>${esc(a.view)}</dd><dt>Risks</dt><dd>${esc(a.risks)}</dd><dt>Recommendation</dt><dd>${esc(a.recommendation)}</dd></dl>
       </div>`;
     }).join("");
@@ -438,6 +475,7 @@
   $("btn-browse").addEventListener("click", browse);
   $("btn-browse-occonfig").addEventListener("click", browseConfigFile);
   $("btn-install-roles").addEventListener("click", installRoles);
+  $("btn-browse-roles").addEventListener("click", browseRoles);
   document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
   loadConfig().then(() => show("home")).catch((err) => { $("home-hint").textContent = err.message; show("home"); });

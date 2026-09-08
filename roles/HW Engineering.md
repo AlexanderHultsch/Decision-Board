@@ -1,6 +1,8 @@
 ---
 member: HW Engineering
 title: HW Engineering
+order: 2
+icon: chip
 perspective: Hardware feasibility, maturity, technical risk
 tags: [decision-board, role]
 ---

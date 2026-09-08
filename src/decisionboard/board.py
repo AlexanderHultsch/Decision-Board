@@ -1,17 +1,19 @@
 """AI Board orchestration (docs/spec.md chapter 9, FR-3.1..FR-3.6).
 
-The board has six standing members (9.2), each producing a separate,
-clearly attributed assessment (FR-3.3): view, risks, recommendation. FR-3.3a
-is a deliberate exception to AP-3 (one trigger, one batched run): members
-are polled in isolation, one model call per member, so a call never
-contains another member's answer. Batching all six into one call is
-cheaper and would satisfy AP-3, but a model writing the sixth assessment
-can see the five it has already written and converges towards them - the
-disagreement FR-3.6 exists to surface would be smoothed away before anyone
-could read it. One board run is therefore seven calls: six members plus
-one synthesis call over the collected assessments (FR-3.4).
+The board's members are whoever has a role profile in the roles folder
+(section 3.4, ``roles.py``) - there is no member list in code. Each
+produces a separate, clearly attributed assessment (FR-3.3): view, risks,
+recommendation. FR-3.3a is a deliberate exception to AP-3 (one trigger,
+one batched run): members are polled in isolation, one model call per
+member, so a call never contains another member's answer. Batching all
+members into one call is cheaper and would satisfy AP-3, but a model
+writing the last assessment can see the ones it has already written and
+converges towards them - the disagreement FR-3.6 exists to surface would
+be smoothed away before anyone could read it. One board run is therefore
+N+1 calls: one per member plus one synthesis call over the collected
+assessments (FR-3.4).
 
-Nothing here degrades to a partial answer without a provider - six
+Nothing here degrades to a partial answer without a provider - N
 perspectives minus a model is not a board, so ``run_board`` raises rather
 than reporting "not configured" and carrying on.
 
@@ -31,10 +33,7 @@ from typing import Any, Callable
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
 from .audit import log_run
-from .roles import RoleProfile
-
-BOARD_MEMBERS = ("Finance", "HW Engineering", "Mechanical Engineering",
-                 "Manufacturing", "SW Engineering", "KPI Check")
+from .roles import RoleProfile, load_roles
 
 
 def _get(config: dict, dotted: str, default: Any = None) -> Any:
@@ -207,8 +206,10 @@ def run_board(
     on_member: Callable[[str, str], None] | None = None,
     roles: dict[str, RoleProfile] | None = None,
 ) -> BoardResult:
-    """One AI Board run (FR-3.1..FR-3.6): six isolated member calls, then one
-    synthesis call over what they produced.
+    """One AI Board run (FR-3.1..FR-3.6): one isolated call per member, then
+    one synthesis call over what they produced. ``roles`` is the board
+    (section 3.4); when not given it is read from the configuration's roles
+    folder - fresh, on this run.
 
     ``on_member(member, state)`` is called from the worker threads as each
     member starts (``"running"``) and finishes (``"done"`` or ``"failed"``),
@@ -218,7 +219,7 @@ def run_board(
     Raises ``AiNotConfiguredError`` when no provider is given or
     ``provider.models.board`` has no model configured - unlike the other
     three triggers, the board does not degrade to a partial answer without a
-    model (six perspectives minus a model is not a board).
+    model (perspectives minus a model is not a board).
 
     A member whose response does not parse as JSON, or is missing one of
     ``view``/``risks``/``recommendation``, is recorded in ``failed_members``
@@ -232,6 +233,9 @@ def run_board(
             "AI Board has no model configured - set provider.models.board"
         )
 
+    if roles is None:
+        roles = load_roles(config)
+    members = tuple(roles)
     audit_folder = _get(config, "runtime.audit_folder")
     pc_name = _get(config, "storage.pc_name", "")
 
@@ -262,14 +266,13 @@ def run_board(
     # FR-3.3a: one call per member, in isolation - every prompt is built
     # here, before any call is dispatched, so it is structurally
     # impossible, not merely conventional, for one member's prompt to
-    # contain another member's answer. Polling the six calls concurrently
+    # contain another member's answer. Polling the calls concurrently
     # below does not weaken that isolation, it strengthens it: none of the
-    # six calls can see another's response, because none of them has
-    # produced one yet when the six are submitted.
+    # calls can see another's response, because none of them has
+    # produced one yet when they are submitted.
     prompts = [
-        _member_prompt(topic, context, options, constraints, member,
-                       roles.get(member) if roles else None)
-        for member in BOARD_MEMBERS
+        _member_prompt(topic, context, options, constraints, member, roles[member])
+        for member in members
     ]
 
     def _notify(member: str, state: str) -> None:
@@ -289,11 +292,11 @@ def run_board(
         _notify(member, "done" if _parse_member_response(result.text) is not None else "failed")
         return result
 
-    results: list[AiResult | None] = [None] * len(BOARD_MEMBERS)
-    errors: list[BaseException | None] = [None] * len(BOARD_MEMBERS)
-    with ThreadPoolExecutor(max_workers=len(BOARD_MEMBERS)) as executor:
+    results: list[AiResult | None] = [None] * len(members)
+    errors: list[BaseException | None] = [None] * len(members)
+    with ThreadPoolExecutor(max_workers=len(members)) as executor:
         futures = [
-            executor.submit(_call, member, prompt) for member, prompt in zip(BOARD_MEMBERS, prompts)
+            executor.submit(_call, member, prompt) for member, prompt in zip(members, prompts)
         ]
         for index, future in enumerate(futures):
             try:
@@ -301,9 +304,9 @@ def run_board(
             except Exception as exc:
                 errors[index] = exc
 
-    llm_calls = len(BOARD_MEMBERS)
+    llm_calls = len(members)
 
-    for member, result, error in zip(BOARD_MEMBERS, results, errors):
+    for member, result, error in zip(members, results, errors):
         if error is not None:
             failed_members.append(f"{member}: {error}")
             continue
@@ -382,7 +385,7 @@ def ask_follow_up(
 
     The owner decided a follow-up costs one call, not seven: only the
     synthesis prompt is re-run, over the original assessments plus the
-    conversation so far - the six members are never polled again for this
+    conversation so far - the members are never polled again for this
     topic. That is exactly why ``board_members.md`` requires each member's
     first answer to be self-contained and substantive: it is the only
     material any follow-up will ever have to work with.

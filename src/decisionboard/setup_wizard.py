@@ -53,11 +53,13 @@ FAIL = "  [XX]  "
 class Wizard:
     def __init__(self, *, interactive: bool, vault: str | None, model: str | None,
                  run_test: bool, out=None, opencode_config: str | None = None,
-                 profile: str | None = None) -> None:
+                 profile: str | None = None, roles: str | None = None) -> None:
         self.interactive = interactive
         self.vault_arg = vault
         self.model_arg = model
         self.opencode_config_arg = opencode_config
+        self.roles_arg = roles
+        self.roles_folder = ""
         self.profile_arg = profile
         self.profile = profile or ""
         self.env: dict[str, str] = dict(os.environ)
@@ -328,6 +330,10 @@ class Wizard:
                 vault = current_vault
         knowledge["vault_path"] = vault or ""
         self.check_vault(vault)
+        if self.roles_folder:
+            knowledge["roles_folder"] = self.roles_folder
+        elif not vault:
+            self.say("        role profiles: the examples shipped with the program are used until a roles folder is chosen in Options.")
 
         LOCAL_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         self.ok(f"written: {LOCAL_CONFIG}")
@@ -487,34 +493,43 @@ class Wizard:
         self.check_roles(Path(vault))
 
     def check_roles(self, vault: Path) -> None:
-        """The board's personality lives in ``<vault>/Roles/`` (section 3.4).
-        Missing folder: offer to create it and install the six examples.
-        Partial folder: say which members fall back to the built-in
-        example, and offer to install the missing ones."""
+        """The board is whoever has a profile in the roles folder (section
+        3.4). One folder, chosen here: ``<vault>/Roles`` by default, any
+        other on request. Missing or empty: offer to create it and copy the
+        examples in."""
         from decisionboard import roles as roles_mod
-        folder = vault / roles_mod.DEFAULT_SUBFOLDER
-        present = roles_mod._profile_files(folder) if folder.is_dir() else {}
-        missing = [m for m in roles_mod.MEMBERS if m not in present]
-        if folder.is_dir() and not missing:
-            self.ok(f"role profiles: all six in {folder}")
+        default = vault / roles_mod.DEFAULT_SUBFOLDER
+        if self.roles_arg is not None:
+            folder = Path(self.roles_arg).expanduser() if self.roles_arg else default
+        else:
+            folder = default
+            self.say(f"        The board's members are whoever has a role profile in one folder.")
+            self.say(f"        Default: {default}")
+            if self.interactive and not self.confirm("Use that folder for the role profiles?", True):
+                folder = Path(self.pick_folder(str(vault)) or self.ask("Roles folder", str(default))).expanduser()
+        self.roles_folder = str(folder)
+        members = roles_mod.members_in(folder) if folder.is_dir() else []
+        if len(members) >= roles_mod.MIN_MEMBERS:
+            self.ok(f"role profiles: board of {len(members)} in {folder}: {', '.join(members)}")
             return
         if not folder.exists():
-            self.say(f"        no Roles folder in the vault yet ({folder}).")
-            self.say("        The board's personality - each member's character, skills, KPIs and vocabulary -")
-            self.say("        is one note per member in that folder, edited in Obsidian and read on every run.")
-            question = "Create it and copy the six example profiles in?"
+            self.say(f"        no roles folder yet ({folder}).")
+            question = "Create it and copy the example profiles in?"
         else:
-            self.say(f"        Roles folder found, but no profile for: {', '.join(missing)} (built-in examples would be used).")
-            question = "Copy the missing example profiles in?"
+            self.say(f"        {folder} defines {len(members)} member(s); a board needs at least {roles_mod.MIN_MEMBERS}.")
+            question = "Copy the example profiles in (nothing is overwritten)?"
+        self.say("        A profile is a member's character, skills, KPIs and vocabulary - one note per")
+        self.say("        member, or one note with several members - edited in Obsidian, read on every run.")
         if not self.confirm(question, True):
-            self.warn(f"role profiles: built-in examples in use for {', '.join(missing)} - install them later in Options.")
+            self.fail(f"roles folder {folder} has no board - the board cannot run until it has at least two profiles.")
             return
         try:
             written = roles_mod.install_examples(folder)
         except OSError as exc:
             self.fail(f"could not write the role profiles: {exc}")
             return
-        self.ok(f"role profiles: {len(written)} file(s) written to {folder} - edit them in Obsidian.")
+        members = roles_mod.members_in(folder)
+        self.ok(f"role profiles: {len(written)} file(s) written to {folder}; board of {len(members)}. Edit them in Obsidian.")
 
     def pick_folder(self, initial: str) -> str | None:
         try:
@@ -595,6 +610,7 @@ class Wizard:
         from decisionboard.agent.provider import TASK_BOARD
         from decisionboard.board import _member_prompt
         from decisionboard.knowledge import gather
+        from decisionboard.roles import RolesUnavailable, load_roles
 
         try:
             selection = gather(config, "Should we rework the existing tooling or switch supplier?")
@@ -603,9 +619,15 @@ class Wizard:
             return
         context = ("This is a setup test. Answer briefly, in the JSON shape asked for."
                    + ("\n\n" + selection.text if selection.text else ""))
+        try:
+            profiles = load_roles(config)
+        except RolesUnavailable as exc:
+            self.fail(f"role profiles: {exc}")
+            return
+        first = next(iter(profiles.values()))
         prompt = _member_prompt(
             "Setup test: rework the existing tooling or switch supplier?", context,
-            ("Rework", "Switch"), ("The date cannot move",), "Finance",
+            ("Rework", "Switch"), ("The date cannot move",), first.member, first,
         )
         self.say(f"        prompt: {len(prompt):,} characters, knowledge {selection.tokens:,} tokens "
                  f"from {len(selection.notes)} note(s)")
@@ -813,6 +835,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", help="provider/model string (skips the question)")
     parser.add_argument("--opencode-config", help="path to the company opencode.json ('' for none; skips the dialog)")
     parser.add_argument("--profile", choices=["company", "private"], help="skip the company/private question")
+    parser.add_argument("--roles", help="roles folder ('' for <vault>/Roles; skips the question)")
     parser.add_argument("--no-test", action="store_true", help="do not make the test call")
     parser.add_argument("--yes", action="store_true", help="no questions: take defaults and arguments")
     args = parser.parse_args(argv)
@@ -822,5 +845,5 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     wizard = Wizard(interactive=not args.yes, vault=args.vault, model=args.model, run_test=not args.no_test,
-                    opencode_config=args.opencode_config, profile=args.profile)
+                    opencode_config=args.opencode_config, profile=args.profile, roles=args.roles)
     return wizard.run()

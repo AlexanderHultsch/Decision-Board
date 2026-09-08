@@ -19,6 +19,11 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from decisionboard.agent.provider import AiNotConfiguredError, AiProvider, AiResult  # noqa: E402
 from decisionboard import board  # noqa: E402
+from decisionboard.roles import load_roles  # noqa: E402
+
+# The board is whoever has a role profile (section 3.4); with no roles folder
+# configured that is the six examples shipped under roles/, in their order.
+MEMBERS = tuple(load_roles({}))
 
 
 def _member_response(view: str = "a view", risks="a risk", recommendation: str = "a recommendation") -> str:
@@ -112,13 +117,13 @@ class TestRunBoard(unittest.TestCase):
         self.config = {"provider": {"models": {"board": "test/model"}}}
 
     def test_a_full_run_makes_six_member_calls_plus_one_synthesis_call(self):
-        provider = FakeProvider([_member_response() for _ in board.BOARD_MEMBERS] + [SYNTHESIS_RESPONSE])
+        provider = FakeProvider([_member_response() for _ in MEMBERS] + [SYNTHESIS_RESPONSE])
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         self.assertEqual(len(provider.calls), 7)
         self.assertEqual(result.llm_calls, 7)
-        self.assertEqual(len(result.assessments), len(board.BOARD_MEMBERS))
-        self.assertEqual({a.member for a in result.assessments}, set(board.BOARD_MEMBERS))
+        self.assertEqual(len(result.assessments), len(MEMBERS))
+        self.assertEqual({a.member for a in result.assessments}, set(MEMBERS))
 
     def test_no_member_prompt_contains_another_members_answer(self):
         """FR-3.3a: members are polled in isolation. A model writing the
@@ -132,44 +137,44 @@ class TestRunBoard(unittest.TestCase):
         point in time at which a later prompt could be constructed from an
         earlier answer."""
         marker = "MARKER-ONLY-FINANCE-SHOULD-SAY-THIS"
-        responses = [_member_response(view=marker)] + [_member_response() for _ in board.BOARD_MEMBERS[1:]]
+        responses = [_member_response(view=marker)] + [_member_response() for _ in MEMBERS[1:]]
         responses.append(SYNTHESIS_RESPONSE)
         provider = FakeProvider(responses)
         board.run_board(self.config, provider, topic="Dual-source the connector?")
 
-        member_prompts = [prompt for _task, prompt in provider.calls[:len(board.BOARD_MEMBERS)]]
+        member_prompts = [prompt for _task, prompt in provider.calls[:len(MEMBERS)]]
         for prompt in member_prompts[1:]:
             self.assertNotIn(marker, prompt)
 
     def test_a_member_with_unparsable_json_is_recorded_and_the_rest_still_run(self):
-        responses = ["this is not json"] + [_member_response() for _ in board.BOARD_MEMBERS[1:]]
+        responses = ["this is not json"] + [_member_response() for _ in MEMBERS[1:]]
         responses.append(SYNTHESIS_RESPONSE)
         provider = FakeProvider(responses)
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         self.assertEqual(len(result.failed_members), 1)
         self.assertIn("Finance", result.failed_members[0])
-        self.assertEqual(len(result.assessments), len(board.BOARD_MEMBERS) - 1)
+        self.assertEqual(len(result.assessments), len(MEMBERS) - 1)
 
     def test_a_member_missing_the_risks_key_is_treated_the_same_way(self):
         bad_response = json.dumps({"view": "a view", "recommendation": "a recommendation"})
-        responses = [bad_response] + [_member_response() for _ in board.BOARD_MEMBERS[1:]]
+        responses = [bad_response] + [_member_response() for _ in MEMBERS[1:]]
         responses.append(SYNTHESIS_RESPONSE)
         provider = FakeProvider(responses)
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         self.assertEqual(len(result.failed_members), 1)
         self.assertIn("Finance", result.failed_members[0])
-        self.assertEqual(len(result.assessments), len(board.BOARD_MEMBERS) - 1)
+        self.assertEqual(len(result.assessments), len(MEMBERS) - 1)
 
     def test_fewer_than_two_assessments_skips_the_synthesis(self):
-        responses = [_member_response()] + ["not json"] * (len(board.BOARD_MEMBERS) - 1)
+        responses = [_member_response()] + ["not json"] * (len(MEMBERS) - 1)
         provider = FakeProvider(responses)
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         self.assertEqual(len(result.assessments), 1)
         self.assertIn("skipped", result.synthesis.lower())
-        self.assertEqual(result.llm_calls, len(board.BOARD_MEMBERS))
+        self.assertEqual(result.llm_calls, len(MEMBERS))
         self.assertIsNone(result.ai_result)
 
     def test_assessments_come_back_in_board_members_order_even_when_calls_finish_out_of_order(self):
@@ -180,25 +185,25 @@ class TestRunBoard(unittest.TestCase):
         the longest sleep and returns last - but ``assessments`` must still
         come back in ``BOARD_MEMBERS`` order, not completion order, or a
         board run could not be compared with itself between runs."""
-        sleeps = {member: i * 0.03 for i, member in enumerate(reversed(board.BOARD_MEMBERS))}
-        responses = {member: _member_response(view=member) for member in board.BOARD_MEMBERS}
+        sleeps = {member: i * 0.03 for i, member in enumerate(reversed(MEMBERS))}
+        responses = {member: _member_response(view=member) for member in MEMBERS}
         provider = TimedFakeProvider(sleeps, responses)
 
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
-        self.assertEqual([a.member for a in result.assessments], list(board.BOARD_MEMBERS))
+        self.assertEqual([a.member for a in result.assessments], list(MEMBERS))
 
     def test_one_member_raising_still_yields_five_assessments_in_order(self):
         provider = RaisingMemberProvider(raise_for="Manufacturing")
 
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
-        self.assertEqual(len(result.assessments), len(board.BOARD_MEMBERS) - 1)
+        self.assertEqual(len(result.assessments), len(MEMBERS) - 1)
         self.assertEqual(len(result.failed_members), 1)
         self.assertIn("Manufacturing", result.failed_members[0])
         self.assertEqual(
             [a.member for a in result.assessments],
-            [member for member in board.BOARD_MEMBERS if member != "Manufacturing"],
+            [member for member in MEMBERS if member != "Manufacturing"],
         )
 
     def test_the_six_member_calls_actually_overlap_in_time(self):
@@ -207,13 +212,13 @@ class TestRunBoard(unittest.TestCase):
         pass whether the six calls run one after another or concurrently.
         Only overlapping start/end windows prove they really run in
         parallel."""
-        sleeps = {member: 0.05 for member in board.BOARD_MEMBERS}
+        sleeps = {member: 0.05 for member in MEMBERS}
         provider = TimedFakeProvider(sleeps)
 
         board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         member_calls = [call for call in provider.calls if call["member"]]
-        self.assertEqual(len(member_calls), len(board.BOARD_MEMBERS))
+        self.assertEqual(len(member_calls), len(MEMBERS))
         overlap = any(
             a["start"] < b["end"] and b["start"] < a["end"]
             for i, a in enumerate(member_calls)
@@ -235,10 +240,10 @@ class TestRunBoard(unittest.TestCase):
         """AI-2/NFR-10 - the board is the one run that works without a
         workbook (``self.config`` here carries no ``paths`` section at all),
         and audit logging must not change that."""
-        provider = FakeProvider([_member_response() for _ in board.BOARD_MEMBERS] + [SYNTHESIS_RESPONSE])
+        provider = FakeProvider([_member_response() for _ in MEMBERS] + [SYNTHESIS_RESPONSE])
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
-        self.assertEqual(len(result.assessments), len(board.BOARD_MEMBERS))
+        self.assertEqual(len(result.assessments), len(MEMBERS))
 
 
 class TestAskFollowUp(unittest.TestCase):

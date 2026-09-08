@@ -131,7 +131,7 @@ def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ())
     not a note competing for the budget). Raises ``KnowledgeUnavailable``
     when the folder cannot be read."""
     vault = Path(vault_path)
-    skip_lower = {name.lower() for name in skip_subfolders}
+    skip_parts = [tuple(part.lower() for part in Path(name).parts) for name in skip_subfolders if name]
     if not vault.exists():
         raise KnowledgeUnavailable(f"knowledge source not found: {vault}")
     if not vault.is_dir():
@@ -142,7 +142,8 @@ def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ())
             parts = path.relative_to(vault).parts
             if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
                 continue
-            if len(parts) > 1 and parts[0].lower() in skip_lower:
+            lowered = tuple(part.lower() for part in parts[:-1])
+            if any(lowered[:len(skip)] == skip for skip in skip_parts if skip):
                 continue
             if not path.is_file():
                 continue
@@ -231,11 +232,21 @@ def gather(config: dict, question: str) -> KnowledgeSelection:
     if not vault_path:
         return KnowledgeSelection(vault_path=None)
     vault = Path(str(vault_path)).expanduser()
-    roles_sub = str(_config_value(config, "knowledge.roles_subfolder") or "Roles")
-    notes = load_vault(vault, skip_subfolders=(roles_sub,))
+    notes = load_vault(vault, skip_subfolders=_roles_inside(config, vault))
     selection = select_notes(notes, question, int(budget))
     selection.vault_path = vault
     return selection
+
+
+def _roles_inside(config: dict, vault: Path) -> tuple[str, ...]:
+    """The roles folder as a vault-relative path when it lies inside the
+    vault (section 3.4: profiles are not knowledge notes), else nothing."""
+    from .roles import resolve_folder   # local import: roles imports this module
+    folder, _ = resolve_folder(config)
+    try:
+        return (folder.resolve().relative_to(vault.resolve()).as_posix(),)
+    except (ValueError, OSError):
+        return ()
 
 
 def vault_outline(vault_path: Path | str, *, max_folders: int = 200, max_titles: int = 400) -> str:
