@@ -240,21 +240,22 @@ class Wizard:
         text = (helptext.stdout or "") + (helptext.stderr or "")
         info["flags"] = [flag for flag in ("--auto", "--dir", "--format", "--model") if flag in text]
         self.ok(f"`opencode run` flags this version knows of the ones we use: {', '.join(info['flags']) or 'none'}")
-        auth = self._run([self.opencode, "auth", "list"], timeout=30)
-        auth_text = ((auth.stdout or "") + (auth.stderr or "")).strip()
-        if auth.returncode == 0 and auth_text:
-            self.say("        logins (`opencode auth list`):")
-            for line in auth_text.splitlines()[:10]:
-                self.say(f"          {line}")
-            info["credentials"] = "0 credentials" not in auth_text
-            if not info["credentials"]:
-                if self.profile == "company":
-                    self.say("        no stored credentials - expected here: the company opencode.json carries the key.")
-                else:
-                    self.say("        no stored credentials yet - the next step offers to log in.")
-        else:
+        if self.profile == "company":
             info["credentials"] = False
-            self.say("        `opencode auth list` printed nothing.")
+            self.say("        logins: not checked - a company opencode.json carries its own key.")
+        else:
+            auth = self._run([self.opencode, "auth", "list"], timeout=30)
+            auth_text = ((auth.stdout or "") + (auth.stderr or "")).strip()
+            if auth.returncode == 0 and auth_text:
+                self.say("        logins (`opencode auth list`):")
+                for line in auth_text.splitlines()[:10]:
+                    self.say(f"          {line}")
+                info["credentials"] = "0 credentials" not in auth_text
+                if not info["credentials"]:
+                    self.say("        no stored credentials yet - the next step offers to log in.")
+            else:
+                info["credentials"] = False
+                self.say("        `opencode auth list` printed nothing.")
         models = self._run([self.opencode, "models"], timeout=60)
         models_text = (models.stdout or "").strip()
         if models.returncode == 0 and models_text:
@@ -330,10 +331,10 @@ class Wizard:
                 vault = current_vault
         knowledge["vault_path"] = vault or ""
         self.check_vault(vault)
+        if not vault:
+            self.check_roles(None)
         if self.roles_folder:
             knowledge["roles_folder"] = self.roles_folder
-        elif not vault:
-            self.say("        role profiles: the examples shipped with the program are used until a roles folder is chosen in Options.")
 
         LOCAL_CONFIG.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         self.ok(f"written: {LOCAL_CONFIG}")
@@ -375,28 +376,47 @@ class Wizard:
 
     def step_opencode_config(self, current: str) -> str:
         """Where the company-provided ``opencode.json`` lives, so OpenCode
-        finds its provider definition from any working directory."""
+        finds its provider definition from any working directory. In a
+        company setup the file is required; the only question is which."""
         if self.opencode_config_arg is not None:
             candidate = self.opencode_config_arg
         else:
             if "<you>" in current:
                 current = ""
             found = current or self.find_opencode_config()
-            if self.interactive:
-                if self.confirm(f"Use a company opencode.json? {'(found: ' + found + ')' if found else ''}", bool(found)):
-                    candidate = self.pick_file(found) or self.ask("Path to opencode.json", found)
-                else:
-                    candidate = ""
-            else:
+            if not self.interactive:
                 candidate = found
+            elif found:
+                self.say(f"        company opencode.json found: {found}")
+                self.say("        1. use it     2. choose another with the file dialog     3. type a path")
+                while True:
+                    answer = self.ask("Choose 1, 2 or 3", "1")
+                    if answer == "1":
+                        candidate = found
+                        break
+                    if answer == "2":
+                        candidate = self.pick_file(found) or ""
+                        if candidate:
+                            break
+                        self.say("        no file chosen.")
+                        continue
+                    if answer == "3":
+                        candidate = self.ask("Path to opencode.json", found)
+                        break
+                    self.say("        Type 1, 2 or 3.")
+            else:
+                self.say("        no company opencode.json found on this machine. A company setup needs one:")
+                self.say("        the file your IT provides, defining the internal gateway as a provider.")
+                candidate = self.pick_file("") or self.ask("Path to opencode.json", "")
         candidate = str(Path(candidate).expanduser()) if candidate else ""
-        if candidate and not Path(candidate).is_file():
+        if not candidate:
+            self.fail("company setup without an opencode.json - the board cannot reach a model. "
+                      "Get the file from IT, or choose the private profile.")
+            return ""
+        if not Path(candidate).is_file():
             self.fail(f"opencode.json not found: {candidate}")
             return ""
-        if candidate:
-            self.ok(f"OpenCode configuration: {candidate}")
-        else:
-            self.say("        no company opencode.json - OpenCode uses its own global configuration.")
+        self.ok(f"OpenCode configuration: {candidate}")
         return candidate
 
     def find_opencode_config(self) -> str:
@@ -492,15 +512,20 @@ class Wizard:
         self.ok(f"knowledge source: {vault} ({len(notes)} notes)")
         self.check_roles(Path(vault))
 
-    def check_roles(self, vault: Path) -> None:
+    def check_roles(self, vault: Path | None) -> None:
         """The board is whoever has a profile in the roles folder (section
         3.4). One folder, chosen here: ``<vault>/Roles`` by default, any
         other on request. Missing or empty: offer to create it and copy the
         examples in."""
         from decisionboard import roles as roles_mod
-        default = vault / roles_mod.DEFAULT_SUBFOLDER
-        if self.roles_arg is not None:
-            folder = Path(self.roles_arg).expanduser() if self.roles_arg else default
+        default = (roles_mod.detect_folder(vault) or (vault / roles_mod.DEFAULT_SUBFOLDER)) if vault else None
+        if self.roles_arg:
+            folder = Path(self.roles_arg).expanduser()
+        elif default is None:
+            self.fail("no roles folder: the board has no members until one is chosen in Options.")
+            return
+        elif self.roles_arg is not None:
+            folder = default
         else:
             folder = default
             self.say(f"        The board's members are whoever has a role profile in one folder.")
@@ -514,22 +539,22 @@ class Wizard:
             return
         if not folder.exists():
             self.say(f"        no roles folder yet ({folder}).")
-            question = "Create it and copy the example profiles in?"
+            question = "Create it, with the generic conduct note and a profile template?"
         else:
-            self.say(f"        {folder} defines {len(members)} member(s); a board needs at least {roles_mod.MIN_MEMBERS}.")
-            question = "Copy the example profiles in (nothing is overwritten)?"
-        self.say("        A profile is a member's character, skills, KPIs and vocabulary - one note per")
-        self.say("        member, or one note with several members - edited in Obsidian, read on every run.")
-        if not self.confirm(question, True):
-            self.fail(f"roles folder {folder} has no board - the board cannot run until it has at least two profiles.")
-            return
-        try:
-            written = roles_mod.install_examples(folder)
-        except OSError as exc:
-            self.fail(f"could not write the role profiles: {exc}")
-            return
-        members = roles_mod.members_in(folder)
-        self.ok(f"role profiles: {len(written)} file(s) written to {folder}; board of {len(members)}. Edit them in Obsidian.")
+            self.say(f"        {folder} defines {len(members)} member(s) with content; a board needs at least {roles_mod.MIN_MEMBERS}.")
+            question = "Add the generic conduct note and a profile template (nothing is overwritten)?"
+        self.say("        A profile is one member's roles and responsibilities - one note per member, or one")
+        self.say("        note with several members - edited in Obsidian, read on every run. The conduct note")
+        self.say("        holds what is the same for every member: character, how to answer.")
+        if self.confirm(question, True):
+            try:
+                written = roles_mod.install_support_files(folder)
+            except OSError as exc:
+                self.fail(f"could not write to the roles folder: {exc}")
+                return
+            self.say(f"        written: {', '.join(p.name for p in written) or 'nothing new'}")
+        self.fail(f"roles folder {folder} has no board yet: write at least {roles_mod.MIN_MEMBERS} member profiles "
+                  f"(see {roles_mod.TEMPLATE_NAME}), then run the board.")
 
     def pick_folder(self, initial: str) -> str | None:
         try:

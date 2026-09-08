@@ -48,7 +48,7 @@ def cmd_board(config: dict) -> int:
     from .agent.opencode_client import OpenCodeError
     from .agent.provider import AiNotConfiguredError, build_provider
     from .board import BoardConversation, ask_follow_up, render, render_follow_up, run_board
-    from .roles import load_roles
+    from .roles import load_board
 
     topic = input("Topic: ").strip()
     context = input("Context: ").strip()
@@ -68,17 +68,20 @@ def cmd_board(config: dict) -> int:
         constraints.append(line)
 
     provider = build_provider(config)
-    from .roles import RolesUnavailable, folder_of
+    from .roles import RolesUnavailable
     try:
-        profiles = load_roles(config)   # section 3.4: fresh on every run, this is the board
+        board = load_board(config)   # section 3.4: fresh on every run, this is the board
     except RolesUnavailable as exc:
         print(f"Cannot run the AI Board: {exc}", file=sys.stderr)
         return 1
-    print(f"Board of {len(profiles)}: {', '.join(profiles)}  (roles from {folder_of(profiles)})")
+    profiles = board.profiles
+    print(f"Board of {len(profiles)}: {', '.join(profiles)}  (roles from {board.folder})")
+    if board.skipped:
+        print("Not on the board: " + "; ".join(f"{m} ({r})" for m, r in board.skipped))
     try:
         result = run_board(
             config, provider, topic=topic, context=context,
-            options=options, constraints=constraints, roles=profiles,
+            options=options, constraints=constraints, board=board,
         )
     except AiNotConfiguredError as exc:
         print(f"Cannot run the AI Board: {exc}", file=sys.stderr)

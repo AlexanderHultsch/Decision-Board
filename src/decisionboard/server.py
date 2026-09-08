@@ -179,7 +179,9 @@ class BoardServer:
         status: dict[str, Any] = {"configured": bool(vault_path), "ok": False, "notes": 0, "error": None}
         if vault_path:
             try:
-                status["notes"] = len(knowledge_mod.load_vault(Path(str(vault_path)).expanduser()))
+                vault_dir = Path(str(vault_path)).expanduser()
+                status["notes"] = len(knowledge_mod.load_vault(
+                    vault_dir, skip_subfolders=knowledge_mod._roles_inside(self.config, vault_dir)))
                 status["ok"] = True
             except knowledge_mod.KnowledgeUnavailable as exc:
                 status["error"] = str(exc)
@@ -201,13 +203,13 @@ class BoardServer:
     def _roles_status(self) -> dict[str, Any]:
         folder, origin = roles_mod.resolve_folder(self.config)
         try:
-            profiles = roles_mod.load_roles(self.config)
+            board = roles_mod.load_board(self.config)
         except roles_mod.RolesUnavailable as exc:
             return {"error": str(exc), "members": [], "count": 0, "source": origin,
-                    "folder": str(folder), "files": [], "member_meta": []}
-        info = roles_mod.summary(profiles)
+                    "folder": str(folder) if folder else None, "files": [], "member_meta": [], "skipped": []}
+        info = roles_mod.summary(board)
         info["error"] = None
-        info["member_meta"] = roles_mod.member_meta(profiles)
+        info["member_meta"] = roles_mod.member_meta(board.profiles)
         return info
 
     def _install_target(self) -> Path:
@@ -216,15 +218,16 @@ class BoardServer:
             return Path(str(configured)).expanduser()
         vault = _get(self.config, "knowledge.vault_path")
         if vault:
-            return Path(str(vault)).expanduser() / roles_mod.DEFAULT_SUBFOLDER
+            vault_dir = Path(str(vault)).expanduser()
+            return roles_mod.detect_folder(vault_dir) or (vault_dir / roles_mod.DEFAULT_SUBFOLDER)
         raise ApiError(400, "Choose a roles folder (or a knowledge source) first.")
 
     def install_roles(self) -> dict[str, Any]:
         folder = self._install_target()
         try:
-            written = roles_mod.install_examples(folder)
+            written = roles_mod.install_support_files(folder)
         except OSError as exc:
-            raise ApiError(500, f"Could not write the role files: {exc}")
+            raise ApiError(500, f"Could not write to the roles folder: {exc}")
         status = self._roles_status()
         status["written"] = [str(path) for path in written]
         status["target"] = str(folder)
@@ -265,8 +268,19 @@ class BoardServer:
         session = Session(question)
         with self.lock:
             self.sessions[session.id] = session
-        threading.Thread(target=self._clarify, args=(session,), daemon=True).start()
+        self._spawn(session, self._clarify, session)
         return session
+
+    @staticmethod
+    def _spawn(session: Session, target, *args) -> None:
+        """A background step whose crash must show up as the session's error,
+        never as a page polling 'clarifying' forever."""
+        def run() -> None:
+            try:
+                target(*args)
+            except Exception as exc:   # noqa: BLE001 - the whole point is to surface anything
+                session.fail(f"internal error: {exc!r}")
+        threading.Thread(target=run, daemon=True).start()
 
     def get_session(self, session_id: str) -> Session:
         with self.lock:
@@ -282,14 +296,14 @@ class BoardServer:
             session.fail(f"{exc}. Check the knowledge source in Options.")
             return
         try:
-            profiles = roles_mod.load_roles(self.config)
+            board = roles_mod.load_board(self.config)
         except roles_mod.RolesUnavailable as exc:
             session.fail(f"{exc}. Choose the roles folder in Options.")
             return
         with session.lock:
-            session.roles = roles_mod.summary(profiles)
-            session.member_meta = roles_mod.member_meta(profiles)
-            session.members = {member: "pending" for member in profiles}
+            session.roles = roles_mod.summary(board)
+            session.member_meta = roles_mod.member_meta(board.profiles)
+            session.members = {member: "pending" for member in board.profiles}
             session.knowledge = {
                 "vault_path": str(selection.vault_path) if selection.vault_path else None,
                 "selected": len(selection.notes),
@@ -340,7 +354,7 @@ class BoardServer:
             }
             session.phase = "running"
             session.members = {member: "pending" for member in session.members}
-        threading.Thread(target=self._run_board, args=(session,), daemon=True).start()
+        self._spawn(session, self._run_board, session)
 
     def _run_board(self, session: Session) -> None:
         def on_member(member: str, state: str) -> None:
@@ -356,16 +370,17 @@ class BoardServer:
         try:
             # Section 3.4: read fresh on every run, never cached - an edit in
             # Obsidian is in force on the next question.
-            profiles = roles_mod.load_roles(self.config)
+            board = roles_mod.load_board(self.config)
+            profiles = board.profiles
             with session.lock:
-                session.roles = roles_mod.summary(profiles)
+                session.roles = roles_mod.summary(board)
                 session.member_meta = roles_mod.member_meta(profiles)
                 session.members = {member: "pending" for member in profiles}
             result = run_board(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
-                on_member=on_member, roles=profiles,
+                on_member=on_member, board=board,
             )
         except Exception as exc:
             session.fail(str(exc))
@@ -394,7 +409,7 @@ class BoardServer:
                 raise ApiError(400, "Type a question first.")
             session.busy = True
             session.turns.append({"question": question, "answer": "", "pending": True})
-        threading.Thread(target=self._follow_up, args=(session, question), daemon=True).start()
+        self._spawn(session, self._follow_up, session, question)
 
     def _follow_up(self, session: Session, question: str) -> None:
         try:
@@ -422,7 +437,7 @@ class BoardServer:
                 raise ApiError(400, "No knowledge source is configured - set the vault folder in Options first.")
             session.phase = "proposing"
             session.busy = True
-        threading.Thread(target=self._propose, args=(session,), daemon=True).start()
+        self._spawn(session, self._propose, session)
 
     def _propose(self, session: Session) -> None:
         try:

@@ -17,7 +17,9 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard import setup_wizard  # noqa: E402
+from _roles_fixture import make_roles  # noqa: E402
 from decisionboard.agent.opencode_client import describe_failure  # noqa: E402
 
 
@@ -83,7 +85,7 @@ class TestWizard(unittest.TestCase):
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
                  mock.patch.object(setup_wizard.subprocess, "run", fake_run):
                 wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="opencode/big-pickle",
-                                             run_test=True, out=out)
+                                             run_test=True, out=out, roles=str(make_roles(Path(tmp) / "roles")))
                 code = wizard.run()
             text = out.getvalue()
             self.assertEqual(code, 0, text)
@@ -168,7 +170,7 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
                  mock.patch.dict(setup_wizard.os.environ, {"LITELLM_KEY": "secret"}), \
                  mock.patch.object(setup_wizard.urllib.request, "urlopen", lambda req, timeout: FakeResponse()):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=True, out=out,
-                                             opencode_config=str(company))
+                                             opencode_config=str(company), roles=str(make_roles(Path(tmp) / "roles")))
                 code = wizard.run()
             text = out.getvalue()
             self.assertEqual(code, 0, text)
@@ -217,7 +219,8 @@ class TestDatabaseRepair(unittest.TestCase):
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
                  mock.patch.object(setup_wizard.subprocess, "run", fake_run), \
                  mock.patch.dict(setup_wizard.os.environ, {"XDG_DATA_HOME": tmp}):
-                wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=True, out=out)
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=True, out=out,
+                                             roles=str(make_roles(Path(tmp) / "roles")))
                 code = wizard.run()
             text = out.getvalue()
             self.assertEqual(code, 0, text)

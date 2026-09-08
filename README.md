@@ -10,14 +10,14 @@ when you close the topic the board offers to write the decision into your
 Obsidian vault — after showing you exactly what and where.
 
 **Who sits on the board is decided by role profiles, not by code.** One
-folder of Markdown notes — by default `Roles/` inside your vault, or any
-folder you choose in Options — holds one note per member, or one note with
-several members. Each note is that member's personality: character, skills,
-the KPIs it watches, its vocabulary, how it assesses, what it pushes back on.
-The notes are read fresh on every question, so an edit in Obsidian is in
-force immediately. Six example profiles ship in `roles/` (Finance, HW
-Engineering, Mechanical Engineering, Manufacturing, SW Engineering, KPI
-Check); the setup wizard copies them into your folder to start from. See
+folder of Markdown notes — a folder in your vault whose name starts with
+"Roles", or any folder you choose in Options — holds one note per member,
+or one note with several members. Each note is the roles and
+responsibilities that member leads and speaks for. What is the same for
+every member — character, how to answer — is one conduct note in the same
+folder. The notes are read fresh on every question, so an edit in Obsidian
+is in force immediately. The repository ships no members, only the conduct
+note and a template the setup wizard copies into your folder. See
 `roles/README.md` for the file format.
 
 ## Why one call per member

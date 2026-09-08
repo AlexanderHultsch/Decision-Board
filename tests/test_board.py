@@ -16,14 +16,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 from decisionboard.agent.provider import AiNotConfiguredError, AiProvider, AiResult  # noqa: E402
 from decisionboard import board  # noqa: E402
-from decisionboard.roles import load_roles  # noqa: E402
+from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
-# The board is whoever has a role profile (section 3.4); with no roles folder
-# configured that is the six examples shipped under roles/, in their order.
-MEMBERS = tuple(load_roles({}))
+# The board is whoever has a filled role profile in the roles folder
+# (section 3.4); the repository ships none, so the tests write six.
+import tempfile as _tempfile  # noqa: E402
+_ROLES_DIR = make_roles(Path(_tempfile.mkdtemp()) / "roles")
+MEMBERS = CLASSIC
 
 
 def _member_response(view: str = "a view", risks="a risk", recommendation: str = "a recommendation") -> str:
@@ -114,7 +117,7 @@ class RaisingMemberProvider(AiProvider):
 
 class TestRunBoard(unittest.TestCase):
     def setUp(self):
-        self.config = {"provider": {"models": {"board": "test/model"}}}
+        self.config = {"provider": {"models": {"board": "test/model"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
 
     def test_a_full_run_makes_six_member_calls_plus_one_synthesis_call(self):
         provider = FakeProvider([_member_response() for _ in MEMBERS] + [SYNTHESIS_RESPONSE])
@@ -248,7 +251,7 @@ class TestRunBoard(unittest.TestCase):
 
 class TestAskFollowUp(unittest.TestCase):
     def setUp(self):
-        self.config = {"provider": {"models": {"board": "test/model"}}}
+        self.config = {"provider": {"models": {"board": "test/model"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
         self.board_result = board.BoardResult(
             topic="Dual-source the connector?",
             assessments=[

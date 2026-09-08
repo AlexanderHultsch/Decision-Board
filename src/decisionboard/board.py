@@ -33,7 +33,7 @@ from typing import Any, Callable
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
 from .audit import log_run
-from .roles import RoleProfile, load_roles
+from .roles import Board, RoleProfile, load_board
 
 
 def _get(config: dict, dotted: str, default: Any = None) -> Any:
@@ -78,7 +78,7 @@ class BoardConversation:
 
 def _member_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str,
-    role: RoleProfile | None = None,
+    role: RoleProfile | None = None, conduct: str = "",
 ) -> str:
     """The prompt for one member's call.
 
@@ -94,13 +94,16 @@ def _member_prompt(
         "",
         f"Member: {member}",
     ]
+    if conduct:
+        lines += ["", "## Board member conduct (section 3.4, the same for every member)", "", conduct]
     if role is not None and role.body:
         lines += [
             "",
             "## Role profile (section 3.4)",
             "",
-            "This is who this member is. It is authoritative for this call: assess in this "
-            "character, with these skills, against these KPIs, in this vocabulary.",
+            "This is who this member is: the roles and responsibilities it leads and speaks for. "
+            "It is authoritative for this call: assess from these responsibilities, against these "
+            "KPIs, in this vocabulary.",
             "",
             role.body,
         ]
@@ -205,6 +208,7 @@ def run_board(
     constraints: tuple[str, ...] = (),
     on_member: Callable[[str, str], None] | None = None,
     roles: dict[str, RoleProfile] | None = None,
+    board: Board | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): one isolated call per member, then
     one synthesis call over what they produced. ``roles`` is the board
@@ -233,8 +237,11 @@ def run_board(
             "AI Board has no model configured - set provider.models.board"
         )
 
-    if roles is None:
-        roles = load_roles(config)
+    if board is None and roles is None:
+        board = load_board(config)
+    if board is not None:
+        roles = board.profiles
+    conduct = board.conduct if board is not None else ""
     members = tuple(roles)
     audit_folder = _get(config, "runtime.audit_folder")
     pc_name = _get(config, "storage.pc_name", "")
@@ -271,7 +278,7 @@ def run_board(
     # calls can see another's response, because none of them has
     # produced one yet when they are submitted.
     prompts = [
-        _member_prompt(topic, context, options, constraints, member, roles[member])
+        _member_prompt(topic, context, options, constraints, member, roles[member], conduct)
         for member in members
     ]
 

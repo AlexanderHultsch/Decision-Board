@@ -243,6 +243,8 @@ def _roles_inside(config: dict, vault: Path) -> tuple[str, ...]:
     vault (section 3.4: profiles are not knowledge notes), else nothing."""
     from .roles import resolve_folder   # local import: roles imports this module
     folder, _ = resolve_folder(config)
+    if folder is None:
+        return ()
     try:
         return (folder.resolve().relative_to(vault.resolve()).as_posix(),)
     except (ValueError, OSError):

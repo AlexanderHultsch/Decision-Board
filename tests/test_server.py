@@ -18,8 +18,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
 from decisionboard.server import create_http_server  # noqa: E402
+from _roles_fixture import make_roles  # noqa: E402
 
 CLARIFIER = json.dumps({"topic": "Rework or switch", "context": "SOP is fixed.", "options": ["Rework", "Switch"],
                         "constraints": ["SOP cannot move"], "questions": ["What is the budget?"]})
@@ -62,6 +64,7 @@ class TestServerFlow(unittest.TestCase):
         cls.vault = Path(cls.tmp.name) / "vault"
         cls.vault.mkdir()
         (cls.vault / "Tooling.md").write_text("---\ntitle: Tooling\ntags: [tooling]\n---\nTooling is late.\n", encoding="utf-8")
+        make_roles(cls.vault / "Roles&Responsibilities")
         cls.config_path = Path(cls.tmp.name) / "config.local.json"
         cls.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"vault_path": str(cls.vault), "token_budget": 6000}}
         cls.config_path.write_text(json.dumps(cls.config), encoding="utf-8")

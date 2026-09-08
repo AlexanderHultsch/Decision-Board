@@ -35,14 +35,14 @@ persistent state:
 
 ### 3.1 Members
 
-**The board is whoever has a role profile in the roles folder** (section
-3.4). There is no member list in the code, in the prompts or in this
-document: adding a profile adds a member, removing one removes it, and a
-board needs at least two. The six examples shipped under `roles/` — Finance,
-HW Engineering, Mechanical Engineering, Manufacturing, SW Engineering, KPI
-Check — are the board until a roles folder of Alex's own is chosen, and the
-starting point the setup wizard copies into it. One board run is one call
-per member plus one synthesis call.
+**The board is whoever has a filled role profile in the roles folder**
+(section 3.4). There is no member list in the code, in the prompts or in
+this document, and the repository ships no members: adding a profile adds
+a member, removing one removes it, and a board needs at least two. Today
+the members are the project managers of the programme's swimlanes, each
+speaking for every role and responsibility under their lead; more roles
+(working level, leadership within a swimlane) can be added as profiles
+later. One board run is one call per member plus one synthesis call.
 
 ### 3.4 Role profiles
 
@@ -55,14 +55,17 @@ the board (3.1).
 
 | Rule | Reason |
 |---|---|
-| One folder, chosen by Alex: `knowledge.roles_folder`, picked in Options or by the setup wizard with the folder dialog. Empty means `<vault>/Roles` when that exists, else the examples shipped under `roles/` | One place to look. The examples are the only fallback, and they are files, not a list in code. |
+| One folder, chosen by Alex: `knowledge.roles_folder`, picked in Options or by the setup wizard with the folder dialog. Empty means a folder in the vault whose name starts with "Roles" (`Roles`, `Roles&Responsibilities`) or reads "R&R". No folder, no board: the repository ships no member profiles | One place to look, named as Alex names it. Nothing in code can stand in for the board. |
+| **What is the same for every member** — character, how to answer, and the rule that a member speaks for every role and responsibility under its lead — is one note in the same folder with `kind: conduct` in its front matter (`_Board member conduct.md`), prepended to every member's profile on every call | The personality that is shared is written once, edited in one place, and never duplicated into every profile. |
+| A profile with a heading and nothing under it is *not filled yet*: it is left off the board and named on the confirm screen, in Options and in the CLI | An empty note must never produce an empty opinion, and must never disappear silently either. |
+| Notes whose name starts with `_`, or whose front matter says `kind: conduct` or `kind: template`, are never members | Support files live next to the profiles without joining the board. |
 | One file per role, or one file with several roles. A file whose front matter names a `member:`, or with at most one level-one heading, is one role (named by the front matter or the file). A file with two or more level-one headings is several roles, one per heading, with `key: value` lines directly under the heading as that role's metadata | Alex writes the board the way he thinks about it — six notes, or one note called Board. |
 | Metadata per role: `title` (shown), `perspective` (the one line the synthesis sees), `order`, `icon` (from a fixed set: dollar, chip, gear, factory, code, target, scale, people, shield, truck, flask, chart, person; guessed from the name when absent), `color`, `short` | The interface draws any member without a code change. |
 | Each member receives its own note in full, under `## Role profile`, declared authoritative for that call, and nothing about any other member — not even their names | FR-3.3a: a member never sees another member's material, and no longer knows who else is on the board. |
 | The synthesis receives one line per member (`title: perspective`), never the full profiles | It weighs who said what; it does not need to be six people. |
 | The roles folder is excluded from the knowledge selection when it lies inside the vault (`knowledge._roles_inside`) | A profile is mandatory context for one member, not a note competing for the token budget of all of them. |
 | Fewer than two profiles is `RolesUnavailable`, shown as an error with the folder named | A board of one is not a board; a misconfigured folder must not silently become the six examples. |
-| The setup wizard proposes `<vault>/Roles`, accepts any other folder, and offers to create it and copy the examples in when it is missing or has fewer than two profiles; Options has the same button. Existing files are never overwritten | The examples are a starting point; the folder's copies are the truth. |
+| The setup wizard proposes the detected folder (else `<vault>/Roles`), accepts any other, and offers to create it with the conduct note and a profile template when it is missing or has fewer than two filled profiles; Options has the same button. Existing files are never overwritten, and no member is ever created by the tool | Members are Alex's to write; the tool only supplies the shared conduct and the shape. |
 
 ### 3.2 Process
 

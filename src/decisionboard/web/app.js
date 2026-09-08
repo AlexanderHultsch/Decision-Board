@@ -157,9 +157,11 @@
       $("btn-install-roles").hidden = false;
       return;
     }
-    const where = r.source === "built-in" ? "the examples shipped with the program (no roles folder chosen yet)" : r.folder;
-    el.textContent = `Board of ${r.count}: ${r.members.join(", ")} - from ${where}.`;
-    $("btn-install-roles").hidden = r.source !== "built-in";
+    let text = `Board of ${r.count}: ${r.members.join(", ")} - from ${r.folder}.`;
+    if (r.skipped && r.skipped.length) text += ` Not on the board: ${r.skipped.map((x) => `${x.member} (${x.reason})`).join("; ")}.`;
+    text += r.conduct ? ` Conduct note: ${r.conduct}.` : " No conduct note (kind: conduct) in the folder.";
+    el.textContent = text;
+    $("btn-install-roles").hidden = !!r.conduct;
   }
 
   async function browseRoles() {
@@ -285,9 +287,8 @@
     $("in-constraints").value = (inp.constraints || []).join("\n");
     const k = session.knowledge;
     const r = session.roles || { members: [], count: 0, source: "", folder: null };
-    const rolesLine = r.source === "built-in"
-      ? `Board of ${r.count} (${r.members.join(", ")}) from the example profiles shipped with the program - choose your own roles folder in Options.`
-      : `Board of ${r.count}: ${r.members.join(", ")} (profiles from ${r.folder}).`;
+    let rolesLine = `Board of ${r.count}: ${r.members.join(", ")} (profiles from ${r.folder}).`;
+    if (r.skipped && r.skipped.length) rolesLine += ` Not on the board: ${r.skipped.map((x) => `${x.member}, ${x.reason}`).join("; ")}.`;
     $("confirm-knowledge").textContent = (k && k.vault_path
       ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
       : "No knowledge source configured. ") + rolesLine + ` ${r.count + 1} model calls follow.`;

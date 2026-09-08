@@ -16,30 +16,31 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard import board, knowledge, roles, setup_wizard  # noqa: E402
 from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
-
-CLASSIC = ("Finance", "HW Engineering", "Mechanical Engineering", "Manufacturing", "SW Engineering", "KPI Check")
+from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
 
 def _single(folder: Path, member: str, body: str = "", **meta) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     front = "\n".join(f"{key}: {value}" for key, value in {"member": member, **meta}.items())
     path = folder / f"{member}.md"
-    path.write_text(f"---\n{front}\n---\n# {member}\n\n## Character\n{body or 'Profile of ' + member}.\n", encoding="utf-8")
+    content = body or f"Profile of {member}: what it is responsible for, what it measures, how it talks."
+    path.write_text(f"---\n{front}\n---\n# {member}\n\n## Character\n{content}\n", encoding="utf-8")
     return path
 
 
-class TestShippedExamples(unittest.TestCase):
-    def test_no_folder_configured_gives_the_examples_in_their_declared_order(self):
-        profiles = roles.load_roles({})
-        self.assertEqual(tuple(profiles), CLASSIC)
-        self.assertTrue(all(p.source == "built-in" for p in profiles.values()))
-        for member, profile in profiles.items():
-            self.assertTrue(profile.perspective, member)
-            self.assertNotEqual(profile.icon, "person", member)
-            for heading in ("## Character", "## Skills", "## KPIs", "## Vocabulary", "## How I assess", "## What I push back on"):
-                self.assertIn(heading, profile.body, f"{member}: {heading}")
+class TestNothingShipped(unittest.TestCase):
+    def test_the_repository_ships_no_members_only_support_files(self):
+        names = sorted(p.name for p in roles.SUPPORT_DIR.glob("*.md"))
+        self.assertEqual(names, sorted(["README.md", roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
+        self.assertEqual(roles.members_in(roles.SUPPORT_DIR), [])
+
+    def test_no_folder_means_no_board(self):
+        with self.assertRaises(roles.RolesUnavailable) as raised:
+            roles.load_board({})
+        self.assertIn("no roles folder", str(raised.exception))
 
     def test_no_member_list_survives_in_the_code(self):
         self.assertFalse(hasattr(board, "BOARD_MEMBERS"))
@@ -47,6 +48,15 @@ class TestShippedExamples(unittest.TestCase):
         prompt = (REPO_ROOT / "src/decisionboard/agent/prompts/board_members.md").read_text(encoding="utf-8")
         for name in CLASSIC:
             self.assertNotIn(name, prompt)
+
+    def test_a_fixture_board_loads_in_declared_order_with_the_conduct_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(tuple(b.profiles), CLASSIC)
+        self.assertIn("Speak for every role", b.conduct)
+        self.assertEqual(b.conduct_path.name, roles.CONDUCT_NAME)
+        self.assertEqual(b.skipped, [])
 
 
 class TestParsing(unittest.TestCase):
@@ -93,6 +103,47 @@ class TestParsing(unittest.TestCase):
 
 
 class TestLoadRoles(unittest.TestCase):
+    def test_roles_folder_is_detected_by_name_inside_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            make_roles(vault / "Roles&Responsibilities", ("Finance", "Legal"))
+            b = roles.load_board({"knowledge": {"vault_path": str(vault)}})
+            self.assertEqual(b.folder.name, "Roles&Responsibilities")
+            self.assertEqual(b.source, "vault")
+            self.assertEqual(roles.detect_folder(vault).name, "Roles&Responsibilities")
+
+    def test_empty_profiles_are_left_off_the_board_and_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Legal", "Customer"))
+            (folder / "Finance.md").write_text("---\nmember: Finance\n---\n# Finance\n", encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(sorted(b.profiles), ["Customer", "Legal"])
+        self.assertEqual(b.skipped, [("Finance", "not filled yet (Finance.md)")])
+        self.assertEqual(roles.summary(b)["skipped"], [{"member": "Finance", "reason": "not filled yet (Finance.md)"}])
+
+    def test_conduct_and_template_and_underscore_files_are_never_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Legal", "Customer"))
+            roles.install_support_files(folder)
+            (folder / "_notes.md").write_text("# Whatever\n\nLong enough text to count as content here.\n", encoding="utf-8")
+            (folder / "Old.md").write_text("---\nkind: template\n---\n# Old\n\nLong enough text to count as content.\n", encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(sorted(b.profiles), ["Customer", "Legal"])
+
+    def test_install_support_files_never_overwrites_and_creates_no_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "r"
+            written = roles.install_support_files(folder)
+            names = sorted(p.name for p in written)
+            (folder / roles.CONDUCT_NAME).write_text("mine", encoding="utf-8")
+            again = roles.install_support_files(folder)
+            kept = (folder / roles.CONDUCT_NAME).read_text(encoding="utf-8")
+            members = roles.members_in(folder)
+        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
+        self.assertEqual(again, [])
+        self.assertEqual(kept, "mine")
+        self.assertEqual(members, [])
+
     def test_configured_folder_defines_the_board_whatever_the_vault_holds(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "vault"
@@ -101,19 +152,11 @@ class TestLoadRoles(unittest.TestCase):
             own = Path(tmp) / "MyBoard"
             _single(own, "Customer", order=2)
             _single(own, "Engineering", order=1)
-            profiles = roles.load_roles({"knowledge": {"vault_path": str(vault), "roles_folder": str(own)}})
+            b = roles.load_board({"knowledge": {"vault_path": str(vault), "roles_folder": str(own)}})
+            profiles = b.profiles
         self.assertEqual(list(profiles), ["Engineering", "Customer"])
         self.assertEqual(profiles["Customer"].source, "configured")
-        self.assertEqual(roles.summary(profiles)["folder"], str(own))
-
-    def test_roles_inside_the_vault_are_the_default_when_present(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            vault = Path(tmp) / "vault"
-            _single(vault / "Roles", "Finance")
-            _single(vault / "Roles", "Legal")
-            profiles = roles.load_roles({"knowledge": {"vault_path": str(vault)}})
-        self.assertEqual(sorted(profiles), ["Finance", "Legal"])
-        self.assertTrue(all(p.source == "vault" for p in profiles.values()))
+        self.assertEqual(roles.summary(b)["folder"], str(own))
 
     def test_fewer_than_two_members_is_an_error_not_a_board(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,6 +165,11 @@ class TestLoadRoles(unittest.TestCase):
             with self.assertRaises(roles.RolesUnavailable) as raised:
                 roles.load_roles({"knowledge": {"roles_folder": str(own)}})
             self.assertIn("at least 2", str(raised.exception))
+            (own / "Finance.md").write_text("---\nmember: Finance\n---\n# Finance\n", encoding="utf-8")
+            _single(own, "Legal")
+            with self.assertRaises(roles.RolesUnavailable) as raised:
+                roles.load_roles({"knowledge": {"roles_folder": str(own)}})
+            self.assertIn("not filled yet: Finance", str(raised.exception))
             with self.assertRaises(roles.RolesUnavailable):
                 roles.load_roles({"knowledge": {"roles_folder": str(Path(tmp) / "missing")}})
 
@@ -132,10 +180,10 @@ class TestLoadRoles(unittest.TestCase):
             _single(own, "Legal")
             config = {"knowledge": {"roles_folder": str(own)}}
             first = roles.load_roles(config)["Finance"].body
-            path.write_text("---\nmember: Finance\n---\nChanged.\n", encoding="utf-8")
+            path.write_text("---\nmember: Finance\n---\nChanged: now responsible for everything money-related in the programme.\n", encoding="utf-8")
             second = roles.load_roles(config)["Finance"].body
         self.assertNotEqual(first, second)
-        self.assertEqual(second, "Changed.")
+        self.assertTrue(second.startswith("Changed:"))
 
     def test_colors_and_short_names_are_filled_in(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,34 +195,30 @@ class TestLoadRoles(unittest.TestCase):
         self.assertEqual(profiles["Quality Assurance"].short, "Quality")
         self.assertEqual(profiles["Quality Assurance"].icon, "target")
 
-    def test_install_examples_never_overwrites(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            own = Path(tmp) / "r"
-            _single(own, "Finance", "Edited in Obsidian")
-            written = roles.install_examples(own)
-            kept = (own / "Finance.md").read_text(encoding="utf-8")
-            members = roles.members_in(own)
-        self.assertEqual(len(written), 5)
-        self.assertIn("Edited in Obsidian", kept)
-        self.assertEqual(len(members), 6)
-
 
 class TestRolesInPrompts(unittest.TestCase):
-    def test_each_member_gets_only_its_own_profile(self):
-        profiles = roles.load_roles({})
-        finance = board._member_prompt("t", "c", (), (), "Finance", profiles["Finance"])
-        manu = board._member_prompt("t", "c", (), (), "Manufacturing", profiles["Manufacturing"])
+    def _board(self, tmp):
+        return roles.load_board({"knowledge": {"roles_folder": str(make_roles(Path(tmp) / "r"))}})
+
+    def test_each_member_gets_the_conduct_note_and_only_its_own_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            b = self._board(tmp)
+            finance = board._member_prompt("t", "c", (), (), "Finance", b.profiles["Finance"], b.conduct)
+            manu = board._member_prompt("t", "c", (), (), "Manufacturing", b.profiles["Manufacturing"], b.conduct)
+        self.assertIn("## Board member conduct", finance)
+        self.assertIn("Speak for every role", finance)
         self.assertIn("## Role profile", finance)
-        self.assertIn("cBOM", finance)
-        self.assertNotIn("run-at-rate", finance.lower())
-        self.assertIn("run-at-rate", manu.lower())
+        self.assertIn("finance view of every decision", finance)
+        self.assertNotIn("manufacturing view", finance)
+        self.assertIn("manufacturing view of every decision", manu)
 
     def test_synthesis_gets_one_line_per_member_not_the_profiles(self):
-        profiles = roles.load_roles({})
-        prompt = board._synthesis_prompt([board.MemberAssessment("Finance", "v", "r", "rec")], profiles)
+        with tempfile.TemporaryDirectory() as tmp:
+            b = self._board(tmp)
+            prompt = board._synthesis_prompt([board.MemberAssessment("Finance", "v", "r", "rec")], b.profiles)
         self.assertIn("## Board members", prompt)
         self.assertIn("- Finance: Cost, budget vs forecast vs actuals, cBOM impact", prompt)
-        self.assertNotIn("## Character", prompt)
+        self.assertNotIn("## Roles and responsibilities", prompt)
 
     def test_run_board_takes_its_members_from_the_roles_folder(self):
         class Recorder(AiProvider):
@@ -196,6 +240,7 @@ class TestRolesInPrompts(unittest.TestCase):
         self.assertEqual([a.member for a in result.assessments], ["Legal", "Customer", "Finance"])
         self.assertEqual(result.llm_calls, 4)
         self.assertTrue(all("## Role profile" in p for p in provider.prompts if "Member: " in p))
+        self.assertFalse(any("## Board member conduct" in p for p in provider.prompts))   # no conduct note written
 
 
 class TestRolesAndKnowledge(unittest.TestCase):
@@ -220,24 +265,36 @@ class TestRolesAndKnowledge(unittest.TestCase):
 
 
 class TestWizardRoles(unittest.TestCase):
-    def test_wizard_creates_the_default_folder_with_the_examples(self):
+    def test_wizard_creates_the_default_folder_with_support_files_and_says_the_board_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "vault"
             vault.mkdir()
             out = io.StringIO()
             wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="x/y", run_test=False, out=out)
             wizard.check_vault(str(vault))
-            count = len(list((vault / "Roles").glob("*.md")))
-        self.assertEqual(count, 6)
+            names = sorted(p.name for p in (vault / "Roles").glob("*.md"))
+        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
         self.assertEqual(wizard.roles_folder, str(vault / "Roles"))
-        self.assertIn("board of 6", out.getvalue())
+        self.assertTrue(any("no board yet" in f for f in wizard.failures))
+
+    def test_wizard_finds_a_renamed_roles_folder_in_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            make_roles(vault / "Roles&Responsibilities", ("Legal", "Customer"))
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="x/y", run_test=False, out=out)
+            wizard.check_vault(str(vault))
+        self.assertEqual(wizard.roles_folder, str(vault / "Roles&Responsibilities"))
+        self.assertIn("board of 2", out.getvalue())
+        self.assertEqual(wizard.failures, [])
 
     def test_wizard_accepts_another_folder_and_writes_nothing_when_it_has_a_board(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "vault"; vault.mkdir()
             own = Path(tmp) / "MyBoard"
             (own).mkdir()
-            (own / "Board.md").write_text("# A\n\nAlpha.\n\n# B\n\nBeta.\n", encoding="utf-8")
+            (own / "Board.md").write_text("# A\n\nAlpha is responsible for the first half of everything that matters.\n\n"
+                                          "# B\n\nBeta is responsible for the second half of everything that matters.\n", encoding="utf-8")
             before = (own / "Board.md").read_text(encoding="utf-8")
             out = io.StringIO()
             wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="x/y", run_test=False, out=out, roles=str(own))
