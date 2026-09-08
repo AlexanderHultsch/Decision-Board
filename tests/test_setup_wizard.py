@@ -224,3 +224,28 @@ class TestDatabaseRepair(unittest.TestCase):
             self.assertTrue(any(p.name.startswith("opencode.db.") and p.name.endswith(".bak") for p in data.iterdir()))
             self.assertTrue((data / "auth.json").exists())
             self.assertIn("model answered", text)
+
+
+class TestChooseModel(unittest.TestCase):
+    def _wizard(self, answers):
+        out = io.StringIO()
+        wizard = setup_wizard.Wizard(interactive=True, vault="", model=None, run_test=False, out=out)
+        wizard.ask = lambda prompt, default="": answers.pop(0) if answers else default
+        return wizard, out
+
+    def test_enter_keeps_the_current_model(self):
+        wizard, _ = self._wizard([""])
+        self.assertEqual(wizard.choose_model("azure/Kimi", ["azure/Kimi"], ""), "azure/Kimi")
+
+    def test_a_number_picks_from_the_list(self):
+        wizard, _ = self._wizard(["2"])
+        self.assertEqual(wizard.choose_model("azure/Kimi", ["azure/Kimi", "azure/Other"], ""), "azure/Other")
+
+    def test_y_is_rejected_and_asked_again(self):
+        wizard, out = self._wizard(["y", ""])
+        self.assertEqual(wizard.choose_model("azure/Kimi", ["azure/Kimi"], ""), "azure/Kimi")
+        self.assertIn("not a model string", out.getvalue())
+
+    def test_a_saved_invalid_model_is_replaced_by_the_defined_one(self):
+        self.assertFalse(setup_wizard._looks_like_model_string("y"))
+        self.assertTrue(setup_wizard._looks_like_model_string("azure/Opencode-Kimi-K2.7"))

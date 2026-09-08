@@ -120,7 +120,12 @@ class Wizard:
         self.ok(f"opencode found: {self.opencode}")
         others = [p for p in _all_on_path("opencode") if p != self.opencode]
         if others:
-            self.warn("more than one opencode on PATH; the first one wins: " + ", ".join(others))
+            self.warn("more than one opencode on PATH; the first one wins. Versions:")
+            for binary in [self.opencode, *others]:
+                probe = self._run([binary, "--version"], timeout=30)
+                version = ((probe.stdout or probe.stderr or "").strip().splitlines() or ["?"])[0]
+                self.say(f"          {version:<12} {binary}{'   (first on PATH)' if binary == self.opencode else ''}")
+            self.say("        If the first is older, uninstall it or put the newer one first in PATH.")
         version = self._run([self.opencode, "--version"], timeout=30)
         info["version"] = (version.stdout or version.stderr or "").strip().splitlines()[0] if (version.stdout or version.stderr) else ""
         if version.returncode == 0:
@@ -187,10 +192,10 @@ class Wizard:
                 info["models"] = models_now.stdout.strip()
                 self.ok(f"`opencode models` with that file: {len(info['models'].splitlines())} model string(s)")
 
-        current_model = provider.setdefault("models", {}).get("board") or (defined[0] if defined else DEFAULT_MODEL)
-        if "<" in current_model or "big-pickle" in current_model and defined:
-            current_model = defined[0]
-        model = self.model_arg or self.ask("Model string (provider/model)", current_model)
+        current_model = provider.setdefault("models", {}).get("board") or ""
+        if not _looks_like_model_string(current_model) or ("big-pickle" in current_model and defined):
+            current_model = defined[0] if defined else DEFAULT_MODEL
+        model = self.model_arg or self.choose_model(current_model, defined, info.get("models", ""))
         if defined and model not in defined:
             self.warn(f"{model} is not defined in {Path(config_file).name} (defined: {', '.join(defined)}).")
         elif info.get("models") and model not in info["models"]:
@@ -216,6 +221,38 @@ class Wizard:
         self.say(f"        model {model}, budget {knowledge['token_budget']} tokens, port {config['server']['port']}, "
                  f"audit {runtime['audit_folder']}")
         return config
+
+    def choose_model(self, current: str, defined: list[str], listed: str) -> str:
+        """A numbered choice, never a bare text prompt right after yes/no
+        questions: on the target machine a "y" typed here became the model
+        string (8 September 2026). Enter keeps the default, a number picks
+        from the list, and only text that looks like provider/model is
+        accepted as a typed model string."""
+        choices = list(defined)
+        for line in (listed or "").splitlines():
+            line = line.strip()
+            if _looks_like_model_string(line) and line not in choices:
+                choices.append(line)
+        if current not in choices:
+            choices.insert(0, current)
+        if not self.interactive:
+            return current
+        self.say("        Models (from opencode.json first, then `opencode models`):")
+        shown = choices[:15]
+        for index, choice in enumerate(shown, start=1):
+            marker = "  <- current" if choice == current else ""
+            self.say(f"          {index:2d}. {choice}{marker}")
+        if len(choices) > len(shown):
+            self.say(f"              ... {len(choices) - len(shown)} more; type one as provider/model")
+        while True:
+            answer = self.ask("Model: Enter keeps the current one, or a number, or provider/model", "")
+            if not answer:
+                return current
+            if answer.isdigit() and 1 <= int(answer) <= len(shown):
+                return shown[int(answer) - 1]
+            if _looks_like_model_string(answer):
+                return answer
+            self.say(f"        '{answer}' is not a model string (needs the form provider/model) - try again.")
 
     def step_opencode_config(self, current: str) -> str:
         """Where the company-provided ``opencode.json`` lives, so OpenCode
@@ -470,6 +507,11 @@ class Wizard:
             from decisionboard.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
         return 1 if self.failures else 0
+
+
+def _looks_like_model_string(value: str) -> bool:
+    value = (value or "").strip()
+    return "/" in value and not value.startswith("/") and not value.endswith("/") and " " not in value and "<" not in value
 
 
 def _all_on_path(name: str) -> list[str]:
