@@ -34,15 +34,28 @@ the decision, one memory-proposal call after it.
 
 ## Install and run
 
-Python 3.11+, standard library only — no `pip` dependencies.
+Python 3.11+, standard library only — no `pip` dependencies. Clone the
+repository:
 
 ```
-copy config\config.example.json config\config.local.json
+git clone https://github.com/AlexanderHultsch/Decision-Board.git
+cd Decision-Board
 ```
 
-Edit `config/config.local.json` and set `provider.models.board` to the
-`provider/model` string your OpenCode endpoint expects, then start the
-browser interface:
+Then run the setup wizard. It checks Python, git and OpenCode, writes
+`config/config.local.json` with everything preselected, lets you choose the
+knowledge source with the folder dialog, and makes one real test call to the
+model so you know it is reachable before the board is asked anything:
+
+```
+python scripts/setup.py
+```
+
+A failed test call prints OpenCode's complete output and the likely causes.
+On a machine without the repository yet, `scripts/install.ps1` does the
+clone as well: it asks for the folder, clones or pulls, then runs the wizard.
+
+Start the browser interface:
 
 ```
 python scripts/run_board.py serve

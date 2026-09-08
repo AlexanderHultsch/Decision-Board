@@ -49,6 +49,56 @@ class OpenCodeError(RuntimeError):
     """
 
 
+def describe_failure(stdout: str | None, stderr: str | None) -> str:
+    """What a failed ``opencode run`` actually said. With ``--format json``
+    OpenCode reports errors on **stdout**, as JSON events, and often writes
+    nothing to stderr at all - seen on the target machine on 8 September
+    2026 as an error message that ended after the exit code. So the
+    message is assembled from every ``error``-like event's text, then from
+    whatever else stdout and stderr carry, never from stderr alone."""
+    messages: list[str] = []
+    other_lines: list[str] = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            other_lines.append(line.strip())
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type", ""))
+        if "error" in event_type.lower():
+            messages.append(_error_text(event))
+        elif event_type == "text":
+            other_lines.append(str(event.get("part", {}).get("text", "")).strip())
+    stderr_text = (stderr or "").strip()
+    parts = [m for m in messages if m]
+    if stderr_text:
+        parts.append(stderr_text[:_STDERR_TRIM])
+    if not parts and other_lines:
+        parts.append(" ".join(other_lines)[:_STDERR_TRIM])
+    if not parts:
+        return "(no output - run `opencode auth list` and `opencode models` to check login and model name)"
+    return " | ".join(parts)
+
+
+def _error_text(event: dict) -> str:
+    """The human-readable part of an error event, whatever nesting the
+    OpenCode version used."""
+    for key in ("message", "error", "part", "data", "properties"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            inner = _error_text(value)
+            if inner:
+                return inner
+    name = event.get("name")
+    return str(name) if name else json.dumps(event, ensure_ascii=False)[:_LINE_TRIM]
+
+
 def _config_key(config: dict, dotted: str, default: Any = None) -> Any:
     node: Any = config
     for part in dotted.split("."):
@@ -185,9 +235,9 @@ class OpenCodeProvider(AiProvider):
         duration = time.monotonic() - started
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()[:_STDERR_TRIM]
             raise OpenCodeError(
-                f"opencode run exited with code {result.returncode}: {stderr}"
+                f"opencode run exited with code {result.returncode}: "
+                + describe_failure(result.stdout, result.stderr)
             )
         return result.stdout, duration
 

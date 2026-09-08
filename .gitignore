@@ -7,6 +7,9 @@ config/*.bak
 # committed
 memory/
 
+# The default audit folder the setup wizard proposes
+audit/
+
 # Secrets — never commit
 .env
 .env.*
