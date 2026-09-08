@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -249,3 +250,26 @@ class TestChooseModel(unittest.TestCase):
     def test_a_saved_invalid_model_is_replaced_by_the_defined_one(self):
         self.assertFalse(setup_wizard._looks_like_model_string("y"))
         self.assertTrue(setup_wizard._looks_like_model_string("azure/Opencode-Kimi-K2.7"))
+
+
+class TestAllOnPath(unittest.TestCase):
+    def test_windows_scan_uses_pathext_only_and_deduplicates_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a"; b = Path(tmp) / "b"
+            a.mkdir(); b.mkdir()
+            (a / "opencode.exe").write_bytes(b"x")
+            (b / "opencode").write_text("#!/bin/sh\n", encoding="utf-8")     # npm launcher, not runnable on Windows
+            (b / "opencode.cmd").write_text("@echo off\n", encoding="utf-8")
+            with mock.patch.dict(setup_wizard.os.environ, {"PATH": os.pathsep.join([str(a), str(b)]), "PATHEXT": ".EXE;.CMD"}), \
+                 mock.patch.object(setup_wizard.sys, "platform", "win32"):
+                found = setup_wizard._all_on_path("opencode")
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all(Path(f).suffix.lower() in (".exe", ".cmd") for f in found))
+
+    def test_a_probe_that_cannot_start_does_not_crash(self):
+        out = io.StringIO()
+        wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=False, out=out)
+        with mock.patch.object(setup_wizard.subprocess, "run", side_effect=OSError(193, "not a valid Win32 application")):
+            result = wizard._run(["opencode", "--version"], timeout=5)
+        self.assertEqual(result.returncode, 126)
+        self.assertIn("cannot be started", result.stderr)

@@ -118,7 +118,8 @@ class Wizard:
             return info
         info["found"] = True
         self.ok(f"opencode found: {self.opencode}")
-        others = [p for p in _all_on_path("opencode") if p != self.opencode]
+        mine = str(Path(self.opencode).resolve()).lower()
+        others = [p for p in _all_on_path("opencode") if str(Path(p).resolve()).lower() != mine]
         if others:
             self.warn("more than one opencode on PATH; the first one wins. Versions:")
             for binary in [self.opencode, *others]:
@@ -483,6 +484,8 @@ class Wizard:
                                   errors="replace", timeout=timeout, env=self.env)
         except FileNotFoundError:
             return subprocess.CompletedProcess(command, 127, "", f"{command[0]} not found")
+        except OSError as exc:   # e.g. WinError 193: not a Win32 application
+            return subprocess.CompletedProcess(command, 126, "", f"{command[0]} cannot be started: {exc}")
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(command, 124, "", f"timed out after {timeout}s")
 
@@ -515,13 +518,33 @@ def _looks_like_model_string(value: str) -> bool:
 
 
 def _all_on_path(name: str) -> list[str]:
+    """Every executable called ``name`` on PATH, first match per folder.
+    On Windows only PATHEXT extensions count: the npm launcher ``opencode``
+    without an extension is a shell script that CreateProcess refuses
+    (WinError 193, seen 8 September 2026), and ``.EXE``/``.exe`` are one
+    file."""
     found: list[str] = []
-    exts = [""] + (os.environ.get("PATHEXT", "").lower().split(";") if sys.platform == "win32" else [])
+    seen: set[str] = set()
+    if sys.platform == "win32":
+        exts = [e for e in os.environ.get("PATHEXT", ".EXE;.CMD;.BAT;.COM").split(";") if e]
+    else:
+        exts = [""]
     for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if not folder:
+            continue
         for ext in exts:
             candidate = Path(folder) / (name + ext)
-            if candidate.is_file() and str(candidate) not in found:
-                found.append(str(candidate))
+            try:
+                if not candidate.is_file():
+                    continue
+                key = str(candidate.resolve()).lower()
+            except OSError:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(str(candidate))
+            break
     return found
 
 
