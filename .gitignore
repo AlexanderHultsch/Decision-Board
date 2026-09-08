@@ -1,0 +1,36 @@
+# Local configuration — never commit
+config/config.local.json
+config/*.local.json
+config/*.bak
+
+# The board's memory (decision 0005): program content, must never be
+# committed
+memory/
+
+# Secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.cer
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# OS and editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

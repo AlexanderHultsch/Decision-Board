@@ -1,0 +1,359 @@
+"""AI Board orchestration (docs/spec.md chapter 9, FR-3.1..FR-3.6).
+
+The board has six standing members (9.2), each producing a separate,
+clearly attributed assessment (FR-3.3): view, risks, recommendation. FR-3.3a
+is a deliberate exception to AP-3 (one trigger, one batched run): members
+are polled in isolation, one model call per member, so a call never
+contains another member's answer. Batching all six into one call is
+cheaper and would satisfy AP-3, but a model writing the sixth assessment
+can see the five it has already written and converges towards them - the
+disagreement FR-3.6 exists to surface would be smoothed away before anyone
+could read it. One board run is therefore seven calls: six members plus
+one synthesis call over the collected assessments (FR-3.4).
+
+Nothing here degrades to a partial answer without a provider - six
+perspectives minus a model is not a board, so ``run_board`` raises rather
+than reporting "not configured" and carrying on.
+
+The module renders nothing but the tables and prose FR-3.5 asks Python,
+not the model, to produce - ``render`` turns a ``BoardResult`` into text;
+the CLI (``cli.py``) is the only place that prints it.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any
+
+from .agent.prompts import load_prompt
+from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
+from .audit import log_run
+
+BOARD_MEMBERS = ("Finance", "HW Engineering", "Mechanical Engineering",
+                 "Manufacturing", "SW Engineering", "KPI Check")
+
+
+def _get(config: dict, dotted: str, default: Any = None) -> Any:
+    node: Any = config
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node if node not in ("", None) else default
+
+
+@dataclass(frozen=True)
+class MemberAssessment:
+    member: str
+    view: str
+    risks: str
+    recommendation: str
+
+
+@dataclass
+class BoardResult:
+    topic: str
+    assessments: list[MemberAssessment]
+    synthesis: str
+    failed_members: list[str]     # member plus why, short strings
+    ai_result: AiResult | None    # the synthesis call's AiResult, for AI-2
+    llm_calls: int = 0
+
+
+@dataclass
+class BoardConversation:
+    """A follow-up conversation attached to one completed ``BoardResult``
+    (the owner's decision: "die Nachfrage reicht in der Synthese"). Lives for
+    the duration of one ``board`` CLI invocation only - nothing here is
+    written to disk or resumed across invocations."""
+    result: BoardResult
+    turns: list[tuple[str, str]]   # (question, answer), in order
+    llm_calls: int = 0             # follow-up calls only; run_board counts its own
+
+
+def _member_prompt(
+    topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str
+) -> str:
+    """The prompt for one member's call.
+
+    ``load_prompt("board_members")`` already describes the single-member
+    contract (isolation, response shape) FR-3.3a requires; this appends only
+    what that file cannot know in advance - which member this call is for,
+    and the FR-3.1 input."""
+    lines = [
+        load_prompt("board_members"),
+        "",
+        "## Member (FR-3.3a)",
+        "",
+        f"Member: {member}",
+        "",
+        "## Input (FR-3.1)",
+        "",
+        f"Topic: {topic}",
+    ]
+    if context:
+        lines.append(f"Context: {context}")
+    if options:
+        lines.append("Options under consideration:")
+        lines.extend(f"- {option}" for option in options)
+    if constraints:
+        lines.append("Hard constraints:")
+        lines.extend(f"- {constraint}" for constraint in constraints)
+    return "\n".join(lines)
+
+
+def _parse_member_response(text: str) -> dict[str, str] | None:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not all(key in data for key in ("view", "risks", "recommendation")):
+        return None
+    risks = data["risks"]
+    if isinstance(risks, list):
+        risks = "; ".join(str(item) for item in risks)
+    return {
+        "view": str(data["view"]),
+        "risks": str(risks),
+        "recommendation": str(data["recommendation"]),
+    }
+
+
+def _synthesis_prompt(assessments: list[MemberAssessment]) -> str:
+    payload = [
+        {
+            "member": assessment.member,
+            "view": assessment.view,
+            "risks": assessment.risks,
+            "recommendation": assessment.recommendation,
+        }
+        for assessment in assessments
+    ]
+    return load_prompt("board_synthesis") + "\n\n## Assessments\n\n" + json.dumps(payload, indent=2)
+
+
+def _synthesis_text(data: dict[str, Any]) -> str:
+    lines = [
+        f"Overall recommendation: {data.get('overall_recommendation', '')}",
+        f"Decisive criterion: {data.get('decisive_criterion', '')}",
+    ]
+    counter_arguments = data.get("counter_arguments") or []
+    if counter_arguments:
+        lines.append("Counter-arguments:")
+        lines.extend(f"  - {item}" for item in counter_arguments)
+    lines.append(f"What would change it: {data.get('what_would_change_it', '')}")
+    disagreements = data.get("disagreements") or []
+    if disagreements:
+        lines.append("Disagreements (FR-3.6):")
+        lines.extend(f"  - {item}" for item in disagreements)
+    else:
+        lines.append("Disagreements (FR-3.6): none stated.")
+    return "\n".join(lines)
+
+
+def run_board(
+    config: dict,
+    provider: AiProvider | None,
+    *,
+    topic: str,
+    context: str = "",
+    options: tuple[str, ...] = (),
+    constraints: tuple[str, ...] = (),
+) -> BoardResult:
+    """One AI Board run (FR-3.1..FR-3.6): six isolated member calls, then one
+    synthesis call over what they produced.
+
+    Raises ``AiNotConfiguredError`` when no provider is given or
+    ``provider.models.board`` has no model configured - unlike the other
+    three triggers, the board does not degrade to a partial answer without a
+    model (six perspectives minus a model is not a board).
+
+    A member whose response does not parse as JSON, or is missing one of
+    ``view``/``risks``/``recommendation``, is recorded in ``failed_members``
+    and left out of ``assessments`` - the other members still run. With
+    fewer than two assessments a synthesis is skipped rather than produced
+    over too little to synthesise, and that is stated plainly in
+    ``synthesis`` rather than attempted anyway."""
+    start = time.monotonic()
+    if provider is None or not is_configured(config, TASK_BOARD):
+        raise AiNotConfiguredError(
+            "AI Board has no model configured - set provider.models.board"
+        )
+
+    audit_folder = _get(config, "runtime.audit_folder")
+    pc_name = _get(config, "storage.pc_name", "")
+
+    def _log(result: BoardResult) -> BoardResult:
+        # There is no data store in this repository (decision 0005) - the
+        # board is the only run there is, so it logs unconditionally rather
+        # than skipping when a store is absent.
+        ai_result = result.ai_result
+        log_run(
+            "board",
+            audit_folder=audit_folder, pc_name=pc_name,
+            duration_seconds=time.monotonic() - start,
+            counts={
+                "assessments": len(result.assessments),
+                "failed_members": len(result.failed_members),
+                "llm_calls": result.llm_calls,
+                "over_token_limit": 1 if ai_result is not None and ai_result.over_token_limit else 0,
+            },
+            provider=ai_result.provider if ai_result is not None else None,
+            model=ai_result.model if ai_result is not None else None,
+            tokens=ai_result.total_tokens if ai_result is not None else None,
+        )
+        return result
+
+    assessments: list[MemberAssessment] = []
+    failed_members: list[str] = []
+
+    # FR-3.3a: one call per member, in isolation - every prompt is built
+    # here, before any call is dispatched, so it is structurally
+    # impossible, not merely conventional, for one member's prompt to
+    # contain another member's answer. Polling the six calls concurrently
+    # below does not weaken that isolation, it strengthens it: none of the
+    # six calls can see another's response, because none of them has
+    # produced one yet when the six are submitted.
+    prompts = [
+        _member_prompt(topic, context, options, constraints, member) for member in BOARD_MEMBERS
+    ]
+
+    results: list[AiResult | None] = [None] * len(BOARD_MEMBERS)
+    errors: list[BaseException | None] = [None] * len(BOARD_MEMBERS)
+    with ThreadPoolExecutor(max_workers=len(BOARD_MEMBERS)) as executor:
+        futures = [executor.submit(provider.complete, TASK_BOARD, prompt) for prompt in prompts]
+        for index, future in enumerate(futures):
+            try:
+                results[index] = future.result()
+            except Exception as exc:
+                errors[index] = exc
+
+    llm_calls = len(BOARD_MEMBERS)
+
+    for member, result, error in zip(BOARD_MEMBERS, results, errors):
+        if error is not None:
+            failed_members.append(f"{member}: {error}")
+            continue
+        parsed = _parse_member_response(result.text)
+        if parsed is None:
+            failed_members.append(
+                f"{member}: response did not parse as JSON with view/risks/recommendation"
+            )
+            continue
+        assessments.append(MemberAssessment(member=member, **parsed))
+
+    if len(assessments) < 2:
+        return _log(BoardResult(
+            topic=topic,
+            assessments=assessments,
+            synthesis=(
+                "Synthesis skipped - fewer than two members produced an assessment "
+                "(a synthesis of one view is not a synthesis)."
+            ),
+            failed_members=failed_members,
+            ai_result=None,
+            llm_calls=llm_calls,
+        ))
+
+    ai_result = provider.complete(TASK_BOARD, _synthesis_prompt(assessments))
+    llm_calls += 1
+
+    try:
+        synthesis_data = json.loads(ai_result.text)
+    except json.JSONDecodeError:
+        synthesis_data = None
+
+    if isinstance(synthesis_data, dict):
+        synthesis = _synthesis_text(synthesis_data)
+    else:
+        synthesis = f"Synthesis response did not parse as JSON: {ai_result.text}"
+
+    return _log(BoardResult(
+        topic=topic,
+        assessments=assessments,
+        synthesis=synthesis,
+        failed_members=failed_members,
+        ai_result=ai_result,
+        llm_calls=llm_calls,
+    ))
+
+
+def _follow_up_prompt(
+    assessments: list[MemberAssessment], turns: list[tuple[str, str]], question: str
+) -> str:
+    lines = [_synthesis_prompt(assessments), "", "## Conversation so far"]
+    if turns:
+        for turn_question, turn_answer in turns:
+            lines.append(f"Q: {turn_question}")
+            lines.append(f"A: {turn_answer}")
+    else:
+        lines.append("(none yet)")
+    lines.append("")
+    lines.append("## New question")
+    lines.append(question)
+    return "\n".join(lines)
+
+
+def ask_follow_up(
+    config: dict, provider: AiProvider | None, conversation: BoardConversation, question: str
+) -> str:
+    """One follow-up turn on an already-completed board run.
+
+    The owner decided a follow-up costs one call, not seven: only the
+    synthesis prompt is re-run, over the original assessments plus the
+    conversation so far - the six members are never polled again for this
+    topic. That is exactly why ``board_members.md`` requires each member's
+    first answer to be self-contained and substantive: it is the only
+    material any follow-up will ever have to work with.
+
+    Raises ``AiNotConfiguredError`` under the same conditions ``run_board``
+    does, and ``ValueError`` for a blank question."""
+    if not question.strip():
+        raise ValueError("a follow-up question must not be blank")
+    if provider is None or not is_configured(config, TASK_BOARD):
+        raise AiNotConfiguredError(
+            "AI Board has no model configured - set provider.models.board"
+        )
+
+    prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question)
+    ai_result = provider.complete(TASK_BOARD, prompt)
+    answer = ai_result.text
+
+    conversation.turns.append((question, answer))
+    conversation.llm_calls += 1
+    return answer
+
+
+def render_follow_up(question: str, answer: str) -> str:
+    """FR-3.5-style plain text for one follow-up turn - no markdown, matching
+    ``render``'s style."""
+    return f"Q: {question}\nA: {answer}"
+
+
+def render(result: BoardResult) -> str:
+    """FR-3.5: one plain-text table per member, columns View / Risks /
+    Recommendation, then the synthesis as prose below - produced here in
+    Python from structured output, never asked of the model. Fixed-width
+    label column, no markdown."""
+    lines: list[str] = []
+    for assessment in result.assessments:
+        lines.append(assessment.member)
+        lines.append("-" * len(assessment.member))
+        lines.append(f"{'View':<16}{assessment.view}")
+        lines.append(f"{'Risks':<16}{assessment.risks}")
+        lines.append(f"{'Recommendation':<16}{assessment.recommendation}")
+        lines.append("")
+
+    if result.failed_members:
+        lines.append("Failed member(s) - the rest still ran:")
+        for entry in result.failed_members:
+            lines.append(f"  {entry}")
+        lines.append("")
+
+    lines.append("Synthesis")
+    lines.append("-" * len("Synthesis"))
+    lines.append(result.synthesis)
+    return "\n".join(lines)
