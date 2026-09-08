@@ -310,7 +310,7 @@
     grid.innerHTML = Object.entries(session.members).map(([name, state]) => `
       <div class="member-tile ${state}" style="color:${esc(meta(name).color)}">
         ${avatar(name)}
-        <div><div style="color:var(--text);font-weight:600">${esc(meta(name).short)}</div><div class="muted small">${esc(meta(name).title)}</div></div>
+        <div><div style="color:var(--text);font-weight:600">${esc(name)}</div></div>
         <span class="state">${state === "pending" ? "waiting" : state === "running" ? "thinking…" : state === "done" ? "answered" : "failed"}</span>
       </div>`).join("");
     const synthesising = session.phase === "synthesising";
@@ -349,7 +349,7 @@
       $("synthesis-card").querySelector(".muted.small").textContent = `Synthesis of ${names.length} independent assessments`;
       $("member-chips").innerHTML = names.map((name) => `
         <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${failed.has(name) ? "disabled" : ""}>
-          ${avatar(name)}<span style="color:var(--text)">${esc(meta(name).short)}</span></button>`).join("");
+          ${avatar(name)}<span style="color:var(--text)">${esc(name)}</span></button>`).join("");
       $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.addEventListener("click", () => {
         const name = chip.dataset.member;
         if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
@@ -375,7 +375,7 @@
     $("member-cards").innerHTML = Object.keys(session.members).filter((n) => openMembers.has(n) && answered.has(n)).map((name) => {
       const a = answered.get(name);
       return `<div class="card member-card" style="border-left-color:${esc(meta(name).color)}">
-        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(meta(name).title)}</div><div class="muted small">${esc(meta(name).perspective)}</div></div></div>
+        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${meta(name).level}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${meta(name).roles.length} roles` : ""}</div></div></div>
         <dl><dt>View</dt><dd>${esc(a.view)}</dd><dt>Risks</dt><dd>${esc(a.risks)}</dd><dt>Recommendation</dt><dd>${esc(a.recommendation)}</dd></dl>
       </div>`;
     }).join("");

@@ -97,16 +97,21 @@ def _member_prompt(
     if conduct:
         lines += ["", "## Board member conduct (section 3.4, the same for every member)", "", conduct]
     if role is not None and role.body:
-        lines += [
-            "",
-            "## Role profile (section 3.4)",
-            "",
-            "This is who this member is: the roles and responsibilities it leads and speaks for. "
-            "It is authoritative for this call: assess from these responsibilities, against these "
-            "KPIs, in this vocabulary.",
-            "",
-            role.body,
-        ]
+        lines += ["", "## Role profile (section 3.4)", ""]
+        if role.roles:
+            lines.append(
+                f"This member is the {role.member} swim lane. It speaks as its highest-ranked role, "
+                f"{role.title} (level {role.level}), and answers for every role in the swim lane. "
+                "Roles by rank - a lower level number is a higher rank and carries more weight where "
+                "roles would disagree:"
+            )
+            lines.extend(f"- level {r.level}: {r.name}" for r in role.roles)
+            lines.append("")
+        lines.append(
+            "This profile is authoritative for this call: assess from these responsibilities, "
+            "against these KPIs, in this vocabulary."
+        )
+        lines += ["", role.body]
     lines += [
         "",
         "## Input (FR-3.1)",

@@ -1,4 +1,5 @@
 # KPI Check
+level: 2
 
 ## Character
 Neutral referee. Holds every option against the four responsibilities the programme lead is measured on and says plainly which one each option helps or hurts.

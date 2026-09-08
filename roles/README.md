@@ -22,11 +22,15 @@ heading and nothing under it is "not filled yet": it is left off the board
 and named on the confirm screen, so an empty note never produces an empty
 opinion.
 
-**One file per member.** The file name is the member: `R&R Hardware.md`
-and `Hardware.md` both give the member "Hardware" (a leading "R&R", "Role"
-or "Roles" is dropped). The first heading is the member's title, the first
-sentence under it is the line the synthesis sees, and everything below is
-what the member speaks for. Front matter is optional:
+**One file is one member: a swim lane.** The file name is the member:
+`R&R Hardware.md` and `Hardware.md` both give "Hardware" (a leading "R&R",
+"Role" or "Roles" is dropped), and that name is what the interface shows
+under the avatar. Inside the file, every level-one heading is one **role**
+of that swim lane, and `level: N` directly under the heading is its rank:
+1 the programme lead, 2 a project manager, 3 and up the roles below. The
+member speaks as its highest-ranked role and weighs the others by rank when
+they would disagree. The first sentence under the top role is the line the
+synthesis sees. Front matter is optional:
 
 ```
 ---
@@ -42,9 +46,22 @@ short: Finance                      # label under the avatar
 ...
 ```
 
-**Or one file with several members** — one level-one heading per member,
-with the same keys as plain `key: value` lines directly under the heading.
+```
+# Project Manager HW
+level: 2
 
-The body under a member is given to that member, and only to that member,
-on every call, behind the conduct note. At least two filled members are
-needed for a board.
+Develop and maintain control over all the Program Management elements of
+the HW swim lane ...
+
+## Responsibilities
+...
+
+# HW Swim Lane Leader
+level: 3
+
+...
+```
+
+The whole file is given to that member, and only to that member, on every
+call, behind the conduct note, roles in rank order. At least two filled
+members are needed for a board.

@@ -22,12 +22,14 @@ Notes whose name starts with ``_`` or whose front matter says
 and nothing else is *not filled yet*: it is left off the board and reported,
 so an empty note never produces an empty opinion.
 
-**One file per role, or one file with several roles.** A file whose front
-matter names a ``member:`` is one role; so is a file with at most one
-level-one heading, named after the file. A file with two or more
-level-one headings is several roles, one per heading, and ``key: value``
-lines directly under a heading (``perspective``, ``icon``, ``color``,
-``short``, ``order``, ``title``) are that role's metadata.
+**One file is one member** - a swim lane - named by the file (a leading
+"R&R", "Role" or "Roles" dropped) or by ``member:`` in its front matter.
+Inside, every level-one heading is one **role** within that swim lane, and
+``level: N`` directly under the heading is its rank: 1 the programme
+lead, 2 a project manager, 3 and up the roles below. The member speaks as
+its highest-ranked role (the lowest level number) and weighs the others by
+rank. ``key: value`` lines under a heading (``level``, ``perspective``,
+``icon``, ``color``, ``short``, ``order``, ``title``) are metadata.
 
 Each member receives only its own profile (FR-3.3a); the synthesis
 receives one line per member.
@@ -71,7 +73,8 @@ _ICON_KEYWORDS = (
 _NAME_PREFIXES = ("r&r", "r & r", "r_r", "rr", "roles and responsibilities", "roles & responsibilities", "role", "roles")
 PALETTE = ("#15803d", "#2563eb", "#d97706", "#7c3aed", "#0f766e", "#db2777",
            "#b91c1c", "#4f46e5", "#0891b2", "#65a30d", "#9333ea", "#ea580c")
-_META_KEYS = ("member", "title", "perspective", "icon", "color", "short", "order", "kind")
+_META_KEYS = ("member", "title", "perspective", "icon", "color", "short", "order", "kind", "level")
+DEFAULT_LEVEL = 2
 
 
 class RolesUnavailable(RuntimeError):
@@ -89,17 +92,26 @@ class Board:
 
 
 @dataclass(frozen=True)
+class Role:
+    name: str
+    level: int
+    body: str
+
+
+@dataclass(frozen=True)
 class RoleProfile:
     member: str
-    title: str
+    title: str            # the highest-ranked role's name
     perspective: str      # one line, goes to the synthesis
     body: str             # Markdown without front matter, goes to the member
-    source: str           # "configured", "vault" or "built-in"
+    source: str           # "configured" or "vault"
     path: Path | None
     icon: str = "person"
     color: str = PALETTE[0]
     short: str = ""
     order: int = 999
+    level: int = DEFAULT_LEVEL           # of the highest-ranked role
+    roles: tuple[Role, ...] = ()         # every role in the swim lane, by rank
 
 
 def _strip_front_matter(text: str) -> str:
@@ -154,13 +166,19 @@ def _guess_icon(name: str) -> str:
     return "person"
 
 
-def _make_profile(member: str, meta: dict, body: str, source: str, path: Path | None) -> RoleProfile:
-    icon = _meta_str(meta, "icon").lower()
-    order_text = _meta_str(meta, "order")
+def _int(meta: dict, key: str, default: int) -> int:
+    text = _meta_str(meta, key)
     try:
-        order = int(order_text) if order_text else 999
+        return int(text) if text else default
     except ValueError:
-        order = 999
+        return default
+
+
+def _make_profile(member: str, meta: dict, body: str, source: str, path: Path | None,
+                  roles: tuple[Role, ...] = ()) -> RoleProfile:
+    icon = _meta_str(meta, "icon").lower()
+    order = _int(meta, "order", 999)
+    level = roles[0].level if roles else _int(meta, "level", DEFAULT_LEVEL)
     return RoleProfile(
         member=member,
         title=_meta_str(meta, "title") or member,
@@ -172,49 +190,66 @@ def _make_profile(member: str, meta: dict, body: str, source: str, path: Path | 
         color=_meta_str(meta, "color") or "",
         short=_meta_str(meta, "short") or "",
         order=order,
+        level=level,
+        roles=roles,
     )
 
 
-_KEY_LINE = re.compile(r"^(member|title|perspective|icon|color|short|order|kind):\s*(.*)$", re.IGNORECASE)
+_KEY_LINE = re.compile(r"^(member|title|perspective|icon|color|short|order|kind|level):\s*(.*)$", re.IGNORECASE)
 
 
-def parse_file(path: Path, source: str) -> list[RoleProfile]:
-    """Every role a file defines: one, or several (see module docstring)."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    meta = _front_matter(text)
-    body = _strip_front_matter(text)
+def _sections(body: str) -> list[tuple[str, dict, str]]:
+    """(heading, metadata, text) per level-one heading; metadata is the
+    ``key: value`` lines directly under the heading."""
     headings = list(_H1.finditer(body))
-    claimed = _meta_str(meta, "member")
-    if claimed or len(headings) <= 1:
-        # One member per file: the file name names the member (a heading is
-        # a title, and a copied heading must not merge two files into one
-        # member); "R&R Hardware.md" is "Hardware".
-        member = claimed or _member_from_stem(path.stem)
-        if not _meta_str(meta, "title"):
-            meta = {**meta, "title": _first_heading(body) or member}
-        return [_make_profile(member, meta, body, source, path)]
-
-    profiles: list[RoleProfile] = []
+    result: list[tuple[str, dict, str]] = []
     for index, match in enumerate(headings):
         start = match.end()
         end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        section = body[start:end]
-        section_meta: dict = {}
+        meta: dict = {}
         remaining: list[str] = []
-        lines = section.splitlines()
         seen_content = False
-        for line in lines:
+        for line in body[start:end].splitlines():
             key_match = _KEY_LINE.match(line.strip()) if not seen_content else None
             if key_match:
-                section_meta[key_match.group(1).lower()] = key_match.group(2).strip()
+                meta[key_match.group(1).lower()] = key_match.group(2).strip()
                 continue
             if line.strip():
                 seen_content = True
             remaining.append(line)
-        member = _meta_str(section_meta, "member") or match.group(1).strip()
-        section_meta.setdefault("order", str(index))
-        profiles.append(_make_profile(member, section_meta, "\n".join(remaining), source, path))
-    return profiles
+        result.append((match.group(1).strip(), meta, "\n".join(remaining).strip()))
+    return result
+
+
+def parse_file(path: Path, source: str) -> list[RoleProfile]:
+    """The one member a file defines - a swim lane - with every role inside
+    it ranked by ``level``. Returned as a one-element list."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    meta = _front_matter(text)
+    body = _strip_front_matter(text)
+    member = _meta_str(meta, "member") or _member_from_stem(path.stem)
+    sections = _sections(body)
+    roles: list[Role] = []
+    for index, (heading, section_meta, section_text) in enumerate(sections):
+        roles.append(Role(name=heading, level=_int(section_meta, "level", DEFAULT_LEVEL + index), body=section_text))
+    roles.sort(key=lambda role: role.level)
+    merged = dict(meta)
+    if sections:
+        # the top role's own metadata (perspective, icon, ...) counts for the member
+        top_meta = sections[[r.name for r in roles].index(roles[0].name) if roles else 0][1]
+        for key in _META_KEYS:
+            if key in top_meta and key not in merged:
+                merged[key] = top_meta[key]
+    if not _meta_str(merged, "title"):
+        merged["title"] = roles[0].name if roles else member
+    if not _meta_str(merged, "perspective") and roles:
+        merged["perspective"] = _first_paragraph_line(roles[0].body)
+    # what the member reads: metadata lines stripped, roles in rank order
+    if roles:
+        clean_body = "\n\n".join(f"# {role.name}\n\n{role.body}".strip() for role in roles)
+    else:
+        clean_body = body.strip()
+    return [_make_profile(member, merged, clean_body, source, path, tuple(roles))]
 
 
 def detect_folder(vault: Path) -> Path | None:
@@ -358,11 +393,12 @@ def summary(board: Board) -> dict[str, object]:
     }
 
 
-def member_meta(profiles: dict[str, RoleProfile]) -> list[dict[str, str]]:
+def member_meta(profiles: dict[str, RoleProfile]) -> list[dict[str, object]]:
     """What the interface needs to draw a member."""
     return [
         {"name": p.member, "title": p.title, "short": p.short, "icon": p.icon,
-         "color": p.color, "perspective": p.perspective}
+         "color": p.color, "perspective": p.perspective, "level": p.level,
+         "roles": [{"name": r.name, "level": r.level} for r in p.roles]}
         for p in profiles.values()
     ]
 
@@ -374,15 +410,20 @@ def members_in(folder: Path) -> list[str]:
     return [profile.member for profile in load_folder(folder, "configured")[0]]
 
 
-def install_support_files(folder: Path) -> list[Path]:
+EXAMPLES_DIR = SUPPORT_DIR / "examples"
+
+
+def install_support_files(folder: Path, *, examples: bool = False) -> list[Path]:
     """Copies the generic conduct note and the profile template into
-    ``folder`` (created if needed). Nothing is ever overwritten, and no
-    member is created: members are the user's to write."""
+    ``folder`` (created if needed), and with ``examples`` the example board
+    (one programme's swim lanes) as well. Nothing is ever overwritten."""
     folder.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for name in (CONDUCT_NAME, TEMPLATE_NAME):
-        source = SUPPORT_DIR / name
-        target = folder / name
+    sources = [SUPPORT_DIR / CONDUCT_NAME, SUPPORT_DIR / TEMPLATE_NAME]
+    if examples and EXAMPLES_DIR.is_dir():
+        sources += sorted(EXAMPLES_DIR.glob("*.md"))
+    for source in sources:
+        target = folder / source.name
         if source.is_file() and not target.exists():
             shutil.copyfile(source, target)
             written.append(target)

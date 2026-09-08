@@ -1,4 +1,5 @@
 # Project Manager HW
+level: 2
 
 Develop and maintain control over all the Program Management elements of HW Swim Lane, e.g.: 
 - Project level Timing plan & Strategy to meet the defined Visteon and Customer milestones. 

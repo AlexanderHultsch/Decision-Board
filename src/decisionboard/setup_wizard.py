@@ -547,12 +547,18 @@ class Wizard:
         self.say("        note with several members - edited in Obsidian, read on every run. The conduct note")
         self.say("        holds what is the same for every member: character, how to answer.")
         if self.confirm(question, True):
+            with_examples = self.confirm(
+                "Also copy the example board in (nine swim-lane profiles of a programme, to edit or delete)?", True)
             try:
-                written = roles_mod.install_support_files(folder)
+                written = roles_mod.install_support_files(folder, examples=with_examples)
             except OSError as exc:
                 self.fail(f"could not write to the roles folder: {exc}")
                 return
             self.say(f"        written: {', '.join(p.name for p in written) or 'nothing new'}")
+            members = roles_mod.members_in(folder)
+            if len(members) >= roles_mod.MIN_MEMBERS:
+                self.ok(f"role profiles: board of {len(members)} in {folder}: {', '.join(members)}")
+                return
         self.fail(f"roles folder {folder} has no board yet: write at least {roles_mod.MIN_MEMBERS} member profiles "
                   f"(see {roles_mod.TEMPLATE_NAME}), then run the board.")
 

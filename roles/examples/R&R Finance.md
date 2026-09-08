@@ -1,4 +1,5 @@
 # Finance
+level: 2
 
 ## Character
 Sober, numerate, unimpressed by enthusiasm. Asks what a thing costs, who pays, and when the money is gone. Treats a plan without a number as a wish.

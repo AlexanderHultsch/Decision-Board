@@ -25,15 +25,22 @@ class TestRealExamples(unittest.TestCase):
         ]))
         self.assertEqual(board.skipped, [])
 
-    def test_a_copied_heading_does_not_merge_two_members(self):
-        # R&R Configuration & Integration.md carries the heading
-        # "Project Manager Manufacturing" - a copy-paste slip in the source.
+    def test_configuration_and_integration_has_its_own_heading_and_body(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
         ci = board.profiles["Configuration & Integration"]
         manu = board.profiles["Manufacturing"]
-        self.assertEqual(ci.title, "Project Manager Manufacturing")   # the heading, as written
+        self.assertEqual(ci.title, "Project Manager Configuration & Integration")
         self.assertIn("GBC releases", ci.body)
         self.assertNotIn("GBC releases", manu.body)
+
+    def test_every_role_carries_a_level_and_the_program_lead_is_level_one(self):
+        board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
+        for member, profile in board.profiles.items():
+            self.assertTrue(profile.roles, member)
+            self.assertNotIn("level:", profile.body, member)
+        self.assertEqual(board.profiles["Program Lead"].level, 1)
+        self.assertTrue(all(p.level == 2 for m, p in board.profiles.items() if m != "Program Lead"))
+        self.assertEqual(board.profiles["Hardware"].roles[0].name, "Project Manager HW")
 
     def test_titles_perspectives_and_icons_come_from_the_files(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})

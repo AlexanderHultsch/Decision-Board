@@ -78,21 +78,34 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(profile.perspective, "Buys things.")
         self.assertEqual(profile.icon, "truck")
 
-    def test_one_file_with_several_roles_split_on_level_one_headings(self):
+    def test_one_file_is_one_swim_lane_with_ranked_roles_inside(self):
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "Board.md"
+            path = Path(tmp) / "R&R Hardware.md"
             path.write_text(
-                "# Finance\nperspective: Money\nicon: dollar\n\n## Character\nSober.\n\n"
-                "# Legal\nperspective: Liability\n\n## Character\nCareful.\n\n"
-                "# Customer\n\nSpeaks for the customer.\n", encoding="utf-8")
+                "# HW Swim Lane Leader\nlevel: 3\n\nLeads the hardware engineers day to day.\n\n"
+                "# Project Manager HW\nlevel: 2\nicon: chip\n\nDevelop and maintain control over the HW swim lane.\n\n"
+                "## Responsibilities\nOwns the HW budget.\n\n"
+                "# HW Engineer\nlevel: 4\n\nDesigns the boards.\n", encoding="utf-8")
             profiles = roles.parse_file(path, "configured")
-        self.assertEqual([p.member for p in profiles], ["Finance", "Legal", "Customer"])
-        self.assertEqual(profiles[0].perspective, "Money")
-        self.assertNotIn("perspective:", profiles[0].body)
-        self.assertIn("Sober.", profiles[0].body)
-        self.assertNotIn("Careful.", profiles[0].body)
-        self.assertEqual(profiles[2].perspective, "Speaks for the customer.")
-        self.assertEqual([p.order for p in profiles], [0, 1, 2])
+        self.assertEqual(len(profiles), 1)
+        hw = profiles[0]
+        self.assertEqual(hw.member, "Hardware")
+        self.assertEqual(hw.title, "Project Manager HW")           # the highest-ranked role
+        self.assertEqual(hw.level, 2)
+        self.assertEqual([(r.name, r.level) for r in hw.roles],
+                         [("Project Manager HW", 2), ("HW Swim Lane Leader", 3), ("HW Engineer", 4)])
+        self.assertEqual(hw.perspective, "Develop and maintain control over the HW swim lane.")
+        self.assertEqual(hw.icon, "chip")
+        self.assertNotIn("level:", hw.body)
+        self.assertTrue(hw.body.startswith("# Project Manager HW"))   # rank order in what the member reads
+        self.assertIn("# HW Engineer", hw.body)
+
+    def test_roles_without_levels_rank_in_file_order_from_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Software.md"
+            path.write_text("# PM\n\nRuns the software swim lane end to end.\n\n# Lead\n\nLeads the developers day to day.\n", encoding="utf-8")
+            sw = roles.parse_file(path, "configured")[0]
+        self.assertEqual([(r.name, r.level) for r in sw.roles], [("PM", 2), ("Lead", 3)])
 
     def test_front_matter_member_wins_over_headings_and_file_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +113,7 @@ class TestParsing(unittest.TestCase):
             path.write_text("---\nmember: Finance\n---\n# One\n\n# Two\n", encoding="utf-8")
             profiles = roles.parse_file(path, "configured")
         self.assertEqual([p.member for p in profiles], ["Finance"])
+        self.assertEqual([r.name for r in profiles[0].roles], ["One", "Two"])
 
 
 class TestLoadRoles(unittest.TestCase):
@@ -208,6 +222,8 @@ class TestRolesInPrompts(unittest.TestCase):
         self.assertIn("## Board member conduct", finance)
         self.assertIn("Speak for every role", finance)
         self.assertIn("## Role profile", finance)
+        self.assertIn("speaks as its highest-ranked role, Finance (level 2)", finance)
+        self.assertIn("- level 2: Finance", finance)
         self.assertIn("finance view of every decision", finance)
         self.assertNotIn("manufacturing view", finance)
         self.assertIn("manufacturing view of every decision", manu)
@@ -273,9 +289,15 @@ class TestWizardRoles(unittest.TestCase):
             wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="x/y", run_test=False, out=out)
             wizard.check_vault(str(vault))
             names = sorted(p.name for p in (vault / "Roles").glob("*.md"))
-        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
+            members = roles.members_in(vault / "Roles")
+        # non-interactive: support files plus the example board, so the board can run
+        self.assertIn(roles.CONDUCT_NAME, names)
+        self.assertIn(roles.TEMPLATE_NAME, names)
+        self.assertIn("R&R Hardware.md", names)
+        self.assertEqual(len(members), 9)
         self.assertEqual(wizard.roles_folder, str(vault / "Roles"))
-        self.assertTrue(any("no board yet" in f for f in wizard.failures))
+        self.assertEqual(wizard.failures, [])
+        self.assertIn("board of 9", out.getvalue())
 
     def test_wizard_finds_a_renamed_roles_folder_in_the_vault(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,16 +315,16 @@ class TestWizardRoles(unittest.TestCase):
             vault = Path(tmp) / "vault"; vault.mkdir()
             own = Path(tmp) / "MyBoard"
             (own).mkdir()
-            (own / "Board.md").write_text("# A\n\nAlpha is responsible for the first half of everything that matters.\n\n"
-                                          "# B\n\nBeta is responsible for the second half of everything that matters.\n", encoding="utf-8")
-            before = (own / "Board.md").read_text(encoding="utf-8")
+            (own / "A.md").write_text("# A\n\nAlpha is responsible for the first half of everything that matters.\n", encoding="utf-8")
+            (own / "B.md").write_text("# B\n\nBeta is responsible for the second half of everything that matters.\n", encoding="utf-8")
+            before = (own / "A.md").read_text(encoding="utf-8")
             out = io.StringIO()
             wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="x/y", run_test=False, out=out, roles=str(own))
             wizard.check_vault(str(vault))
-            after = (own / "Board.md").read_text(encoding="utf-8")
+            after = (own / "A.md").read_text(encoding="utf-8")
             files = sorted(p.name for p in own.glob("*.md"))
         self.assertEqual(before, after)
-        self.assertEqual(files, ["Board.md"])
+        self.assertEqual(files, ["A.md", "B.md"])
         self.assertEqual(wizard.roles_folder, str(own))
         self.assertIn("board of 2", out.getvalue())
 

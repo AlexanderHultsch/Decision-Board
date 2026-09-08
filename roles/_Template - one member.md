@@ -21,6 +21,7 @@ short: Hardware
 See roles/examples/ for real, complete files.
 -->
 # Project Manager <Swim Lane>
+level: 2
 
 Develop and maintain control over all the Program Management elements of
 the <Swim Lane>, e.g.: timing plan and strategy, process compliance, risks,
@@ -46,3 +47,10 @@ Risk Management:
 ## Vocabulary
 
 The words this member uses.
+
+# <Swim Lane> Leader
+level: 3
+
+A second role in the same swim lane, ranked below the project manager. The
+member speaks as the highest-ranked role and weighs the others by rank.
+Add as many roles as the swim lane has: level 4, 5, ...

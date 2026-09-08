@@ -1,4 +1,5 @@
-# Project Manager Manufacturing
+# Project Manager Configuration & Integration
+level: 2
 
 Develop and maintain control over all the Program Management elements of Suppliers and Sample Swim Lane, e.g.: 
 Timing plan & Strategy to meet the defined Visteon and Customer milestones 
