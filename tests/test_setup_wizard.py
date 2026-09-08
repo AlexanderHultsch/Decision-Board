@@ -37,6 +37,19 @@ class TestDescribeFailure(unittest.TestCase):
         self.assertIn("Model not found", describe_failure("Model not found: x/y", ""))
 
 
+class TestDiagnose(unittest.TestCase):
+    def test_sqlite_migration_error_names_opencode_upgrade(self):
+        lines = setup_wizard.diagnose("SQLiteError: no such column: replacement_seq", "")
+        self.assertTrue(any("opencode upgrade" in line for line in lines))
+
+    def test_auth_error_names_auth_login(self):
+        lines = setup_wizard.diagnose(json.dumps({"type": "error", "error": {"name": "ProviderAuthError"}}), "")
+        self.assertTrue(any("opencode auth login" in line for line in lines))
+
+    def test_unknown_error_gives_the_generic_list(self):
+        self.assertTrue(any("Likely causes" in line for line in setup_wizard.diagnose("", "")))
+
+
 class TestWizard(unittest.TestCase):
     def _completed(self, stdout="", returncode=0, stderr=""):
         return mock.Mock(stdout=stdout, stderr=stderr, returncode=returncode)

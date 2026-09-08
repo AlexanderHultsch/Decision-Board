@@ -182,7 +182,8 @@ class OpenCodeProvider(AiProvider):
         if self._supported is None:
             try:
                 probe = subprocess.run(
-                    [self._binary, "run", "--help"], capture_output=True, text=True, timeout=60,
+                    [self._binary, "run", "--help"], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=60,
                 )
                 help_text = (probe.stdout or "") + (probe.stderr or "")
             except (OSError, subprocess.TimeoutExpired):
@@ -220,8 +221,13 @@ class OpenCodeProvider(AiProvider):
     def _run(self, command: list[str]) -> tuple[str, float]:
         started = time.monotonic()
         try:
+            # OpenCode writes UTF-8; without saying so, Windows decodes it as
+            # cp1252 and a German umlaut in a member's answer becomes mojibake
+            # or, for some byte values, a UnicodeDecodeError that takes the
+            # run down.
             result = subprocess.run(
-                command, capture_output=True, text=True, timeout=self._timeout_seconds
+                command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=self._timeout_seconds,
             )
         except FileNotFoundError as exc:
             raise OpenCodeError(

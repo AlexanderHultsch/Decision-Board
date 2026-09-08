@@ -129,6 +129,8 @@ class Wizard:
             self.say("        logins (`opencode auth list`):")
             for line in auth_text.splitlines()[:10]:
                 self.say(f"          {line}")
+            if "0 credentials" in auth_text:
+                self.warn("OpenCode has no stored credentials. If the model needs a login, run `opencode auth login`.")
         else:
             self.warn("`opencode auth list` printed nothing - if the test call fails, run `opencode auth login`.")
         models = self._run([self.opencode, "models"], timeout=60)
@@ -238,8 +240,8 @@ class Wizard:
             self.fail(f"exited {result.returncode} after {duration:.1f}s: {describe_failure(result.stdout, result.stderr)}")
             self._dump("stdout", result.stdout)
             self._dump("stderr", result.stderr)
-            self.say("        Likely causes: not logged in (`opencode auth login`), a model string this account cannot use\n"
-                     "        (`opencode models`), or no network to the provider.")
+            for line in diagnose(result.stdout, result.stderr):
+                self.say(f"        {line}")
             return
         text_parts, tokens_in, tokens_out = [], 0, 0
         for line in (result.stdout or "").splitlines():
@@ -268,7 +270,8 @@ class Wizard:
 
     def _run(self, command: list[str], *, timeout: int) -> subprocess.CompletedProcess:
         try:
-            return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+            return subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=timeout)
         except FileNotFoundError:
             return subprocess.CompletedProcess(command, 127, "", f"{command[0]} not found")
         except subprocess.TimeoutExpired:
@@ -297,6 +300,28 @@ class Wizard:
         return 1 if self.failures else 0
 
 
+def diagnose(stdout: str | None, stderr: str | None) -> list[str]:
+    """What a failed test call most likely means, from signatures seen on
+    real machines. Falls back to the generic list."""
+    text = (stdout or "") + (stderr or "")
+    if "SQLiteError" in text or "migration" in text.lower():
+        return [
+            "This is OpenCode's own local database, not the board: its schema does not match the",
+            "installed OpenCode version (seen 8 September 2026 on 1.17.7 as 'no such column: replacement_seq').",
+            "Fix: run `opencode upgrade` to the current version and repeat this script. If it still fails,",
+            "close OpenCode, rename %USERPROFILE%\\.local\\share\\opencode\\opencode.db to opencode.db.bak",
+            "(sessions history only; auth.json keeps the logins) and repeat.",
+        ]
+    if "auth" in text.lower() or "api key" in text.lower() or "unauthorized" in text.lower() or "401" in text:
+        return ["Not logged in for this provider: run `opencode auth login`, pick the provider, then repeat."]
+    if "model" in text.lower() and ("not found" in text.lower() or "unknown" in text.lower()):
+        return ["The model string is not one this OpenCode can use: run `opencode models` and pick one of those."]
+    return [
+        "Likely causes: not logged in (`opencode auth login`), a model string this account cannot use",
+        "(`opencode models`), or no network to the provider.",
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Decision Board setup: check the machine, write the config, test the model.")
     parser.add_argument("--vault", help="knowledge source folder (skips the dialog)")
@@ -304,5 +329,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-test", action="store_true", help="do not make the test call")
     parser.add_argument("--yes", action="store_true", help="no questions: take defaults and arguments")
     args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):   # Windows consoles default to cp1252
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     wizard = Wizard(interactive=not args.yes, vault=args.vault, model=args.model, run_test=not args.no_test)
     return wizard.run()
