@@ -118,6 +118,9 @@ class Wizard:
             return info
         info["found"] = True
         self.ok(f"opencode found: {self.opencode}")
+        others = [p for p in _all_on_path("opencode") if p != self.opencode]
+        if others:
+            self.warn("more than one opencode on PATH; the first one wins: " + ", ".join(others))
         version = self._run([self.opencode, "--version"], timeout=30)
         info["version"] = (version.stdout or version.stderr or "").strip().splitlines()[0] if (version.stdout or version.stderr) else ""
         if version.returncode == 0:
@@ -135,7 +138,10 @@ class Wizard:
             for line in auth_text.splitlines()[:10]:
                 self.say(f"          {line}")
             if "0 credentials" in auth_text:
-                self.warn("OpenCode has no stored credentials. If the model needs a login, run `opencode auth login`.")
+                if self.opencode_config_arg or self.find_opencode_config():
+                    self.say("        no stored credentials - fine here: the company opencode.json carries the gateway key.")
+                else:
+                    self.warn("OpenCode has no stored credentials. If the model needs a login, run `opencode auth login`.")
         else:
             self.warn("`opencode auth list` printed nothing - if the test call fails, run `opencode auth login`.")
         models = self._run([self.opencode, "models"], timeout=60)
@@ -364,6 +370,11 @@ class Wizard:
         duration = time.monotonic() - started
         sys.path.insert(0, str(REPO_ROOT / "src"))
         from decisionboard.agent.opencode_client import describe_failure
+        if result.returncode != 0 and is_database_mismatch(result.stdout, result.stderr) and self.repair_database():
+            self.say("        retrying the test call...")
+            started = time.monotonic()
+            result = self._run(command, timeout=180)
+            duration = time.monotonic() - started
         if result.returncode != 0:
             self.fail(f"exited {result.returncode} after {duration:.1f}s: {describe_failure(result.stdout, result.stderr)}")
             self._dump("stdout", result.stdout)
@@ -389,6 +400,39 @@ class Wizard:
             self._dump("stdout", result.stdout)
             return
         self.ok(f"model answered in {duration:.1f}s: {answer[:80]!r}  ({tokens_in} in / {tokens_out} out tokens)")
+
+    def opencode_data_dir(self) -> Path:
+        """Where OpenCode keeps ``auth.json`` and its database: the XDG data
+        folder, which OpenCode uses on Windows too (``opencode auth list``
+        printed ``~\\.local\\share\\opencode\\auth.json`` on the target machine)."""
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+        return base / "opencode"
+
+    def repair_database(self) -> bool:
+        """Moves OpenCode's local database aside (``*.db`` plus ``-wal`` and
+        ``-shm`` sidecars) so the installed version recreates it. Only the
+        session history is in there; ``auth.json`` is untouched. Asks first
+        when interactive; returns whether anything was renamed."""
+        folder = self.opencode_data_dir()
+        candidates = sorted(p for p in folder.glob("*.db*") if p.is_file()) if folder.is_dir() else []
+        if not candidates:
+            self.warn(f"OpenCode's database was not found under {folder} - rename it by hand where OpenCode keeps it.")
+            return False
+        self.say("        OpenCode's local database does not match the installed version. Files:")
+        for path in candidates:
+            self.say(f"          {path}")
+        if not self.confirm("Rename these to *.bak so OpenCode recreates them (session history only)?", True):
+            return False
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for path in candidates:
+            try:
+                path.rename(path.with_name(f"{path.name}.{stamp}.bak"))
+            except OSError as exc:
+                self.fail(f"could not rename {path.name}: {exc} - close every OpenCode window and retry.")
+                return False
+        self.ok("renamed; OpenCode will create a fresh database on the next call.")
+        return True
 
     def _dump(self, name: str, text: str | None) -> None:
         text = (text or "").strip()
@@ -428,23 +472,39 @@ class Wizard:
         return 1 if self.failures else 0
 
 
+def _all_on_path(name: str) -> list[str]:
+    found: list[str] = []
+    exts = [""] + (os.environ.get("PATHEXT", "").lower().split(";") if sys.platform == "win32" else [])
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        for ext in exts:
+            candidate = Path(folder) / (name + ext)
+            if candidate.is_file() and str(candidate) not in found:
+                found.append(str(candidate))
+    return found
+
+
 def _resolve_env_placeholders(value: str) -> str:
     """OpenCode's ``{env:NAME}`` substitution, so the wizard can use the
     same key the file resolves at runtime."""
     return re.sub(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), value)
 
 
+def is_database_mismatch(stdout: str | None, stderr: str | None) -> bool:
+    text = (stdout or "") + (stderr or "")
+    return "SQLiteError" in text or "no such column" in text or "databaseMigrations" in text
+
+
 def diagnose(stdout: str | None, stderr: str | None) -> list[str]:
     """What a failed test call most likely means, from signatures seen on
     real machines. Falls back to the generic list."""
     text = (stdout or "") + (stderr or "")
-    if "SQLiteError" in text or "migration" in text.lower():
+    if is_database_mismatch(stdout, stderr):
         return [
             "This is OpenCode's own local database, not the board: its schema does not match the",
             "installed OpenCode version (seen 8 September 2026 on 1.17.7 as 'no such column: replacement_seq').",
-            "Fix: run `opencode upgrade` to the current version and repeat this script. If it still fails,",
-            "close OpenCode, rename %USERPROFILE%\\.local\\share\\opencode\\opencode.db to opencode.db.bak",
-            "(sessions history only; auth.json keeps the logins) and repeat.",
+            "Fix: close every OpenCode window, run this script again and answer yes when it offers to rename",
+            "the database (session history only; auth.json keeps the logins). Also check `where opencode` and",
+            "`opencode --version`: after `opencode upgrade`, PATH may still point at the old binary.",
         ]
     if "auth" in text.lower() or "api key" in text.lower() or "unauthorized" in text.lower() or "401" in text:
         return ["Not logged in for this provider: run `opencode auth login`, pick the provider, then repeat."]

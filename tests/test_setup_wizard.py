@@ -189,3 +189,38 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
                 defined = wizard.describe_opencode_config(str(company))
             self.assertEqual(defined, ["azure/m"])
             self.assertIn("placeholder", out.getvalue())
+
+
+class TestDatabaseRepair(unittest.TestCase):
+    def test_database_files_are_renamed_and_the_call_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "opencode"
+            data.mkdir()
+            (data / "opencode.db").write_bytes(b"x")
+            (data / "opencode.db-wal").write_bytes(b"x")
+            (data / "auth.json").write_text("{}", encoding="utf-8")
+            local = Path(tmp) / "config.local.json"
+            out = io.StringIO()
+            calls = {"run": 0}
+
+            def fake_run(command, **kwargs):
+                if command[1] == "run" and command[2] != "--help":
+                    calls["run"] += 1
+                    if calls["run"] == 1:
+                        return mock.Mock(stdout="SQLiteError: no such column: replacement_seq", stderr="", returncode=1)
+                    return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}', stderr="", returncode=0)
+                return mock.Mock(stdout="", stderr="", returncode=0)
+
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+                 mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
+                 mock.patch.object(setup_wizard.subprocess, "run", fake_run), \
+                 mock.patch.dict(setup_wizard.os.environ, {"XDG_DATA_HOME": tmp}):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=True, out=out)
+                code = wizard.run()
+            text = out.getvalue()
+            self.assertEqual(code, 0, text)
+            self.assertEqual(calls["run"], 2)
+            self.assertFalse((data / "opencode.db").exists())
+            self.assertTrue(any(p.name.startswith("opencode.db.") and p.name.endswith(".bak") for p in data.iterdir()))
+            self.assertTrue((data / "auth.json").exists())
+            self.assertIn("model answered", text)
