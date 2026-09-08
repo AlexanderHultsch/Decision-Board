@@ -224,6 +224,11 @@ class OpenCodeProvider(AiProvider):
         auto_approve = _config_key(self._config, "provider.opencode.auto_approve", True)
         if auto_approve and "--auto" in supported:
             command += ["--auto"]
+        # Anything else this OpenCode version needs, without a code change
+        # (OC-9): e.g. ["--agent", "plan"] to stop the run using tools.
+        extra = _config_key(self._config, "provider.opencode.extra_args", []) or []
+        if isinstance(extra, list):
+            command += [str(item) for item in extra]
         command.append(prompt)
         if sys.platform == "win32":
             length = sum(len(part) + 3 for part in command)
@@ -269,6 +274,9 @@ class OpenCodeProvider(AiProvider):
         input_tokens: int | None = None
         output_tokens: int | None = None
         saw_text = False
+        seen: dict[str, int] = {}
+        tool_names: list[str] = []
+        errors: list[str] = []
 
         for line_number, line in enumerate(stdout.splitlines(), start=1):
             if not line.strip():
@@ -281,21 +289,76 @@ class OpenCodeProvider(AiProvider):
                     f"opencode run produced invalid JSON on line {line_number}: {snippet}"
                 ) from exc
 
-            event_type = event.get("type")
-            if event_type == "text":
-                saw_text = True
-                text_parts.append(event.get("part", {}).get("text", ""))
+            event_type = str(event.get("type", "?"))
+            seen[event_type] = seen.get(event_type, 0) + 1
+            part = event.get("part") if isinstance(event.get("part"), dict) else {}
+
+            # OC-9: the answer is any text-carrying part, whatever the event
+            # is called. 'text' is the shape spec 3.8 verified; a version
+            # that wraps the same part in another event (part.type == "text")
+            # is read the same way rather than reported as "no answer".
+            if event_type == "text" or part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    saw_text = True
+                    text_parts.append(text)
             elif event_type == "step_finish":
-                tokens = event.get("part", {}).get("tokens", {})
+                tokens = part.get("tokens", {})
                 step_input = tokens.get("input")
                 step_output = tokens.get("output")
                 if step_input is not None:
                     input_tokens = (input_tokens or 0) + step_input
                 if step_output is not None:
                     output_tokens = (output_tokens or 0) + step_output
+            elif "error" in event_type.lower():
+                errors.append(_error_text(event))
+            elif event_type == "tool" or part.get("type") == "tool":
+                name = part.get("tool") or part.get("name") or (part.get("state") or {}).get("title")
+                if name:
+                    tool_names.append(str(name))
             # every other type is ignored entirely (OC-3)
 
         if not saw_text:
-            raise OpenCodeError("opencode run produced no text event - no answer to return")
+            raise OpenCodeError(self._no_text_message(stdout, seen, tool_names, errors))
 
         return "".join(text_parts), input_tokens, output_tokens
+
+    def _no_text_message(self, stdout: str, seen: dict[str, int], tool_names: list[str],
+                         errors: list[str] | None = None) -> str:
+        """Why a run that exited cleanly has no answer in it (OC-9). Names
+        the events the run did produce, the tools it called, and the file the
+        raw output was written to - a run that answered nothing is otherwise
+        indistinguishable from a run that was never made."""
+        events = ", ".join(f"{name} x{count}" for name, count in sorted(seen.items())) or "none at all"
+        parts = [f"opencode run produced no answer text. Events it did produce: {events}."]
+        reported = [message for message in (errors or []) if message]
+        if reported:
+            # A run can report an error and still exit 0; that message is the
+            # answer to "why is there nothing here".
+            parts.append("It reported: " + " | ".join(dict.fromkeys(reported)) + ".")
+        if tool_names:
+            parts.append(
+                f"It called tool(s) instead of answering: {', '.join(dict.fromkeys(tool_names))}. "
+                "Set provider.opencode.extra_args in the configuration to pin a non-agentic agent "
+                "(for example [\"--agent\", \"plan\"]) if this repeats."
+            )
+        path = self._save_raw(stdout)
+        if path is not None:
+            parts.append(f"Raw output: {path}")
+        return " ".join(parts)
+
+    def _save_raw(self, stdout: str) -> Path | None:
+        """The run's raw JSON Lines, under ``<audit_folder>/opencode-debug``.
+        Best effort: a diagnostic that cannot be written must not replace the
+        error it was meant to explain."""
+        folder = _config_key(self._config, "runtime.audit_folder")
+        if not folder:
+            return None
+        try:
+            target = Path(str(folder)) / "opencode-debug"
+            target.mkdir(parents=True, exist_ok=True)
+            path = target / f"run-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.jsonl"
+            path.write_text(stdout or "", encoding="utf-8")
+            return path
+        except OSError:
+            return None

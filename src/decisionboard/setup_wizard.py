@@ -119,14 +119,14 @@ class Wizard:
         info["found"] = True
         self.ok(f"opencode found: {self.opencode}")
         mine = str(Path(self.opencode).resolve()).lower()
+        mine = str(Path(self.opencode).resolve()).lower()
         others = [p for p in _all_on_path("opencode") if str(Path(p).resolve()).lower() != mine]
         if others:
-            self.warn("more than one opencode on PATH; the first one wins. Versions:")
-            for binary in [self.opencode, *others]:
-                probe = self._run([binary, "--version"], timeout=30)
-                version = ((probe.stdout or probe.stderr or "").strip().splitlines() or ["?"])[0]
-                self.say(f"          {version:<12} {binary}{'   (first on PATH)' if binary == self.opencode else ''}")
-            self.say("        If the first is older, uninstall it or put the newer one first in PATH.")
+            # Listed, never started: the npm package ships a stub that
+            # Windows refuses with a modal "Unsupported 16-Bit Application"
+            # dialog (8 September 2026), and a setup script must not open
+            # dialogs behind its own output.
+            self.say("        other opencode(s) on PATH, not used (the first one wins): " + ", ".join(others))
         version = self._run([self.opencode, "--version"], timeout=30)
         info["version"] = (version.stdout or version.stderr or "").strip().splitlines()[0] if (version.stdout or version.stderr) else ""
         if version.returncode == 0:
@@ -438,6 +438,55 @@ class Wizard:
             self._dump("stdout", result.stdout)
             return
         self.ok(f"model answered in {duration:.1f}s: {answer[:80]!r}  ({tokens_in} in / {tokens_out} out tokens)")
+        self.step_board_call(config)
+
+    def step_board_call(self, config: dict) -> None:
+        """A second call shaped like a real board call: the member prompt,
+        the knowledge block, and a JSON answer expected. The one-word test
+        above passes on prompts the board never sends; this is the call that
+        actually has to work (8 September 2026, when the board failed with
+        "no answer text" after that test had passed)."""
+        self.say("\n4b. Test call shaped like a real board call")
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+        from decisionboard.agent.opencode_client import OpenCodeError, OpenCodeProvider
+        from decisionboard.agent.provider import TASK_BOARD
+        from decisionboard.board import _member_prompt
+        from decisionboard.knowledge import gather
+
+        try:
+            selection = gather(config, "Should we rework the existing tooling or switch supplier?")
+        except Exception as exc:
+            self.warn(f"knowledge source could not be read for this test: {exc}")
+            return
+        context = ("This is a setup test. Answer briefly, in the JSON shape asked for."
+                   + ("\n\n" + selection.text if selection.text else ""))
+        prompt = _member_prompt(
+            "Setup test: rework the existing tooling or switch supplier?", context,
+            ("Rework", "Switch"), ("The date cannot move",), "Finance",
+        )
+        self.say(f"        prompt: {len(prompt):,} characters, knowledge {selection.tokens:,} tokens "
+                 f"from {len(selection.notes)} note(s)")
+        provider = OpenCodeProvider(config, binary=self.opencode)
+        started = time.monotonic()
+        try:
+            result = provider.complete(TASK_BOARD, prompt)
+        except OpenCodeError as exc:
+            self.fail(f"a board-shaped call failed: {exc}")
+            self.say("        The one-word test above passed, so the endpoint and the key are fine;")
+            self.say("        this is about the prompt itself. Send the line above and the raw file to Claude.")
+            return
+        duration = time.monotonic() - started
+        answer = result.text.strip()
+        try:
+            json.loads(answer)
+            shape = "valid JSON"
+        except json.JSONDecodeError:
+            shape = "not JSON - the board would count this member as failed"
+        self.ok(f"answered in {duration:.1f}s, {len(answer):,} characters, {shape} "
+                f"({result.input_tokens} in / {result.output_tokens} out tokens)")
+        if shape.startswith("not"):
+            self.warn("the model did not return the JSON the board asks for - the first line was: "
+                      + (answer.splitlines() or [""])[0][:160])
 
     def opencode_data_dir(self) -> Path:
         """Where OpenCode keeps ``auth.json`` and its database: the XDG data

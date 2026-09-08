@@ -5,6 +5,7 @@ is refused on Windows before CreateProcess refuses it."""
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -104,3 +105,54 @@ class TestEnvironment(unittest.TestCase):
         with mock.patch.object(opencode_client.subprocess, "run", fake_run):
             provider.complete("ai_board", "hello")
         self.assertEqual(seen, [str(Path("/x/opencode.json"))] * 2)
+
+
+class TestNoAnswerDiagnostics(unittest.TestCase):
+    """OC-9: a run that exits cleanly with no answer must say what it did
+    instead, not just that there was nothing."""
+
+    def _provider(self, audit=None):
+        config = {"provider": {"models": {"board": "azure/m"}}}
+        if audit:
+            config["runtime"] = {"audit_folder": str(audit)}
+        return OpenCodeProvider(config)
+
+    def test_error_event_on_a_zero_exit_run_is_reported(self):
+        stdout = "\n".join([
+            json.dumps({"type": "step_start"}),
+            json.dumps({"type": "error", "error": {"data": {"message": "context length exceeded"}}}),
+        ])
+        with self.assertRaises(OpenCodeError) as raised:
+            self._provider()._parse_output(stdout)
+        message = str(raised.exception)
+        self.assertIn("context length exceeded", message)
+        self.assertIn("step_start x1", message)
+
+    def test_tool_calls_instead_of_an_answer_are_named_with_the_way_out(self):
+        stdout = json.dumps({"type": "tool", "part": {"type": "tool", "tool": "read"}})
+        with self.assertRaises(OpenCodeError) as raised:
+            self._provider()._parse_output(stdout)
+        self.assertIn("read", str(raised.exception))
+        self.assertIn("extra_args", str(raised.exception))
+
+    def test_raw_output_is_saved_next_to_the_audit_trail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(OpenCodeError) as raised:
+                self._provider(tmp)._parse_output(json.dumps({"type": "step_finish", "part": {}}))
+            files = list((Path(tmp) / "opencode-debug").glob("run-*.jsonl"))
+            self.assertEqual(len(files), 1)
+            self.assertIn(str(files[0]), str(raised.exception))
+
+    def test_a_text_part_in_another_event_shape_still_counts_as_the_answer(self):
+        stdout = json.dumps({"type": "message.part.updated", "part": {"type": "text", "text": "hello"}})
+        text, _, _ = self._provider()._parse_output(stdout)
+        self.assertEqual(text, "hello")
+
+    def test_extra_args_are_appended_before_the_prompt(self):
+        config = {"provider": {"models": {"board": "azure/m"},
+                               "opencode": {"auto_approve": False, "extra_args": ["--agent", "plan"]}}}
+        provider = OpenCodeProvider(config)
+        with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
+            command = provider._build_command("azure/m", "hello")
+        self.assertEqual(command[-3:], ["--agent", "plan", "hello"])

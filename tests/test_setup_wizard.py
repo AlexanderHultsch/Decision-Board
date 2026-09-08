@@ -94,6 +94,7 @@ class TestWizard(unittest.TestCase):
             self.assertEqual(config["server"]["port"], 8765)
             self.assertIn("model answered", text)
             self.assertIn("8025 in / 2 out", text)
+            self.assertIn("shaped like a real board call", text)
             self.assertIn("(1 notes)", text)
 
     def test_failed_test_call_dumps_stdout_and_stderr_and_exits_nonzero(self):
@@ -220,7 +221,7 @@ class TestDatabaseRepair(unittest.TestCase):
                 code = wizard.run()
             text = out.getvalue()
             self.assertEqual(code, 0, text)
-            self.assertEqual(calls["run"], 2)
+            self.assertEqual(calls["run"], 3)   # failed call, retry after the repair, board-shaped call
             self.assertFalse((data / "opencode.db").exists())
             self.assertTrue(any(p.name.startswith("opencode.db.") and p.name.endswith(".bak") for p in data.iterdir()))
             self.assertTrue((data / "auth.json").exists())

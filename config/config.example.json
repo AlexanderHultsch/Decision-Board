@@ -26,7 +26,7 @@
   },
 
   "provider": {
-    "_comment": "endpoint is the record of which endpoint was approved under AI-3; since 8 September 2026 that is the company's LiteLLM gateway, defined as provider 'azure' in the company-provided opencode.json (opencode.config_file). models.board is the provider/model string as defined in that file. token_limits stays null until a limit is decided. auto_approve is discussed in the source project's spec 3.8 (OC-6); the --auto flag is only passed when the installed OpenCode version lists it (OC-7).",
+    "_comment": "endpoint is the record of which endpoint was approved under AI-3; since 8 September 2026 that is the company's LiteLLM gateway, defined as provider 'azure' in the company-provided opencode.json (opencode.config_file). models.board is the provider/model string as defined in that file. token_limits stays null until a limit is decided. auto_approve is discussed in the source project's spec 3.8 (OC-6); the --auto flag is only passed when the installed OpenCode version lists it (OC-7). extra_args appends further arguments to every `opencode run`, e.g. ["--agent", "plan"] (OC-9).",
     "endpoint": "azure (company LiteLLM gateway, see opencode.config_file)",
     "models": {
       "board": "azure/Opencode-Kimi-K2.7"
@@ -36,6 +36,7 @@
     },
     "opencode": {
       "auto_approve": true,
+      "extra_args": [],
       "config_file": "C:/Users/<you>/.../04_General PM/Opencode/opencode.json"
     }
   }
