@@ -2,32 +2,47 @@
 kind: template
 ---
 <!--
-Copy this file, drop the front matter above, name it after the member
-(or keep any name and set "member:"), fill it, and it is on the board.
-A file with several level-one headings is several members, one per heading,
-with the same keys as plain "key: value" lines directly under each heading.
-Optional keys: title, perspective (one line the synthesis sees), order,
-icon (dollar chip gear factory code target scale people shield truck flask
-chart person), color, short.
+Copy this file, delete the two front-matter lines above, and name the copy
+after the member: "R&R Hardware.md" or "Hardware.md" both give the member
+"Hardware" (a leading "R&R", "Role" or "Roles" in the file name is dropped).
+The first heading is the member's title; the file name is its identity, so
+a heading copied from another file cannot merge two members into one.
+
+Optional front matter, if you want to override what the board guesses:
+---
+member: Hardware
+title: Project Manager HW
+perspective: one line the synthesis sees (else: the first sentence below)
+order: 2
+icon: chip          # dollar chip gear factory code target scale people shield truck flask chart layers person
+color: "#2563eb"
+short: Hardware
+---
+See roles/examples/ for real, complete files.
 -->
----
-member: Name of the member
-perspective: One line on what this member looks at
-order: 1
-icon: person
----
-# Name of the member
+# Project Manager <Swim Lane>
 
-## Roles and responsibilities under this member
-- Role one: what it is responsible for
-- Role two: what it is responsible for
+Develop and maintain control over all the Program Management elements of
+the <Swim Lane>, e.g.: timing plan and strategy, process compliance, risks,
+defects, quality indicators and escalations, budget and staff planning.
 
-## What this member measures
-- KPI one
-- KPI two
+## Responsibilities
+
+What this member owns, one line per responsibility. Everything under this
+heading is what the member speaks for on the board.
+
+Execution and Monitoring:
+...
+
+Customer Focus:
+...
+
+Change Management:
+...
+
+Risk Management:
+...
 
 ## Vocabulary
-The words this member uses.
 
-## What this member pushes back on
-- ...
+The words this member uses.

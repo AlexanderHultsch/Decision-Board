@@ -14,6 +14,7 @@ your vault, any folder whose name starts with "Roles" (`Roles`,
 |---|---|
 | `_Board member conduct.md` | `kind: conduct`. What is the same for every member: character, how to answer, how to speak for all the roles and responsibilities under one's wing. Prepended to every member's profile on every call. |
 | `_Template - one member.md` | `kind: template`. The shape of a member note, with the optional keys. Never a member itself. |
+| `examples/` | Real, complete member notes (the roles and responsibilities of one programme's swim lanes), as examples of the shape. Not read by the board. |
 
 Notes whose name starts with `_`, or whose front matter says `kind:
 conduct` or `kind: template`, are never members. A member note that has a
@@ -21,7 +22,11 @@ heading and nothing under it is "not filled yet": it is left off the board
 and named on the confirm screen, so an empty note never produces an empty
 opinion.
 
-**One file per member** — optional front matter, then the body:
+**One file per member.** The file name is the member: `R&R Hardware.md`
+and `Hardware.md` both give the member "Hardware" (a leading "R&R", "Role"
+or "Roles" is dropped). The first heading is the member's title, the first
+sentence under it is the line the synthesis sees, and everything below is
+what the member speaks for. Front matter is optional:
 
 ```
 ---

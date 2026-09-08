@@ -50,7 +50,7 @@ MIN_MEMBERS = 2
 _MIN_BODY_CHARS = 40   # below this a profile is "not filled yet"
 
 ICONS = ("dollar", "chip", "gear", "factory", "code", "target", "scale", "people",
-         "shield", "truck", "flask", "chart", "person")
+         "shield", "truck", "flask", "chart", "layers", "person")
 _ICON_KEYWORDS = (
     ("dollar", ("finance", "cost", "budget", "control", "money", "commercial")),
     ("chip", ("hw", "hardware", "electr", "electronic")),
@@ -62,9 +62,13 @@ _ICON_KEYWORDS = (
     ("people", ("hr", "people", "customer", "sales", "marketing")),
     ("shield", ("safety", "security", "risk")),
     ("truck", ("logistic", "supply", "purchas", "procure")),
-    ("flask", ("test", "validation", "lab", "research")),
+    ("flask", ("test", "validation", "lab", "research", "system")),
+    ("layers", ("config", "integration", "release", "bom")),
     ("chart", ("strateg", "market", "business", "program", "project")),
 )
+# File-name prefixes that name the folder's purpose, not the member:
+# "R&R Hardware.md" is the member "Hardware".
+_NAME_PREFIXES = ("r&r", "r & r", "r_r", "rr", "roles and responsibilities", "roles & responsibilities", "role", "roles")
 PALETTE = ("#15803d", "#2563eb", "#d97706", "#7c3aed", "#0f766e", "#db2777",
            "#b91c1c", "#4f46e5", "#0891b2", "#65a30d", "#9333ea", "#ea580c")
 _META_KEYS = ("member", "title", "perspective", "icon", "color", "short", "order", "kind")
@@ -107,11 +111,34 @@ def _strip_front_matter(text: str) -> str:
 
 
 def _first_paragraph_line(body: str) -> str:
+    """The first content line, cut to its first sentence: the one line the
+    synthesis sees about a member."""
     for line in body.splitlines():
-        line = line.strip()
+        line = line.strip().lstrip("-* ").strip()
         if line and not line.startswith("#"):
-            return line
+            match = re.match(r"^(.{20,}?[.!?])(\s|$)", line)
+            sentence = match.group(1) if match else line
+            return sentence[:200].rstrip(" ,:;")
     return ""
+
+
+def _member_from_stem(stem: str) -> str:
+    name = stem.strip()
+    lowered = name.lower()
+    for prefix in sorted(_NAME_PREFIXES, key=len, reverse=True):
+        if lowered.startswith(prefix) and len(name) > len(prefix):
+            rest = name[len(prefix):]
+            if rest[:1] in (" ", "_", "-", ":"):
+                return rest.lstrip(" _-:").strip() or name
+    return name
+
+
+def _first_heading(body: str) -> str:
+    match = _H1.search(body)
+    return match.group(1).strip() if match else ""
+
+
+_H1 = re.compile(r"^# +(.+?)\s*$", re.MULTILINE)
 
 
 def _meta_str(meta: dict, key: str) -> str:
@@ -148,7 +175,6 @@ def _make_profile(member: str, meta: dict, body: str, source: str, path: Path | 
     )
 
 
-_H1 = re.compile(r"^# +(.+?)\s*$", re.MULTILINE)
 _KEY_LINE = re.compile(r"^(member|title|perspective|icon|color|short|order|kind):\s*(.*)$", re.IGNORECASE)
 
 
@@ -160,7 +186,12 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
     headings = list(_H1.finditer(body))
     claimed = _meta_str(meta, "member")
     if claimed or len(headings) <= 1:
-        member = claimed or path.stem
+        # One member per file: the file name names the member (a heading is
+        # a title, and a copied heading must not merge two files into one
+        # member); "R&R Hardware.md" is "Hardware".
+        member = claimed or _member_from_stem(path.stem)
+        if not _meta_str(meta, "title"):
+            meta = {**meta, "title": _first_heading(body) or member}
         return [_make_profile(member, meta, body, source, path)]
 
     profiles: list[RoleProfile] = []
