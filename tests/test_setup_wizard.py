@@ -257,9 +257,9 @@ class TestAllOnPath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             a = Path(tmp) / "a"; b = Path(tmp) / "b"
             a.mkdir(); b.mkdir()
-            (a / "opencode.exe").write_bytes(b"x")
+            (a / "opencode.EXE").write_bytes(b"x")   # PATHEXT casing; Windows matches either
             (b / "opencode").write_text("#!/bin/sh\n", encoding="utf-8")     # npm launcher, not runnable on Windows
-            (b / "opencode.cmd").write_text("@echo off\n", encoding="utf-8")
+            (b / "opencode.CMD").write_text("@echo off\n", encoding="utf-8")
             with mock.patch.dict(setup_wizard.os.environ, {"PATH": os.pathsep.join([str(a), str(b)]), "PATHEXT": ".EXE;.CMD"}), \
                  mock.patch.object(setup_wizard.sys, "platform", "win32"):
                 found = setup_wizard._all_on_path("opencode")
