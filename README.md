@@ -51,6 +51,14 @@ model so you know it is reachable before the board is asked anything:
 python scripts/setup.py
 ```
 
+The wizard also asks for the company-provided `opencode.json` (the file that
+defines the internal LiteLLM gateway as provider `azure`). Its path is stored
+as `provider.opencode.config_file` and passed to every OpenCode call as
+`OPENCODE_CONFIG`, so the board finds it from any folder. The model string
+is then `provider/model` exactly as that file defines it, for example
+`azure/Opencode-Kimi-K2.7`. The wizard lists every model the gateway serves,
+so a stronger model behind the same approved endpoint is visible at a glance.
+
 A failed test call prints OpenCode's complete output and the likely causes.
 On a machine without the repository yet, `scripts/install.ps1` does the
 clone as well: it asks for the folder, clones or pulls, then runs the wizard.

@@ -186,6 +186,7 @@ class BoardServer:
             "token_limit": _get(self.config, "provider.token_limits.board"),
             "audit_folder": _get(self.config, "runtime.audit_folder", "") or "",
             "auto_approve": bool(_get(self.config, "provider.opencode.auto_approve", True)),
+            "opencode_config": _get(self.config, "provider.opencode.config_file", "") or "",
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "knowledge_status": status,
             "members": list(BOARD_MEMBERS),
@@ -199,6 +200,7 @@ class BoardServer:
             "token_limit": ("provider.token_limits.board", lambda v: None if v in ("", None) else int(v)),
             "audit_folder": ("runtime.audit_folder", str),
             "auto_approve": ("provider.opencode.auto_approve", bool),
+            "opencode_config": ("provider.opencode.config_file", str),
             "theme": ("ui.theme", str),
         }
         for key, (dotted, cast) in mapping.items():
@@ -418,10 +420,11 @@ class BoardServer:
             session.phase = "closed"
 
 
-def pick_folder(initial: str = "") -> str | None:
-    """Opens the native folder dialog in a separate Python process (tkinter
-    is not safe to drive from a server thread) and returns the chosen path,
-    or ``None`` if the dialog was cancelled or tkinter is unavailable."""
+def pick_folder(initial: str = "", *, kind: str = "folder") -> str | None:
+    """Opens the native folder (or, with ``kind="file"``, file) dialog in a
+    separate Python process (tkinter is not safe to drive from a server
+    thread) and returns the chosen path, or ``None`` if the dialog was
+    cancelled or tkinter is unavailable."""
     script = (
         "import sys\n"
         "try:\n"
@@ -430,14 +433,20 @@ def pick_folder(initial: str = "") -> str | None:
         "except Exception:\n"
         "    sys.exit(3)\n"
         "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
-        "path = filedialog.askdirectory(title='Choose the knowledge source (Obsidian vault)', "
+        "if sys.argv[2] == 'file':\n"
+        "    path = filedialog.askopenfilename(title='Choose the OpenCode configuration (opencode.json)', "
+        "initialdir=sys.argv[1] or None, filetypes=[('JSON', '*.json'), ('All files', '*.*')])\n"
+        "else:\n"
+        "    path = filedialog.askdirectory(title='Choose the knowledge source (Obsidian vault)', "
         "initialdir=sys.argv[1] or None, mustexist=True)\n"
         "root.destroy()\n"
         "sys.stdout.write(path or '')\n"
     )
+    if initial and kind == "file":
+        initial = str(Path(initial).expanduser().parent)
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", script, initial], capture_output=True, text=True, timeout=600,
+            [sys.executable, "-c", script, initial, kind], capture_output=True, text=True, timeout=600,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -516,6 +525,9 @@ def make_handler(server: BoardServer):
                     self._json(200, server.update_config(body))
                 elif path == "/api/pick-folder":
                     chosen = pick_folder(str(body.get("initial") or ""))
+                    self._json(200, {"path": chosen})
+                elif path == "/api/pick-file":
+                    chosen = pick_folder(str(body.get("initial") or ""), kind="file")
                     self._json(200, {"path": chosen})
                 elif path == "/api/sessions":
                     session = server.start_session(str(body.get("question") or ""))

@@ -21,17 +21,20 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
 EXAMPLE_CONFIG = CONFIG_DIR / "config.example.json"
 LOCAL_CONFIG = CONFIG_DIR / "config.local.json"
-DEFAULT_MODEL = "opencode/big-pickle"
+DEFAULT_MODEL = "azure/Opencode-Kimi-K2.7"
 TEST_PROMPT = "Reply with the single word OK and nothing else."
 
 OK = "  [ok]  "
@@ -41,10 +44,12 @@ FAIL = "  [XX]  "
 
 class Wizard:
     def __init__(self, *, interactive: bool, vault: str | None, model: str | None,
-                 run_test: bool, out=None) -> None:
+                 run_test: bool, out=None, opencode_config: str | None = None) -> None:
         self.interactive = interactive
         self.vault_arg = vault
         self.model_arg = model
+        self.opencode_config_arg = opencode_config
+        self.env: dict[str, str] = dict(os.environ)
         self.run_test = run_test
         self.out = out or sys.stdout
         self.problems: list[str] = []
@@ -165,12 +170,28 @@ class Wizard:
         provider.setdefault("opencode", {}).setdefault("auto_approve", True)
         provider.setdefault("token_limits", {}).setdefault("board", None)
 
-        current_model = provider.setdefault("models", {}).get("board") or DEFAULT_MODEL
+        opencode_cfg = provider.setdefault("opencode", {})
+        config_file = self.step_opencode_config(opencode_cfg.get("config_file") or "")
+        opencode_cfg["config_file"] = config_file
+        defined = self.describe_opencode_config(config_file) if config_file else []
+        if config_file:
+            self.env["OPENCODE_CONFIG"] = config_file
+            models_now = self._run([self.opencode, "models"], timeout=60) if self.opencode else None
+            if models_now is not None and models_now.returncode == 0 and (models_now.stdout or "").strip():
+                info["models"] = models_now.stdout.strip()
+                self.ok(f"`opencode models` with that file: {len(info['models'].splitlines())} model string(s)")
+
+        current_model = provider.setdefault("models", {}).get("board") or (defined[0] if defined else DEFAULT_MODEL)
+        if "<" in current_model or "big-pickle" in current_model and defined:
+            current_model = defined[0]
         model = self.model_arg or self.ask("Model string (provider/model)", current_model)
-        if info.get("models") and model not in info["models"]:
+        if defined and model not in defined:
+            self.warn(f"{model} is not defined in {Path(config_file).name} (defined: {', '.join(defined)}).")
+        elif info.get("models") and model not in info["models"]:
             self.warn(f"{model} is not in `opencode models` output - the test call will tell.")
         provider["models"]["board"] = model
-        provider["endpoint"] = model.split("/")[0] + "/" + model.split("/", 1)[1] if "/" in model else model
+        if "/" in model and config_file:
+            provider["endpoint"] = f"{model.split('/')[0]} (company gateway, see opencode.config_file)"
 
         vault = self.vault_arg
         current_vault = knowledge.get("vault_path") or ""
@@ -189,6 +210,111 @@ class Wizard:
         self.say(f"        model {model}, budget {knowledge['token_budget']} tokens, port {config['server']['port']}, "
                  f"audit {runtime['audit_folder']}")
         return config
+
+    def step_opencode_config(self, current: str) -> str:
+        """Where the company-provided ``opencode.json`` lives, so OpenCode
+        finds its provider definition from any working directory."""
+        if self.opencode_config_arg is not None:
+            candidate = self.opencode_config_arg
+        else:
+            if "<you>" in current:
+                current = ""
+            found = current or self.find_opencode_config()
+            if self.interactive:
+                if self.confirm(f"Use a company opencode.json? {'(found: ' + found + ')' if found else ''}", bool(found)):
+                    candidate = self.pick_file(found) or self.ask("Path to opencode.json", found)
+                else:
+                    candidate = ""
+            else:
+                candidate = found
+        candidate = str(Path(candidate).expanduser()) if candidate else ""
+        if candidate and not Path(candidate).is_file():
+            self.fail(f"opencode.json not found: {candidate}")
+            return ""
+        if candidate:
+            self.ok(f"OpenCode configuration: {candidate}")
+        else:
+            self.say("        no company opencode.json - OpenCode uses its own global configuration.")
+        return candidate
+
+    def find_opencode_config(self) -> str:
+        """Likely locations: OPENCODE_CONFIG, OpenCode's global file, and an
+        'Opencode' folder next to the repository's parent."""
+        candidates = [os.environ.get("OPENCODE_CONFIG", "")]
+        candidates.append(str(Path.home() / ".config" / "opencode" / "opencode.json"))
+        for parent in (REPO_ROOT.parent, REPO_ROOT.parent.parent):
+            for name in ("Opencode", "OpenCode", "opencode", "Opnecode"):
+                candidates.append(str(parent / name / "opencode.json"))
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return candidate
+        return ""
+
+    def describe_opencode_config(self, path: str) -> list[str]:
+        """The provider/model strings the file defines, printed with the
+        gateway they point at, plus what the gateway itself lists (a chance
+        to see a stronger model behind the same approved endpoint)."""
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self.fail(f"opencode.json could not be read: {exc}")
+            return []
+        defined: list[str] = []
+        for provider_id, provider in (data.get("provider") or {}).items():
+            if not isinstance(provider, dict):
+                continue
+            options = provider.get("options") or {}
+            base_url = str(options.get("baseURL") or "")
+            self.say(f"        provider '{provider_id}' -> {base_url or '(no baseURL)'}"
+                     + ("  [plain http: only acceptable inside the company network]" if base_url.startswith("http://") else ""))
+            for model_id in (provider.get("models") or {}):
+                defined.append(f"{provider_id}/{model_id}")
+                self.say(f"          model string: {provider_id}/{model_id}")
+            api_key = _resolve_env_placeholders(str(options.get("apiKey") or ""))
+            if base_url and api_key and api_key.lower() not in ("xxx", "<key>"):
+                for line in self.gateway_models(base_url, api_key):
+                    self.say(f"          {line}")
+            elif base_url:
+                self.warn(f"provider '{provider_id}': apiKey is a placeholder - put the real key in the file "
+                          "(or use \"apiKey\": \"{env:LITELLM_API_KEY}\" and set that variable).")
+        default_model = data.get("model")
+        if default_model:
+            self.say(f"        default model in the file: {default_model}")
+        return defined
+
+    def gateway_models(self, base_url: str, api_key: str) -> list[str]:
+        """``GET <baseURL>/models`` on the gateway: every model the company
+        endpoint serves, not only the one the file defines."""
+        url = base_url.rstrip("/") + "/models"
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
+            return [f"gateway model list not reachable ({exc}) - only the model(s) defined above are known."]
+        ids = sorted(str(item.get("id")) for item in (payload.get("data") or []) if isinstance(item, dict) and item.get("id"))
+        if not ids:
+            return ["gateway lists no models for this key."]
+        lines = [f"gateway serves {len(ids)} model(s); add any of them under 'models' in opencode.json to use it:"]
+        lines.extend(f"  - {model_id}" for model_id in ids[:40])
+        if len(ids) > 40:
+            lines.append(f"  - ... and {len(ids) - 40} more")
+        return lines
+
+    def pick_file(self, initial: str) -> str | None:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception:
+            return None
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askopenfilename(title="Choose the OpenCode configuration (opencode.json)",
+                                          initialdir=str(Path(initial).parent) if initial else None,
+                                          filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        root.destroy()
+        return path or None
 
     def check_vault(self, vault: str | None) -> None:
         if not vault:
@@ -227,6 +353,8 @@ class Wizard:
             return
         model = config["provider"]["models"]["board"]
         command = [self.opencode, "run", "--format", "json", "--model", model]
+        if self.env.get("OPENCODE_CONFIG"):
+            self.say(f"        OPENCODE_CONFIG={self.env['OPENCODE_CONFIG']}")
         if config["provider"]["opencode"].get("auto_approve") and "--auto" in info.get("flags", []):
             command.append("--auto")
         command.append(TEST_PROMPT)
@@ -271,7 +399,7 @@ class Wizard:
     def _run(self, command: list[str], *, timeout: int) -> subprocess.CompletedProcess:
         try:
             return subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=timeout)
+                                  errors="replace", timeout=timeout, env=self.env)
         except FileNotFoundError:
             return subprocess.CompletedProcess(command, 127, "", f"{command[0]} not found")
         except subprocess.TimeoutExpired:
@@ -300,6 +428,12 @@ class Wizard:
         return 1 if self.failures else 0
 
 
+def _resolve_env_placeholders(value: str) -> str:
+    """OpenCode's ``{env:NAME}`` substitution, so the wizard can use the
+    same key the file resolves at runtime."""
+    return re.sub(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), value)
+
+
 def diagnose(stdout: str | None, stderr: str | None) -> list[str]:
     """What a failed test call most likely means, from signatures seen on
     real machines. Falls back to the generic list."""
@@ -326,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Decision Board setup: check the machine, write the config, test the model.")
     parser.add_argument("--vault", help="knowledge source folder (skips the dialog)")
     parser.add_argument("--model", help="provider/model string (skips the question)")
+    parser.add_argument("--opencode-config", help="path to the company opencode.json ('' for none; skips the dialog)")
     parser.add_argument("--no-test", action="store_true", help="do not make the test call")
     parser.add_argument("--yes", action="store_true", help="no questions: take defaults and arguments")
     args = parser.parse_args(argv)
@@ -334,5 +469,6 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
-    wizard = Wizard(interactive=not args.yes, vault=args.vault, model=args.model, run_test=not args.no_test)
+    wizard = Wizard(interactive=not args.yes, vault=args.vault, model=args.model, run_test=not args.no_test,
+                    opencode_config=args.opencode_config)
     return wizard.run()

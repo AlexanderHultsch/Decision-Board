@@ -15,6 +15,7 @@ prompt size.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -97,6 +98,21 @@ def _error_text(event: dict) -> str:
                 return inner
     name = event.get("name")
     return str(name) if name else json.dumps(event, ensure_ascii=False)[:_LINE_TRIM]
+
+
+def opencode_environment(config: dict) -> dict[str, str]:
+    """The environment ``opencode`` is started with (OC-8). Identical to the
+    server's own, plus ``OPENCODE_CONFIG`` when ``provider.opencode.config_file``
+    names an ``opencode.json`` - the way a company-provided provider
+    definition kept outside the repository (the LiteLLM gateway, decided
+    8 September 2026) reaches OpenCode regardless of the working directory
+    the board runs from. An empty setting leaves OpenCode's own lookup
+    (global config, then the working directory) untouched."""
+    env = dict(os.environ)
+    config_file = _config_key(config, "provider.opencode.config_file", "")
+    if config_file:
+        env["OPENCODE_CONFIG"] = str(Path(str(config_file)).expanduser())
+    return env
 
 
 def _config_key(config: dict, dotted: str, default: Any = None) -> Any:
@@ -184,6 +200,7 @@ class OpenCodeProvider(AiProvider):
                 probe = subprocess.run(
                     [self._binary, "run", "--help"], capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=60,
+                    env=opencode_environment(self._config),
                 )
                 help_text = (probe.stdout or "") + (probe.stderr or "")
             except (OSError, subprocess.TimeoutExpired):
@@ -227,7 +244,7 @@ class OpenCodeProvider(AiProvider):
             # run down.
             result = subprocess.run(
                 command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=self._timeout_seconds,
+                timeout=self._timeout_seconds, env=opencode_environment(self._config),
             )
         except FileNotFoundError as exc:
             raise OpenCodeError(

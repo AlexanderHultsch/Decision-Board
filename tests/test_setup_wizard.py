@@ -131,3 +131,61 @@ class TestWizard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompanyOpencodeConfig(unittest.TestCase):
+    def test_wizard_reads_the_company_file_and_uses_its_model_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            company = Path(tmp) / "opencode.json"
+            company.write_text(json.dumps({
+                "model": "Opencode-Kimi-K2.7",
+                "provider": {"azure": {"npm": "@ai-sdk/openai-compatible",
+                                       "options": {"baseURL": "http://litellm-ai.example.com/v1", "apiKey": "{env:LITELLM_KEY}"},
+                                       "models": {"Opencode-Kimi-K2.7": {"name": "Opencode-Kimi-K2.7"}}}},
+            }), encoding="utf-8")
+            local = Path(tmp) / "config.local.json"
+            out = io.StringIO()
+            seen_env = {}
+
+            def fake_run(command, **kwargs):
+                if command[1] == "run" and command[2] != "--help":
+                    seen_env.update(kwargs.get("env") or {})
+                    return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}', stderr="", returncode=0)
+                if command[1:] == ["models"]:
+                    return mock.Mock(stdout="azure/Opencode-Kimi-K2.7", stderr="", returncode=0)
+                return mock.Mock(stdout="", stderr="", returncode=0)
+
+            class FakeResponse:
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def read(self): return json.dumps({"data": [{"id": "Opencode-Kimi-K2.7"}, {"id": "claude-sonnet-5"}]}).encode()
+
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+                 mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
+                 mock.patch.object(setup_wizard.subprocess, "run", fake_run), \
+                 mock.patch.dict(setup_wizard.os.environ, {"LITELLM_KEY": "secret"}), \
+                 mock.patch.object(setup_wizard.urllib.request, "urlopen", lambda req, timeout: FakeResponse()):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=True, out=out,
+                                             opencode_config=str(company))
+                code = wizard.run()
+            text = out.getvalue()
+            self.assertEqual(code, 0, text)
+            config = json.loads(local.read_text(encoding="utf-8"))
+            self.assertEqual(config["provider"]["models"]["board"], "azure/Opencode-Kimi-K2.7")
+            self.assertEqual(config["provider"]["opencode"]["config_file"], str(company))
+            self.assertEqual(seen_env.get("OPENCODE_CONFIG"), str(company))
+            self.assertIn("model string: azure/Opencode-Kimi-K2.7", text)
+            self.assertIn("plain http", text)
+            self.assertIn("claude-sonnet-5", text)
+
+    def test_placeholder_key_is_flagged_and_gateway_not_queried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            company = Path(tmp) / "opencode.json"
+            company.write_text(json.dumps({"provider": {"azure": {"options": {"baseURL": "http://gw/v1", "apiKey": "xxx"},
+                                                                   "models": {"m": {}}}}}), encoding="utf-8")
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False, out=out)
+            with mock.patch.object(setup_wizard.urllib.request, "urlopen", side_effect=AssertionError("must not be called")):
+                defined = wizard.describe_opencode_config(str(company))
+            self.assertEqual(defined, ["azure/m"])
+            self.assertIn("placeholder", out.getvalue())

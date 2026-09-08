@@ -89,6 +89,7 @@
     $("opt-vault").value = config.vault_path || "";
     $("opt-budget").value = config.token_budget || 6000;
     $("opt-model").value = config.model || "";
+    $("opt-occonfig").value = config.opencode_config || "";
     $("opt-limit").value = config.token_limit == null ? "" : config.token_limit;
     $("opt-auto").checked = !!config.auto_approve;
     $("opt-audit").value = config.audit_folder || "";
@@ -107,6 +108,7 @@
         vault_path: $("opt-vault").value,
         token_budget: Number($("opt-budget").value) || 6000,
         model: $("opt-model").value,
+        opencode_config: $("opt-occonfig").value,
         token_limit: $("opt-limit").value === "" ? null : Number($("opt-limit").value),
         auto_approve: $("opt-auto").checked,
         audit_folder: $("opt-audit").value,
@@ -125,6 +127,16 @@
       const data = await api("POST", "/api/pick-folder", { initial: $("opt-vault").value });
       if (data.path) $("opt-vault").value = data.path;
       else if (data.path === null) $("opt-vault-status").textContent = "No folder chosen (or no folder dialog available on this machine - type the path instead).";
+    } catch (err) { setError("options-error", err.message); }
+    btn.disabled = false; btn.textContent = "Browse…";
+  }
+
+  async function browseConfigFile() {
+    const btn = $("btn-browse-occonfig");
+    btn.disabled = true; btn.textContent = "Choose in the dialog…";
+    try {
+      const data = await api("POST", "/api/pick-file", { initial: $("opt-occonfig").value });
+      if (data.path) $("opt-occonfig").value = data.path;
     } catch (err) { setError("options-error", err.message); }
     btn.disabled = false; btn.textContent = "Browse…";
   }
@@ -395,6 +407,7 @@
   $("btn-options-cancel").addEventListener("click", () => { $("options-dialog").hidden = true; });
   $("options-form").addEventListener("submit", saveOptions);
   $("btn-browse").addEventListener("click", browse);
+  $("btn-browse-occonfig").addEventListener("click", browseConfigFile);
   document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
   loadConfig().then(() => show("home")).catch((err) => { $("home-hint").textContent = err.message; show("home"); });

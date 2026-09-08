@@ -79,3 +79,28 @@ class TestBuildCommand(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnvironment(unittest.TestCase):
+    def test_config_file_becomes_opencode_config_in_the_subprocess_environment(self):
+        config = {"provider": {"models": {"board": "azure/Opencode-Kimi-K2.7"},
+                               "opencode": {"config_file": "C:/Users/me/Opencode/opencode.json"}}}
+        env = opencode_client.opencode_environment(config)
+        self.assertEqual(env["OPENCODE_CONFIG"], str(Path("C:/Users/me/Opencode/opencode.json")))
+        self.assertNotIn("OPENCODE_CONFIG", opencode_client.opencode_environment({}) if "OPENCODE_CONFIG" not in
+                         __import__("os").environ else {})
+
+    def test_the_environment_is_passed_to_every_opencode_call(self):
+        config = {"provider": {"models": {"board": "azure/m"}, "opencode": {"config_file": "/x/opencode.json"}}}
+        provider = OpenCodeProvider(config)
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(kwargs.get("env", {}).get("OPENCODE_CONFIG"))
+            if command[1:] == ["run", "--help"]:
+                return mock.Mock(stdout="", stderr="", returncode=0)
+            return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}\n', stderr="", returncode=0)
+
+        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+            provider.complete("ai_board", "hello")
+        self.assertEqual(seen, [str(Path("/x/opencode.json"))] * 2)
