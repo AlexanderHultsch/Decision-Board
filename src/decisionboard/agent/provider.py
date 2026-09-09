@@ -79,7 +79,7 @@ class AiResult:
 
     @property
     def total_tokens(self) -> int | None:
-        """The value ``audit.log_action`` takes as ``tokens`` - the sum of
+        """The value ``audit.log_run`` takes as ``tokens`` - the sum of
         whichever of the two token counts are known, or ``None`` if neither is."""
         if self.input_tokens is None and self.output_tokens is None:
             return None
@@ -102,7 +102,6 @@ class AiProvider(ABC):
 def build_provider(config: dict, *, cwd: Path | str | None = None) -> AiProvider | None:
     """The configured provider, or ``None`` if no task type has a model set.
 
-    Callers such as ``logic/import_run.py`` already treat a ``None`` provider
     as "AI not available" and report it rather than failing (NFR-8) - this
     keeps that contract rather than raising.
     """

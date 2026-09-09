@@ -136,7 +136,27 @@ class RecordingProvider(AiProvider):
 
 
 MAX_BUDGET = 12000                # the slider's top: knowledge tokens per member
+MAX_BODY_BYTES = 4 * 1024 * 1024  # a request body larger than this is refused
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on the gateway on 9 September 2026
+
+
+def _restore_last_round(session: "Session") -> None:
+    """Under the session lock: back to the last round of questions with its
+    answers. The clarifier may have replaced the questions before failing;
+    the questions Alex answered are the ones to show again."""
+    last = session.rounds.pop()
+    session.clarification.questions = list(last["questions"])
+    session.answers = list(last["answers"])
+    session.phase = "questions"
+    session.error = None
+
+
+def _pending_turn(session: "Session", index: int) -> bool:
+    """Under the session lock: whether the follow-up at ``index`` is still
+    the pending one this worker was started for (Back may have removed it)."""
+    return (not session.cancelled.is_set() and 0 <= index < len(session.turns)
+            and bool(session.turns[index].get("pending")))
 
 
 class Session:
@@ -153,6 +173,7 @@ class Session:
         self.cancelled = threading.Event()             # set when Alex goes back while the model works
         self.active_threads: set[int] = set()          # threads waiting on a model call right now
         self.forward: list[str] = []                   # phases to go forward to again, newest last
+        self.run_id = 0                                # bumped per run: a stopped run's late writes are dropped
         self.calls: list[dict[str, Any]] = []          # every model call: step, member, tokens, seconds
         self.marks: list[dict[str, Any]] = [{"phase": "started", "at": self.started}]   # phase changes, for wall time
         self.phase = "clarifying"
@@ -161,7 +182,6 @@ class Session:
         self.knowledge: dict[str, Any] = {"vault_path": None, "selected": 0, "total": 0, "tokens": 0,
                                           "truncated": False, "notes": []}
         self.knowledge_text = ""
-        self.sent_notes: dict[str, str] = {}              # note path -> body, what the members receive
         self.roles: dict[str, Any] = {"members": [], "count": 0, "source": "", "folder": None, "files": []}
         self.member_meta: list[dict[str, str]] = []
         self.clarification: clarify_mod.Clarification | None = None
@@ -173,7 +193,6 @@ class Session:
         self.partial: dict[str, dict[str, Any]] = {}      # answers already in while the others think
         self.mode = "individual"                          # "individual" or "combined" (decided 9 September 2026)
         self.budget: int | None = None                    # knowledge tokens per member for this topic (the slider)
-        self.member_knowledge: dict[str, str] = {}        # member -> its knowledge block, as sent
         self.member_notes: dict[str, dict[str, str]] = {} # member -> note path -> text sent
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
@@ -183,6 +202,9 @@ class Session:
         self.written_path: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
+        """The session as the page sees it. Polled once a second: only the
+        parts mutated in place are copied; ``result`` and each turn are
+        replaced wholesale when written and shared as they are."""
         with self.lock:
             clarification = None
             if self.clarification is not None:
@@ -203,39 +225,39 @@ class Session:
                     "body": self.proposal.body,
                     "mode": self.proposal.mode,
                     "parse_error": self.proposal.parse_error,
-                    "preview": memory_writer.preview(Path(self.knowledge["vault_path"] or "."), self.proposal),
+                    "preview": memory_writer.preview(self.proposal),
                 }
-            return deepcopy({
+            return {
                 "id": self.id,
                 "question": self.question,
                 "phase": self.phase,
                 "busy": self.busy,
                 "error": self.error,
-                "knowledge": self.knowledge,
-                "roles": self.roles,
+                "knowledge": deepcopy(self.knowledge),
+                "roles": deepcopy(self.roles),
                 "member_meta": self.member_meta,
                 "clarification": clarification,
-                "answers": self.answers,
-                "rounds": self.rounds,
+                "answers": list(self.answers),
+                "rounds": deepcopy(self.rounds),
                 "max_rounds": clarify_mod.MAX_ROUNDS,
-                "inputs": self.inputs,
+                "inputs": dict(self.inputs),
                 "selected_members": self.selected_members,
-                "members": self.members,
-                "partial": self.partial,
+                "members": deepcopy(self.members),
+                "partial": deepcopy(self.partial),
                 "mode": self.mode,
                 "budget": self.budget,
                 "projects": self.projects,
                 "extra": self.extra,
                 "exclude": self.exclude,
                 "member_knowledge_paths": {m: sorted(paths) for m, paths in self.member_notes.items()},
-                "stats": {"calls": self.calls, "marks": self.marks, "started": self.started},
+                "stats": {"calls": list(self.calls), "marks": list(self.marks), "started": self.started},
                 "nav": self._nav(),
                 "result": self.result,
-                "turns": self.turns,
+                "turns": list(self.turns),
                 "llm_calls": self.llm_calls,
                 "proposal": proposal,
                 "written_path": self.written_path,
-            })
+            }
 
     def _nav(self) -> dict[str, bool]:
         """What the Back and Forward buttons may do in this state (under the lock)."""
@@ -312,12 +334,13 @@ class BoardServer:
         return provider
 
     def config_view(self) -> dict[str, Any]:
+        """The configuration as Options shows it, with the state of the vault and the roles folder."""
         vault_path = _get(self.config, "knowledge.vault_path")
         status: dict[str, Any] = {"configured": bool(vault_path), "ok": False, "notes": 0, "error": None}
         if vault_path:
             try:
                 vault_dir = Path(str(vault_path)).expanduser()
-                status["notes"] = len(knowledge_mod.load_vault(
+                status["notes"] = len(knowledge_mod.load_vault(       # cached after the first walk
                     vault_dir, skip_subfolders=knowledge_mod._roles_inside(self.config, vault_dir)))
                 status["ok"] = True
             except knowledge_mod.KnowledgeUnavailable as exc:
@@ -345,10 +368,9 @@ class BoardServer:
             board = roles_mod.load_board(self.config)
         except roles_mod.RolesUnavailable as exc:
             return {"error": str(exc), "members": [], "count": 0, "source": origin,
-                    "folder": str(folder) if folder else None, "files": [], "member_meta": [], "skipped": []}
+                    "folder": str(folder) if folder else None, "files": [], "skipped": []}
         info = roles_mod.summary(board)
         info["error"] = None
-        info["member_meta"] = roles_mod.member_meta(board.profiles)
         return info
 
     def _install_target(self) -> Path:
@@ -373,6 +395,7 @@ class BoardServer:
         return status
 
     def update_config(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Options saved: only the listed keys, folders checked, the file rewritten under the lock."""
         mapping = {
             "vault_path": ("knowledge.vault_path", str),
             "project": ("knowledge.project", str),
@@ -385,27 +408,31 @@ class BoardServer:
             "roles_folder": ("knowledge.roles_folder", str),
             "theme": ("ui.theme", str),
         }
-        for key, (dotted, cast) in mapping.items():
-            if key in changes:
-                try:
-                    value = cast(changes[key]) if changes[key] is not None else None
-                except (TypeError, ValueError):
-                    raise ApiError(400, f"{key}: not a valid value")
-                if isinstance(value, str):
-                    value = value.strip()
-                if key == "opencode_config" and value:
-                    problem = opencode_config_problem(value)
-                    if problem:
-                        raise ApiError(400, f"OpenCode configuration file {problem}")
-                _set(self.config, dotted, value)
-        if self.config_path is not None:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            self.config_path.write_text(json.dumps(self.config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with self.lock:
+            for key, (dotted, cast) in mapping.items():
+                if key in changes:
+                    try:
+                        value = cast(changes[key]) if changes[key] is not None else None
+                    except (TypeError, ValueError):
+                        raise ApiError(400, f"{key}: not a valid value")
+                    if isinstance(value, str):
+                        value = value.strip()
+                    if key == "opencode_config" and value:
+                        problem = opencode_config_problem(value)
+                        if problem:
+                            raise ApiError(400, f"OpenCode configuration file {problem}")
+                    if key in ("vault_path", "roles_folder") and value and not Path(str(value)).expanduser().is_dir():
+                        raise ApiError(400, f"{key}: not a folder: {value}")
+                    _set(self.config, dotted, value)
+            if self.config_path is not None:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                self.config_path.write_text(json.dumps(self.config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return self.config_view()
 
     # -- sessions -------------------------------------------------------------
 
     def start_session(self, question: str, projects: Any = None) -> Session:
+        """A new topic: the clarifier starts in the background at once."""
         question = (question or "").strip()
         if not question:
             raise ApiError(400, "Type a question first.")
@@ -467,7 +494,6 @@ class BoardServer:
                 "notes": selection.relative_paths,
             }
             session.knowledge_text = selection.text
-            session.sent_notes = {note.relative: note.body for note in selection.notes}
         try:
             provider = RecordingProvider(self.provider(), session)
             clarification = clarify_mod.clarify(provider, session.question, session.knowledge_text)
@@ -499,6 +525,7 @@ class BoardServer:
             if final or len(session.rounds) >= clarify_mod.MAX_ROUNDS or session.phase == "confirm":
                 self._to_confirm(session)
                 return
+            session.cancelled.clear()
             session.phase = "clarifying"
         self._spawn(session, self._clarify_more, session)
 
@@ -526,6 +553,8 @@ class BoardServer:
         with session.lock:
             session.llm_calls += 1
             # Keep what the earlier round extracted where the new one is thin.
+            if not clarification.topic and session.clarification is not None:
+                clarification.topic = session.clarification.topic
             if not clarification.context and session.clarification is not None:
                 clarification.context = session.clarification.context
             if not clarification.options and session.clarification is not None:
@@ -541,6 +570,7 @@ class BoardServer:
                 self._to_confirm(session)
 
     def run(self, session: Session, inputs: dict[str, Any]) -> None:
+        """Alex confirmed the input: the board runs in the background with the chosen members, mode and budget."""
         with session.lock:
             if session.phase != "confirm":
                 raise ApiError(409, "The board is not ready to run.")
@@ -559,6 +589,7 @@ class BoardServer:
             session.extra = [str(x) for x in inputs.get("extra") or [] if str(x).strip()]
             session.exclude = [str(x) for x in inputs.get("exclude") or [] if str(x).strip()]
             session.cancelled.clear()
+            session.run_id += 1
             session.forward = []
             session.result = None
             session.turns = []
@@ -614,8 +645,13 @@ class BoardServer:
         return selected
 
     def _run_board(self, session: Session) -> None:
+        run_id = session.run_id
+
+        def stale() -> bool:
+            return session.cancelled.is_set() or session.run_id != run_id
+
         def on_member(member: str, state: str) -> None:
-            if session.cancelled.is_set():
+            if stale():
                 return
             with session.lock:
                 session.members[member] = state
@@ -624,7 +660,7 @@ class BoardServer:
                     session.mark("synthesising")
 
         def on_assessment(assessment) -> None:
-            if session.cancelled.is_set():
+            if stale():
                 return
             with session.lock:
                 session.partial[assessment.member] = asdict(assessment)
@@ -643,9 +679,9 @@ class BoardServer:
                 member_data = {}
             member_knowledge, member_notes = self._member_blocks(session, board, selected, session.budget or 0)
             with session.lock:
-                session.member_knowledge = member_knowledge
                 session.member_notes = member_notes
                 session.roles = roles_mod.summary(board)
+                session.roles["kpi_members"] = sorted(member_data)
                 session.member_meta = roles_mod.member_meta(board.profiles)
                 session.selected_members = selected
                 session.members = {member: "pending" for member in selected}
@@ -662,7 +698,7 @@ class BoardServer:
         except Exception as exc:
             session.fail(str(exc))
             return
-        if session.cancelled.is_set():
+        if stale():
             return          # Alex went back while the board worked: the result is not wanted
         with session.lock:
             session.conversation = BoardConversation(
@@ -711,9 +747,11 @@ class BoardServer:
             session.mark("follow-up")
             session.turns.append({"question": question, "answer": "", "pending": True, "members": chosen,
                                   "mode": follow_mode, "data": None, "assessments": [], "failed_members": []})
-        self._spawn(session, self._follow_up, session, question, chosen, follow_mode)
+            index = len(session.turns) - 1
+        self._spawn(session, self._follow_up, session, question, chosen, follow_mode, index)
 
-    def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual") -> None:
+    def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual",
+                   index: int = -1) -> None:
         conversation = session.conversation
         missing = [m for m in chosen if m not in conversation.member_knowledge]
         if missing:
@@ -733,18 +771,18 @@ class BoardServer:
             turn = ask_follow_up_full(self.config, RecordingProvider(self.provider(), session), session.conversation,
                                       question, chosen, follow_mode)
         except Exception as exc:
-            if session.cancelled.is_set():
-                return
             with session.lock:
-                session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
-                                     "error": True, "members": chosen, "mode": follow_mode, "data": None,
-                                     "assessments": [], "failed_members": []}
+                if not _pending_turn(session, index):
+                    return
+                session.turns[index] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
+                                        "error": True, "members": chosen, "mode": follow_mode, "data": None,
+                                        "assessments": [], "failed_members": []}
                 session.busy = False
             return
-        if session.cancelled.is_set():
-            return
         with session.lock:
-            session.turns[-1] = {
+            if not _pending_turn(session, index):
+                return
+            session.turns[index] = {
                 "question": question, "answer": turn.answer, "pending": False, "members": chosen, "mode": follow_mode,
                 "data": turn.data, "assessments": [asdict(a) for a in turn.assessments],
                 "failed_members": list(turn.failed_members),
@@ -831,10 +869,7 @@ class BoardServer:
             session.stop_work()
             with session.lock:
                 if session.rounds:
-                    last = session.rounds.pop()
-                    session.clarification.questions = list(last["questions"])
-                    session.answers = list(last["answers"])
-                    session.phase = "questions"
+                    _restore_last_round(session)
                     session.forward = []
                     return
             raise ApiError(409, "Nothing to go back to - start over; your question is kept.")
@@ -871,13 +906,7 @@ class BoardServer:
             if session.phase in ("error", "confirm", "questions") and session.rounds and session.clarification is not None:
                 if session.phase == "confirm":
                     session.forward.append("confirm")
-                last = session.rounds.pop()
-                # The clarifier may have replaced the questions before failing;
-                # the questions Alex answered are the ones to show again.
-                session.clarification.questions = list(last["questions"])
-                session.answers = list(last["answers"])
-                session.phase = "questions"
-                session.error = None
+                _restore_last_round(session)
                 return
             raise ApiError(409, "Nothing to go back to - start over; your question is kept.")
 
@@ -890,7 +919,7 @@ class BoardServer:
             if target == "result" and session.result is not None and session.phase == "confirm":
                 session.phase = "result"
                 return
-            if target == "confirm" and session.inputs and session.phase == "questions":
+            if target == "confirm" and session.inputs and session.phase == "questions" and session.clarification is not None:
                 session.rounds.append({"questions": list(session.clarification.questions), "answers": list(session.answers)})
                 session.phase = "confirm"
                 return
@@ -906,6 +935,7 @@ class BoardServer:
             session.mark("abandoned")
 
     def close(self, session: Session, remember: bool) -> None:
+        """Close the topic; with ``remember`` the memory proposal is started."""
         with session.lock:
             if session.phase != "result":
                 raise ApiError(409, "There is no open topic to close.")
@@ -916,6 +946,7 @@ class BoardServer:
                 return
             if not session.knowledge.get("vault_path"):
                 raise ApiError(400, "No knowledge source is configured - set the vault folder in Options first.")
+            session.cancelled.clear()
             session.phase = "proposing"
             session.busy = True
         self._spawn(session, self._propose, session)
@@ -942,6 +973,7 @@ class BoardServer:
             session.error = None
 
     def write_memory(self, session: Session, edited: dict[str, Any]) -> Path:
+        """Write the confirmed, possibly edited, proposal into the vault."""
         with session.lock:
             if session.phase != "proposal" or session.proposal is None:
                 raise ApiError(409, "There is no memory proposal to write.")
@@ -964,6 +996,7 @@ class BoardServer:
             return target
 
     def discard_memory(self, session: Session) -> None:
+        """Close the topic without writing the proposal."""
         with session.lock:
             if session.phase != "proposal":
                 raise ApiError(409, "There is no memory proposal to discard.")
@@ -1009,6 +1042,7 @@ def pick_folder(initial: str = "", *, kind: str = "folder", title: str = "") -> 
 
 
 def make_handler(server: BoardServer):
+    """The request handler class bound to one ``BoardServer``: routing only."""
     class Handler(BaseHTTPRequestHandler):
         server_version = "DecisionBoard/1.0"
 
@@ -1026,10 +1060,40 @@ def make_handler(server: BoardServer):
             self.end_headers()
             self.wfile.write(body)
 
+        def _local_only(self, *, post: bool) -> None:
+            """Only the page served by this server may talk to it (review of
+            9 September 2026). The Host header must name this machine and
+            port, or a DNS-rebinding page could read every response; a POST
+            must come without an Origin or from this origin, and carry JSON,
+            or any web page could issue a "simple" cross-origin POST that
+            rewrites the configuration, starts paid calls or writes a note
+            into the vault."""
+            port = self.server.server_address[1]
+            host = (self.headers.get("Host") or "").strip().lower()
+            hostname, _, host_port = host.rpartition(":") if not host.startswith("[") or "]:" in host else (host, "", "")
+            if not host_port:
+                hostname, host_port = host, "80"
+            if hostname.strip("[]") not in _LOCAL_HOSTS or host_port != str(port):
+                raise ApiError(403, "This server answers only its own page on this machine.")
+            if post:
+                origin = (self.headers.get("Origin") or "").strip().lower()
+                allowed = {f"http://{h}:{port}" for h in ("127.0.0.1", "localhost", "[::1]")}
+                if origin and origin not in allowed:
+                    raise ApiError(403, "Cross-origin requests are not accepted.")
+                content_type = (self.headers.get("Content-Type") or "").lower()
+                has_body = (self.headers.get("Content-Length") or "0").strip() not in ("", "0")
+                if has_body and not content_type.startswith("application/json"):
+                    raise ApiError(415, "Send JSON.")
+
         def _body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length == 0:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                raise ApiError(400, "Bad Content-Length.")
+            if length <= 0:
                 return {}
+            if length > MAX_BODY_BYTES:
+                raise ApiError(413, "Request body too large.")
             raw = self.rfile.read(length)
             try:
                 data = json.loads(raw.decode("utf-8"))
@@ -1055,6 +1119,7 @@ def make_handler(server: BoardServer):
         def do_GET(self) -> None:   # noqa: N802 - stdlib naming
             path = self.path.split("?", 1)[0]
             try:
+                self._local_only(post=False)
                 if path in ("/", "/index.html"):
                     self._static("index.html")
                 elif path.startswith("/static/"):
@@ -1072,6 +1137,7 @@ def make_handler(server: BoardServer):
         def do_POST(self) -> None:   # noqa: N802 - stdlib naming
             path = self.path.split("?", 1)[0]
             try:
+                self._local_only(post=True)
                 body = self._body()
                 if path == "/api/config":
                     self._json(200, server.update_config(body))
@@ -1125,6 +1191,7 @@ def make_handler(server: BoardServer):
 def create_http_server(
     config: dict, config_path: Path | None, *, port: int = DEFAULT_PORT, provider: AiProvider | None = None,
 ) -> tuple[ThreadingHTTPServer, BoardServer]:
+    """The listening server on 127.0.0.1 and the ``BoardServer`` behind it."""
     board_server = BoardServer(config, config_path, provider=provider)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(board_server))
     httpd.daemon_threads = True

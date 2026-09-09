@@ -32,16 +32,19 @@ def _probe(help_text: str):
 
 
 class TestBuildCommand(unittest.TestCase):
+    def setUp(self):
+        opencode_client._FLAGS.clear()      # the flag probe is cached per process
+
     def test_auto_is_not_passed_when_the_installed_version_does_not_list_it(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
         with patch_subprocess(_probe(OLD_HELP)):
-            command = provider._build_command("opencode/big-pickle", "hello")
+            command = provider._build_command("opencode/big-pickle")
         self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle", opencode_client.PROMPT_HEADER])
 
     def test_auto_and_dir_are_passed_when_listed(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
         with patch_subprocess(_probe(NEW_HELP)):
-            command = provider._build_command("opencode/big-pickle", "hello")
+            command = provider._build_command("opencode/big-pickle")
         self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle",
                                    "--dir", "/repo", "--auto", opencode_client.PROMPT_HEADER])
 
@@ -49,21 +52,21 @@ class TestBuildCommand(unittest.TestCase):
         config = {"provider": {"models": {"board": "x/y"}, "opencode": {"auto_approve": False}}}
         provider = OpenCodeProvider(config)
         with patch_subprocess(_probe(NEW_HELP)):
-            command = provider._build_command("x/y", "hello")
+            command = provider._build_command("x/y")
         self.assertNotIn("--auto", command)
 
     def test_help_is_probed_once_per_provider(self):
         provider = OpenCodeProvider(CONFIG)
         probe = mock.Mock(side_effect=_probe(NEW_HELP))
         with patch_subprocess(probe):
-            provider._build_command("x/y", "a")
-            provider._build_command("x/y", "b")
+            provider._build_command("x/y")
+            provider._build_command("x/y")
         self.assertEqual(probe.call_count, 1)
 
     def test_a_failed_probe_means_no_optional_flags_not_a_failed_run(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
         with patch_subprocess(side_effect=OSError("no binary")):
-            command = provider._build_command("x/y", "hello")
+            command = provider._build_command("x/y")
         self.assertNotIn("--auto", command)
         self.assertNotIn("--dir", command)
 
@@ -81,8 +84,7 @@ class TestBuildCommand(unittest.TestCase):
             seen["input"] = kwargs.get("input")
             return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}\n', stderr="", returncode=0)
 
-        with patch_subprocess(fake_run), \
-             mock.patch.object(opencode_client.sys, "platform", "win32"):
+        with patch_subprocess(fake_run):
             provider.complete("ai_board", prompt)
         self.assertEqual(seen["input"], prompt)
         self.assertNotIn(prompt, seen["command"])
@@ -90,11 +92,12 @@ class TestBuildCommand(unittest.TestCase):
         self.assertLess(sum(len(part) for part in seen["command"]), 1000)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestEnvironment(unittest.TestCase):
+    def setUp(self):
+        opencode_client._FLAGS.clear()      # the flag probe is cached per process
+
     def test_config_file_becomes_opencode_config_in_the_subprocess_environment(self):
         config = {"provider": {"models": {"board": "azure/Opencode-Kimi-K2.7"},
                                "opencode": {"config_file": "C:/Users/me/Opencode/opencode.json"}}}
@@ -166,7 +169,7 @@ class TestNoAnswerDiagnostics(unittest.TestCase):
                                "opencode": {"auto_approve": False, "extra_args": ["--agent", "plan"]}}}
         provider = OpenCodeProvider(config)
         with patch_subprocess(_probe(OLD_HELP)):
-            command = provider._build_command("azure/m", "hello")
+            command = provider._build_command("azure/m")
         self.assertEqual(command[-3:], ["--agent", "plan", opencode_client.PROMPT_HEADER])
 
 
@@ -217,3 +220,7 @@ class TestEmptyAnswerRetry(unittest.TestCase):
             with self.assertRaises(OpenCodeError):
                 provider.complete("ai_board", "the prompt")
         self.assertEqual(len(calls), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

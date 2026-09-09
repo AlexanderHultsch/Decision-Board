@@ -7,6 +7,7 @@
   },
 
   "storage": {
+    "_comment": "Written by the setup wizard: the name of this machine, recorded in the audit trail.",
     "pc_name": ""
   },
 
@@ -30,6 +31,7 @@
   },
 
   "ui": {
+    "_comment": "theme: system, light or dark.",
     "theme": "system"
   },
 

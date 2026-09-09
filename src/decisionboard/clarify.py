@@ -5,7 +5,7 @@ Alex types one free-text question. The clarifier reads it, together with
 the knowledge block selected for it, and returns two things: the four FR-3.1
 inputs it can extract (topic, context, options, constraints) and at least
 one question whose answer would most change the board's recommendation.
-The clarifier is independent of the six members and its questions never
+The clarifier is independent of the members and its questions never
 reach them - the members receive only the aligned input, after Alex has
 answered and confirmed.
 
@@ -40,6 +40,7 @@ class Clarification:
 
 
 MAX_ROUNDS = 5       # clarification rounds before the board is asked regardless (raised from 3, 9 September 2026)
+MAX_QUESTIONS = 5    # questions per round, the cap the prompt promises
 
 
 def clarifier_prompt(question: str, knowledge_text: str, rounds: list[tuple[list[str], list[str]]] | None = None) -> str:
@@ -83,11 +84,16 @@ def parse_clarification(text: str, question: str, *, first_round: bool = True) -
     except json.JSONDecodeError:
         data = None
     if not isinstance(data, dict):
+        # A later round that did not parse keeps its topic empty so the
+        # caller can keep the refined one instead of the raw question.
         return Clarification(
-            topic=question.strip(), context="", questions=[FALLBACK_QUESTION] if first_round else [],
+            topic=question.strip() if first_round else "", context="",
+            questions=[FALLBACK_QUESTION] if first_round else [],
             parse_error="clarifier response did not parse as JSON",
         )
-    questions = _as_list(data.get("questions"))
+    questions = _as_list(data.get("questions"))[:MAX_QUESTIONS]
+    if data.get("clear") is True and not first_round:
+        questions = []                              # the clarifier's own signal wins over a stray question
     if not questions and first_round:
         questions = [FALLBACK_QUESTION]
     topic = str(data.get("topic") or "").strip() or question.strip()
@@ -108,11 +114,6 @@ def clarify(provider: AiProvider, question: str, knowledge_text: str = "",
     clarification = parse_clarification(ai_result.text, question, first_round=not rounds)
     clarification.ai_result = ai_result
     return clarification
-
-
-def merge_answers(clarification: Clarification, answers: list[str]) -> str:
-    """One round: see ``merge_rounds``."""
-    return merge_rounds(clarification.context, [(list(clarification.questions), list(answers))])
 
 
 def merge_rounds(context: str, rounds: list[tuple[list[str], list[str]]]) -> str:

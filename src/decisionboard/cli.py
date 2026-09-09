@@ -48,11 +48,18 @@ def load_config(path: Path) -> dict:
         raise SystemExit(2)
     try:
         with path.open(encoding="utf-8") as handle:
-            return json.load(handle)
+            data = json.load(handle)
     except json.JSONDecodeError as exc:
         print(f"{path} is not valid JSON ({exc}). Fix it, or delete it and run the setup wizard again.",
               file=sys.stderr)
         raise SystemExit(2) from None
+    except OSError as exc:
+        print(f"{path} could not be read ({exc}).", file=sys.stderr)
+        raise SystemExit(2) from None
+    if not isinstance(data, dict):
+        print(f"{path} must hold a JSON object. Delete it and run the setup wizard again.", file=sys.stderr)
+        raise SystemExit(2)
+    return data
 
 
 def _get(config: dict, dotted: str, default: Any = None) -> Any:
@@ -114,8 +121,8 @@ def cmd_board(config: dict) -> int:
     if result.failed_members:
         print(f"\nFailed member(s): {len(result.failed_members)}.")
 
-    # The owner decided the conversation lives in the synthesis only (six
-    # members are not polled again) and ends when he stops answering.
+    # On the command line a follow-up is the one-call form: the synthesis
+    # over the original assessments (the browser can ask members again).
     conversation = BoardConversation(result=result, turns=[], roles=profiles)
     print(
         f"\nFollow-up question - blank line ends the conversation. The first "
@@ -144,8 +151,7 @@ def cmd_serve(config: dict, args: argparse.Namespace) -> int:
 
 
 COMMANDS: dict[str, Callable[..., int]] = {
-    "board": cmd_board,
-    "serve": cmd_serve,
+    "board": cmd_board,        # "serve" takes the parsed arguments and is dispatched in main()
 }
 
 

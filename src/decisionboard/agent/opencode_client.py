@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import threading
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -54,6 +53,10 @@ _NO_TEXT = "produced no answer text"
 _ACTIVE: dict[int, subprocess.Popen] = {}
 _STOPPED: set[int] = set()
 _ACTIVE_LOCK = threading.Lock()
+# The optional flags each opencode binary accepts, probed once per process
+# (OC-7): eight member threads must not each spawn `opencode run --help`.
+_FLAGS: dict[str, frozenset[str]] = {}
+_FLAGS_LOCK = threading.Lock()
 
 
 def stop_call(thread_id: int) -> bool:
@@ -83,7 +86,9 @@ class OpenCodeError(RuntimeError):
     """
 
 
-_BOARD_CONFIG_KEYS = ("knowledge", "setup", "storage", "runtime", "ui", "server")
+# Keys only Decision Board's own configuration has. "server" and "ui" are
+# left out on purpose: a legitimate opencode.json may carry them.
+_BOARD_CONFIG_KEYS = ("knowledge", "setup", "storage", "runtime")
 _CONFIG_REJECTED = ("unrecognized key", "unrecognized_keys", "invalid config", "config file is invalid")
 
 
@@ -118,6 +123,13 @@ def opencode_config_problem(path: str | Path | None) -> str | None:
     if not any(key in data for key in ("provider", "model", "$schema", "mcp", "agent")):
         return "defines no provider and no model - OpenCode would run on its own defaults, not on the gateway"
     return None
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def describe_failure(stdout: str | None, stderr: str | None) -> str:
@@ -181,7 +193,13 @@ def opencode_environment(config: dict) -> dict[str, str]:
     definition kept outside the repository (the LiteLLM gateway, decided
     8 September 2026) reaches OpenCode regardless of the working directory
     the board runs from. An empty setting leaves OpenCode's own lookup
-    (global config, then the working directory) untouched."""
+    (global config, then the working directory) untouched.
+
+    Every variable of the server process is inherited, including ones
+    unrelated to OpenCode: that is what ``{env:NAME}`` placeholders in an
+    opencode.json need, and the price is that a secret in the environment
+    is visible to the opencode process too.
+    """
     env = dict(os.environ)
     config_file = _config_key(config, "provider.opencode.config_file", "")
     if config_file:
@@ -281,33 +299,35 @@ class OpenCodeProvider(AiProvider):
         binary lists it. If the probe itself fails, no optional flag is
         passed and the run proceeds on the flags every version has."""
         if self._supported is None:
-            try:
-                probe = subprocess.run(
-                    [self._binary, "run", "--help"], capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=60,
-                    env=opencode_environment(self._config),
-                )
-                help_text = (probe.stdout or "") + (probe.stderr or "")
-            except (OSError, subprocess.TimeoutExpired):
-                help_text = ""
-            self._supported = frozenset(flag for flag in _OPTIONAL_FLAGS if flag in help_text)
+            with _FLAGS_LOCK:
+                cached = _FLAGS.get(self._binary)
+                if cached is None:
+                    try:
+                        probe = subprocess.run(
+                            [self._binary, "run", "--help"], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=60,
+                            env=opencode_environment(self._config),
+                        )
+                        help_text = (probe.stdout or "") + (probe.stderr or "")
+                    except (OSError, subprocess.TimeoutExpired):
+                        help_text = ""
+                    cached = frozenset(flag for flag in _OPTIONAL_FLAGS if flag in help_text)
+                    _FLAGS[self._binary] = cached
+            self._supported = cached
         return self._supported
 
-    def _build_command(self, model_string: str, prompt: str | None = None) -> list[str]:
+    def _build_command(self, model_string: str) -> list[str]:
         """The command line without the prompt: the prompt goes to ``_run``
-        as standard input (OC-10). ``prompt`` is accepted and ignored so
-        older callers keep working."""
+        as standard input (OC-10)."""
         command = [self._binary, "run", "--format", "json", "--model", model_string]
         supported = self._supported_flags()
         if self._cwd is not None and "--dir" in supported:
             command += ["--dir", str(self._cwd)]
         # Auto-approval defaults to True: a headless run that stops to ask
-        # for permission would hang (OC-6). Spec 3.8 records why that is
-        # safe here - the MCP surface exposes nothing above action class B,
-        # and outlook.save_draft / outlook.send are not registered at all,
-        # only propose_* variants that change nothing. This default is
-        # configuration for this tool surface, not a licence to extend the
-        # same treatment to a future tool of class C or above. The flag is
+        # for permission would hang (OC-6). The prompts tell the model it
+        # has no tools and needs none; what --auto would approve is whatever
+        # file or shell tool OpenCode offers in its working directory, which
+        # is why the board never runs OpenCode inside the vault. The flag is
         # only passed when the installed version accepts it (OC-7).
         auto_approve = _config_key(self._config, "provider.opencode.auto_approve", True)
         if auto_approve and "--auto" in supported:
@@ -341,7 +361,10 @@ class OpenCodeProvider(AiProvider):
                 out, err = proc.communicate(input=prompt, timeout=self._timeout_seconds)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.communicate()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass          # a grandchild holding the pipes must not hang the board
                 raise
             finally:
                 with _ACTIVE_LOCK:
@@ -404,9 +427,11 @@ class OpenCodeProvider(AiProvider):
                     saw_text = True
                     text_parts.append(text)
             elif event_type == "step_finish":
-                tokens = part.get("tokens", {})
-                step_input = tokens.get("input")
-                step_output = tokens.get("output")
+                tokens = part.get("tokens")
+                if not isinstance(tokens, dict):
+                    tokens = {}
+                step_input = _int_or_none(tokens.get("input"))
+                step_output = _int_or_none(tokens.get("output"))
                 if step_input is not None:
                     input_tokens = (input_tokens or 0) + step_input
                 if step_output is not None:
@@ -464,7 +489,7 @@ class OpenCodeProvider(AiProvider):
         try:
             target = Path(str(folder)) / "opencode-debug"
             target.mkdir(parents=True, exist_ok=True)
-            path = target / f"run-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.jsonl"
+            path = target / f"run-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{threading.get_ident()}.jsonl"
             path.write_text(stdout or "", encoding="utf-8")
             return path
         except OSError:

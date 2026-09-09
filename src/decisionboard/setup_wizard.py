@@ -34,17 +34,16 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
+import http.client
+import urllib.parse
 from pathlib import Path
 
-from .agent.opencode_client import opencode_config_problem
+from .agent.opencode_client import OpenCodeError, OpenCodeProvider, describe_failure, opencode_config_problem
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
 EXAMPLE_CONFIG = CONFIG_DIR / "config.example.json"
 LOCAL_CONFIG = CONFIG_DIR / "config.local.json"
-DEFAULT_MODEL = ""
 _MODELS_SHOWN = 15
 TEST_PROMPT = "Reply with the single word OK and nothing else."
 
@@ -245,7 +244,6 @@ class Wizard:
         info["found"] = True
         self.ok(f"opencode found: {self.opencode}")
         mine = str(Path(self.opencode).resolve()).lower()
-        mine = str(Path(self.opencode).resolve()).lower()
         others = [p for p in _all_on_path("opencode") if str(Path(p).resolve()).lower() != mine]
         if others:
             # Listed, never started: the npm package ships a stub that
@@ -351,7 +349,7 @@ class Wizard:
 
         current_model = provider.setdefault("models", {}).get("board") or ""
         if not _looks_like_model_string(current_model):
-            current_model = defined[0] if defined else _first_listed_model(info.get("models", "")) or DEFAULT_MODEL
+            current_model = defined[0] if defined else _first_listed_model(info.get("models", ""))
         model = self.model_arg or self.choose_model(current_model, defined, info.get("models", ""))
         if defined and model not in defined:
             self.warn(f"{model} is not defined in {Path(config_file).name} (defined: {', '.join(defined)}).")
@@ -589,12 +587,12 @@ class Wizard:
     def gateway_models(self, base_url: str, api_key: str) -> list[str]:
         """``GET <baseURL>/models`` on the gateway: every model the company
         endpoint serves, not only the one the file defines."""
+        if not base_url.lower().startswith("https://"):
+            return ["gateway model list not asked for: the key is only sent over https, and this baseURL is not."]
         url = base_url.rstrip("/") + "/models"
-        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
-        except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as exc:
+            payload = json.loads(_gateway_get(url, api_key, timeout=15).decode("utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
             return [f"gateway model list not reachable ({exc}) - only the model(s) defined above are known."]
         ids = sorted(str(item.get("id")) for item in (payload.get("data") or []) if isinstance(item, dict) and item.get("id"))
         if not ids:
@@ -624,7 +622,6 @@ class Wizard:
         if not vault:
             self.warn("no knowledge source set - the board answers from the question alone until you set one in Options.")
             return
-        sys.path.insert(0, str(REPO_ROOT / "src"))
         from decisionboard.knowledge import KnowledgeUnavailable, load_vault
         try:
             notes = load_vault(vault)
@@ -717,8 +714,6 @@ class Wizard:
         started = time.monotonic()
         result = self._run(command, timeout=180)
         duration = time.monotonic() - started
-        sys.path.insert(0, str(REPO_ROOT / "src"))
-        from decisionboard.agent.opencode_client import describe_failure
         if result.returncode != 0 and is_database_mismatch(result.stdout, result.stderr) and self.repair_database():
             self.say("        retrying the test call...")
             started = time.monotonic()
@@ -758,8 +753,6 @@ class Wizard:
         actually has to work (8 September 2026, when the board failed with
         "no answer text" after that test had passed)."""
         self.say("\n6b. Test call shaped like a real board call")
-        sys.path.insert(0, str(REPO_ROOT / "src"))
-        from decisionboard.agent.opencode_client import OpenCodeError, OpenCodeProvider
         from decisionboard.agent.provider import TASK_BOARD
         from decisionboard.board import _member_prompt
         from decisionboard.knowledge import gather
@@ -820,7 +813,7 @@ class Wizard:
         session history is in there; ``auth.json`` is untouched. Asks first
         when interactive; returns whether anything was renamed."""
         folder = self.opencode_data_dir()
-        candidates = sorted(p for p in folder.glob("*.db*") if p.is_file()) if folder.is_dir() else []
+        candidates = sorted(p for p in folder.glob("*.db*") if p.is_file() and not p.name.endswith(".bak")) if folder.is_dir() else []
         if not candidates:
             self.warn(f"OpenCode's database was not found under {folder} - rename it by hand where OpenCode keeps it.")
             return False
@@ -895,6 +888,24 @@ class Wizard:
             from decisionboard.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
         return 1 if self.failures else 0
+
+
+def _gateway_get(url: str, api_key: str, *, timeout: int) -> bytes:
+    """One GET with the gateway key, https only, no redirects: ``urllib``
+    would re-send the Authorization header to whatever host a 3xx names,
+    http included. A redirect or an error status is an ``OSError``."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https":
+        raise OSError("the gateway key is only sent over https")
+    connection = http.client.HTTPSConnection(parts.hostname, parts.port or 443, timeout=timeout)
+    try:
+        connection.request("GET", parts.path or "/", headers={"Authorization": f"Bearer {api_key}"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise OSError(f"gateway answered {response.status} {response.reason}")
+        return response.read()
+    finally:
+        connection.close()
 
 
 def _get(config: dict, dotted: str):

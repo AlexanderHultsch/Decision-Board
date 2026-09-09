@@ -146,12 +146,6 @@ button.ghost { background: transparent; }
 .member-tile.failed .state { color: var(--danger); }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 35%, transparent); } 50% { box-shadow: 0 0 0 9px transparent; } }
 
-.member-chips { display: flex; gap: .6rem; flex-wrap: wrap; }
-.member-chip { display: inline-flex; align-items: center; gap: .55rem; padding: .35rem .8rem .35rem .4rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); }
-.member-chip .avatar { width: 30px; height: 30px; }
-.member-chip .avatar svg { width: 16px; height: 16px; }
-.member-chip.active { border-color: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
-.member-chip.failed { opacity: .5; text-decoration: line-through; }
 .member-card { border-left: 4px solid; }
 .member-card dl { display: grid; grid-template-columns: 9.5rem 1fr; gap: .4rem 1rem; margin: 0; }
 .member-card dt { color: var(--muted); font-size: .85rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding-top: .1rem; }
@@ -196,8 +190,6 @@ button.ghost { background: transparent; }
 .rounds-done dd { margin: 0 0 .2rem; color: var(--muted); }
 .bullets { margin: 0; padding-left: 1.2rem; }
 .bullets li { margin: .15rem 0; }
-.member-chip.na { opacity: .6; }
-.member-chip.na .avatar { filter: grayscale(1); }
 .na-note { color: var(--muted); font-style: italic; }
 /* Source attribution (9 September 2026): what came from the knowledge net, what the model reasoned */
 .sources li .mark { display: inline-block; width: 1.2em; font-weight: 700; }
@@ -288,9 +280,6 @@ button.member-tile.clickable:hover { border-color: currentColor; }
 .member-tile.na, .member-tile.failed { opacity: .7; }
 .member-tile.failed .name { text-decoration: line-through; }
 .member-tile .name { color: var(--text); font-weight: 600; }
-.member-tile .state { margin-left: auto; font-size: .8rem; color: var(--muted); white-space: nowrap; }
-.member-tile.done .state { color: #15803d; }
-.member-tile.failed .state { color: var(--danger); }
 .direction-tile.done { opacity: 1; display: block; }
 .direction-tile.done .card-head { margin-bottom: .8rem; }
 .direction-tile .card-head { display: flex; align-items: center; gap: .8rem; width: 100%; }

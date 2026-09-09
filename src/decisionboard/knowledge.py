@@ -3,20 +3,23 @@ section 5).
 
 A vault is a folder of Markdown files. Nothing here knows or cares whether
 Obsidian is installed - the board reads ``.md`` files under the configured
-folder and nothing else. Selection is deterministic Python (AP-1): notes are
-ranked by how many of the question's terms appear in their title, tags,
-file name and body, and the best-ranked notes are packed into a configured
-token budget. When the whole vault fits into the budget, the whole vault is
-sent - ranking then only decides the order.
+folder and nothing else. Selection is deterministic Python (AP-1): every
+note is split at its headings, the sections are ranked by how many of the
+question's terms - and, for a member's own block, the member's own terms -
+appear in the note's title, tags, file name, the heading and the section
+text, and the best-ranked sections are packed into a token budget. KPI
+notes (``kind: kpi``) and the roles folder are never part of that ranking:
+they are attached to their member deterministically.
 
 The model never lists or reads files itself. It receives what this module
-selected, as one text block appended to the ``Context`` input every member
-already gets (FR-3.7).
+selected, as one text block per member (FR-3.7).
 """
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -24,6 +27,7 @@ from pathlib import Path
 DEFAULT_TOKEN_BUDGET = 6000
 _CHARS_PER_TOKEN = 4          # a rough, deliberately conservative estimate
 _SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules"}
+MAX_NOTE_BYTES = 2 * 1024 * 1024   # a note larger than this is skipped, not read into every prompt
 _STOPWORDS = {
     # English
     "the", "and", "for", "with", "that", "this", "from", "are", "was", "were",
@@ -67,6 +71,7 @@ class Section:
     note: Note
     heading: str          # the heading line without its hashes; "" for the opening part or a whole note
     body: str             # the section's text, heading line included
+    index: int = 0        # position within the note, for document order and for a unique id
 
     @property
     def relative(self) -> str:
@@ -138,7 +143,7 @@ def _front_matter(text: str) -> dict[str, str | list[str]]:
 
 
 def _load_note(vault: Path, path: Path) -> Note:
-    body = path.read_text(encoding="utf-8", errors="replace")
+    body = path.read_text(encoding="utf-8-sig", errors="replace")    # -sig: a BOM must not void the front matter
     meta = _front_matter(body)
     title = meta.get("title")
     if not isinstance(title, str) or not title:
@@ -174,32 +179,66 @@ def _load_note(vault: Path, path: Path) -> Note:
                 kind=str(kind).lower(), member=members, projects=projects)
 
 
+# Notes already read, per vault: path -> (mtime_ns, size, Note). A second
+# walk in the same process only stats the files and re-reads what changed,
+# so "read fresh on every question" stays true at the cost of a stat per
+# file instead of a read (the estimate on the confirm screen walks the
+# vault on every slider move).
+_VAULT_CACHE: dict[str, dict[str, tuple[int, int, Note]]] = {}
+_VAULT_CACHE_LOCK = threading.Lock()
+
+
 def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ()) -> list[Note]:
     """Every ``.md`` note under ``vault_path``, Obsidian's own folders
     skipped, plus any top-level ``skip_subfolders`` (the Roles folder: a
     member's profile is mandatory context for that member, section 3.4,
-    not a note competing for the budget). Raises ``KnowledgeUnavailable``
-    when the folder cannot be read."""
+    not a note competing for the budget). Symbolic links are not followed
+    and a note over ``MAX_NOTE_BYTES`` is left out: the vault is the
+    boundary of what reaches a prompt. Raises ``KnowledgeUnavailable`` when
+    the folder cannot be read."""
     vault = Path(vault_path)
     skip_parts = [tuple(part.lower() for part in Path(name).parts) for name in skip_subfolders if name]
     if not vault.exists():
         raise KnowledgeUnavailable(f"knowledge source not found: {vault}")
     if not vault.is_dir():
         raise KnowledgeUnavailable(f"knowledge source is not a folder: {vault}")
+    key = str(vault.resolve())
+    with _VAULT_CACHE_LOCK:
+        cached = dict(_VAULT_CACHE.get(key, {}))
     notes: list[Note] = []
+    fresh: dict[str, tuple[int, int, Note]] = {}
     try:
-        for path in sorted(vault.rglob("*.md")):
-            parts = path.relative_to(vault).parts
-            if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
-                continue
-            lowered = tuple(part.lower() for part in parts[:-1])
+        for root, dirs, files in os.walk(vault, followlinks=False):
+            root_path = Path(root)
+            rel_parts = root_path.relative_to(vault).parts
+            dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")
+                             and not (root_path / d).is_symlink())
+            lowered = tuple(part.lower() for part in rel_parts)
             if any(lowered[:len(skip)] == skip for skip in skip_parts if skip):
+                dirs[:] = []
                 continue
-            if not path.is_file():
-                continue
-            notes.append(_load_note(vault, path))
+            for name in sorted(files):
+                if not name.lower().endswith(".md"):
+                    continue
+                path = root_path / name
+                if path.is_symlink():
+                    continue
+                stat = path.stat()
+                if stat.st_size > MAX_NOTE_BYTES:
+                    continue
+                relative = path.relative_to(vault).as_posix()
+                entry = cached.get(relative)
+                if entry is not None and entry[0] == stat.st_mtime_ns and entry[1] == stat.st_size:
+                    note = entry[2]
+                else:
+                    note = _load_note(vault, path)
+                fresh[relative] = (stat.st_mtime_ns, stat.st_size, note)
+                notes.append(note)
     except OSError as exc:
         raise KnowledgeUnavailable(f"knowledge source could not be read: {vault} ({exc})") from exc
+    with _VAULT_CACHE_LOCK:
+        _VAULT_CACHE[key] = fresh
+    notes.sort(key=lambda n: n.relative)
     return notes
 
 
@@ -283,15 +322,18 @@ def split_sections(note: Note) -> list[Section]:
     heading = ""
     content_seen = False          # anything beyond the front matter in ``current``
     in_front_matter = lines[:1] == ["---"]
+    in_fence = False              # a "# line" inside a code block is code, not a heading
     for index, line in enumerate(lines):
         if in_front_matter:
             current.append(line)
             if index > 0 and line.strip() == "---":
                 in_front_matter = False
             continue
-        match = _SECTION_HEADING.match(line)
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        match = None if in_fence else _SECTION_HEADING.match(line)
         if match and content_seen:
-            sections.append(Section(note=note, heading=heading, body="\n".join(current).strip()))
+            sections.append(Section(note=note, heading=heading, body="\n".join(current).strip(), index=len(sections)))
             current, heading, content_seen = [], match.group(2).strip(), False
         elif match:
             heading = match.group(2).strip()
@@ -299,35 +341,71 @@ def split_sections(note: Note) -> list[Section]:
         if line.strip():
             content_seen = True
     if any(l.strip() for l in current):
-        sections.append(Section(note=note, heading=heading, body="\n".join(current).strip()))
+        sections.append(Section(note=note, heading=heading, body="\n".join(current).strip(), index=len(sections)))
     return sections or [Section(note=note, heading="", body=text)]
 
 
-def score_section(section: Section, terms: list[str]) -> int:
+def score_section(section: Section, terms: list[str], lowered: "_Lowered | None" = None) -> int:
     if not terms:
         return 0
-    note = section.note
-    title = note.title.lower()
-    name = note.path.stem.lower()
-    heading = section.heading.lower()
-    tags = " ".join(note.tags).lower()
-    body = section.body.lower()
+    low = lowered or _Lowered.of(section)
     score = 0
     for term in terms:
-        if term in title or term in name:
+        if term in low.title or term in low.name:
             score += 5
-        if heading and term in heading:
+        if low.heading and term in low.heading:
             score += 4
-        if term in tags:
+        if term in low.tags:
             score += 5
-        score += min(body.count(term), 5)
+        score += min(low.body.count(term), 5)
     return score
+
+
+@dataclass(frozen=True)
+class _Lowered:
+    """A section's searchable text, lower-cased once: ranking runs per
+    member, and lower-casing a whole vault eight times is waste."""
+    title: str
+    name: str
+    heading: str
+    tags: str
+    body: str
+
+    @staticmethod
+    def of(section: Section) -> "_Lowered":
+        note = section.note
+        return _Lowered(note.title.lower(), note.path.stem.lower(), section.heading.lower(),
+                        " ".join(note.tags).lower(), section.body.lower())
+
+
+@dataclass
+class _Prepared:
+    """The vault split once for several selections: the sections, their
+    lower-cased text and each note's mtime."""
+    sections: list[Section]
+    lowered: dict[int, _Lowered]
+    mtimes: dict[str, float]
+
+    @staticmethod
+    def of(notes: list[Note]) -> "_Prepared":
+        sections = [section for note in notes for section in split_sections(note)]
+        mtimes: dict[str, float] = {}
+        for note in notes:
+            try:
+                mtimes[note.relative] = note.path.stat().st_mtime
+            except OSError:
+                mtimes[note.relative] = 0.0
+        return _Prepared(sections, {id(s): _Lowered.of(s) for s in sections}, mtimes)
+
+
+FORCED_CAP_TOKENS = 12000     # manual picks on top of the budget stop here, whatever the slider says
 
 
 def select_sections(
     notes: list[Note], question: str, token_budget: int = DEFAULT_TOKEN_BUDGET,
     *, extra_terms: list[str] | tuple[str, ...] = (), pinned: list[Note] | None = None,
     extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
+    prepared: "_Prepared | None" = None,
 ) -> KnowledgeSelection:
     """Rank every section of every note against the question - and, for a
     member's own block, against ``extra_terms`` (the member's targets,
@@ -339,7 +417,8 @@ def select_sections(
     member_terms = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
     forced = {str(x) for x in extra}
     banned = {str(x) for x in exclude}
-    all_sections = [section for note in notes for section in split_sections(note)
+    prep = prepared or _Prepared.of(notes)
+    all_sections = [section for section in prep.sections
                     if section_id(section) not in banned and section.relative not in banned]
     pinned_paths = {n.relative for n in (pinned or [])}
 
@@ -348,40 +427,51 @@ def select_sections(
 
     def rank(section: Section) -> tuple:
         pin = 0 if is_forced(section) else 1 if section.relative in pinned_paths else 2
-        score = score_section(section, terms) * 2 + score_section(section, member_terms)
-        mtime = -section.note.path.stat().st_mtime if section.note.path.exists() else 0
-        return (pin, -score, mtime, section.relative)
+        low = prep.lowered.get(id(section))
+        score = score_section(section, terms, low) * 2 + score_section(section, member_terms, low)
+        return (pin, -score, -prep.mtimes.get(section.relative, 0.0), section.relative, section.index)
 
     ranked = sorted(all_sections, key=rank)
     selection = KnowledgeSelection(vault_path=None, total_notes=len(notes))
     if not notes:
         return selection
     remaining = token_budget - estimate_tokens("## Knowledge from the vault\n\n")
-    pinned_share = token_budget // 4
+    pinned_share = (token_budget // 4) // max(len(pinned_paths), 1)   # per pinned note, so no project page starves another
     chosen: list[tuple[Section, str]] = []
-    pinned_used = 0
+    pinned_used: dict[str, int] = {}
+    cut_once = False
     for section in ranked:
         label = f"### {section.relative}" + (f" - {section.heading}" if section.heading else "")
         chunk = f"{label}\n{section.body}\n\n"
         cost = estimate_tokens(chunk)
         if is_forced(section):
+            if selection.forced_tokens + cost > FORCED_CAP_TOKENS:
+                selection.truncated = True      # the picks alone would overflow the model; the rest is dropped
+                continue
             chosen.append((section, chunk))    # a manual pick is sent whole, on top of the budget
             selection.forced_tokens += cost
             continue
-        if section.relative in pinned_paths and pinned_used + cost > pinned_share and chosen:
-            continue          # the project page may not eat the whole budget
+        if section.relative in pinned_paths and pinned_used.get(section.relative, 0) + cost > pinned_share and chosen:
+            continue          # a project page may not eat the whole budget
         if cost <= remaining:
             chosen.append((section, chunk))
             remaining -= cost
             if section.relative in pinned_paths:
-                pinned_used += cost
+                pinned_used[section.relative] = pinned_used.get(section.relative, 0) + cost
             continue
-        room_chars = max(remaining, 0) * _CHARS_PER_TOKEN - len(label) - 40
-        if room_chars > 200:
+        if remaining < 50:
+            break             # the budget is spent
+        room_chars = remaining * _CHARS_PER_TOKEN - len(label) - 40
+        if room_chars > 200 and not cut_once:
+            # This section does not fit whole: cut it once to what is left,
+            # then keep looking for smaller sections that still fit.
             cut = section.body[:room_chars]
             chosen.append((section, f"{label}\n{cut}\n[... cut to fit the token budget]\n\n"))
             selection.truncated = True
-        break
+            cut_once = True
+            remaining = 0
+            break
+        continue              # too big: a smaller, lower-ranked section may still fit
     # Sections of one note stay together, in the note's own order, under the
     # note's first appearance in the ranking.
     order: list[str] = []
@@ -393,7 +483,7 @@ def select_sections(
         by_note[section.relative].append((section, chunk))
     parts: list[str] = []
     for relative in order:
-        items = sorted(by_note[relative], key=lambda item: item[0].note.body.find(item[0].body[:60]))
+        items = sorted(by_note[relative], key=lambda item: item[0].index)
         note_text = "".join(chunk for _s, chunk in items)
         parts.append(note_text)
         selection.notes.append(items[0][0].note)
@@ -412,23 +502,6 @@ def query_terms(question: str) -> list[str]:
             continue
         seen.append(word)
     return seen
-
-
-def score_note(note: Note, terms: list[str]) -> int:
-    if not terms:
-        return 0
-    title = note.title.lower()
-    name = note.path.stem.lower()
-    tags = " ".join(note.tags).lower()
-    body = note.body.lower()
-    score = 0
-    for term in terms:
-        if term in title or term in name:
-            score += 5
-        if term in tags:
-            score += 5
-        score += min(body.count(term), 5)
-    return score
 
 
 def select_notes(
@@ -455,11 +528,19 @@ def _pinned(notes: list[Note], projects: list[str]) -> list[Note]:
     wanted = {p.lower() for p in projects}
     if not wanted:
         return []
-    return [n for n in notes if n.kind == "project" and any(p.lower() in wanted for p in n.projects)]
+    return [n for n in notes if n.kind == "project"
+            and (n.title.strip().lower() in wanted or any(p.lower() in wanted for p in n.projects))]
 
 
 def section_id(section: Section) -> str:
-    return f"{section.relative}#{section.heading}" if section.heading else section.relative
+    """``path#heading`` for a section, the path alone for a whole note; a
+    repeated heading gets its position appended so the ids stay unique."""
+    if not section.heading:
+        return section.relative if section.index == 0 else f"{section.relative}#{section.index}"
+    same = [s for s in split_sections(section.note) if s.heading == section.heading]
+    if len(same) > 1 and same[0].index != section.index:
+        return f"{section.relative}#{section.heading}#{section.index}"
+    return f"{section.relative}#{section.heading}"
 
 
 def outline(config: dict, projects=None) -> list[dict]:
@@ -472,7 +553,8 @@ def outline(config: dict, projects=None) -> list[dict]:
     for note in notes:
         sections = split_sections(note)
         result.append({"path": note.relative, "title": note.title, "kind": note.kind,
-                       "sections": [{"id": section_id(s), "heading": s.heading or "(whole note)" if len(sections) == 1 else s.heading or "(opening)",
+                       "sections": [{"id": section_id(s),
+                                     "heading": s.heading or ("(whole note)" if len(sections) == 1 else "(opening)"),
                                      "tokens": estimate_tokens(s.body)} for s in sections]})
     return result
 
@@ -507,12 +589,13 @@ def gather_for_members(
     budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
     result: dict[str, KnowledgeSelection] = {}
     pinned = _pinned(notes, chosen)
+    prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
     for member, terms in member_terms.items():
         if vault is None:
             result[member] = KnowledgeSelection(vault_path=None)
             continue
         selection = select_sections(notes, question, budget, extra_terms=tuple(terms), pinned=pinned,
-                                    extra=extra, exclude=exclude)
+                                    extra=extra, exclude=exclude, prepared=prepared)
         selection.vault_path = vault
         selection.project = ", ".join(chosen) if chosen else None
         result[member] = selection
@@ -544,6 +627,9 @@ def _freshness(note: "Note", today: date, stale_days: int) -> str:
         return ("Last updated: not recorded in this note. Treat every value in it as an "
                 "assumption and say so.")
     age = (today - updated).days
+    if age < 0:
+        return (f"Last updated {updated.isoformat()}, which is in the future: check the date before "
+                "you rely on a value from it.")
     when = f"Last updated {updated.isoformat()}, {age} day(s) ago."
     if age > stale_days:
         return (f"{when} **This is older than {stale_days} days: say so before you rely on a value "
@@ -581,11 +667,22 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
             chunk = f"### {note.relative}\n{_freshness(note, day, stale_days)}\n\n{note.body.strip()}"
             blocks.setdefault(member, []).append(chunk)
     result: dict[str, str] = {}
+    limit = KPI_TOKEN_CAP * _CHARS_PER_TOKEN
     for member, chunks in blocks.items():
-        text = "\n\n".join(chunks)
-        limit = KPI_TOKEN_CAP * _CHARS_PER_TOKEN
-        if len(text) > limit:
-            text = text[:limit] + "\n[... cut to fit the KPI budget]"
+        # Whole notes only: a KPI table cut mid-row, or a note without its
+        # freshness line, is exactly the "number without its date" this
+        # module exists to prevent.
+        kept: list[str] = []
+        used = 0
+        for chunk in chunks:
+            if used + len(chunk) > limit and kept:
+                break
+            kept.append(chunk[:limit] if len(chunk) > limit else chunk)
+            used += len(chunk)
+        omitted = len(chunks) - len(kept)
+        text = "\n\n".join(kept)
+        if omitted:
+            text += f"\n\n[{omitted} further KPI note(s) omitted: over the KPI budget]"
         result[member] = text
     return result
 

@@ -76,7 +76,7 @@ class TestClarify(unittest.TestCase):
 
     def test_answers_are_folded_into_the_context_deterministically(self):
         clarification = clarify.Clarification(topic="T", context="Background.", questions=["Q1?", "Q2?"])
-        context = clarify.merge_answers(clarification, ["A1", ""])
+        context = clarify.merge_rounds(clarification.context, [(clarification.questions, ["A1", ""])])
         self.assertIn("Background.", context)
         self.assertIn("Q: Q1?\nA: A1", context)
         self.assertIn("Q: Q2?\nA: (not answered)", context)
@@ -89,6 +89,12 @@ class TestMemoryWriter(unittest.TestCase):
             self.assertEqual(memory_writer.safe_relative_path(vault, "../../etc/passwd.md", "Topic"), "etc/passwd.md")
             self.assertTrue(memory_writer.safe_relative_path(vault, "", "My Topic").endswith("My Topic.md"))
             self.assertEqual(memory_writer.safe_relative_path(vault, "Decisions/note", "x"), "Decisions/note.md")
+
+    def test_dotted_tricks_and_null_bytes_stay_inside_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            self.assertEqual(memory_writer.safe_relative_path(vault, "..:/..:/evil.md", "Topic"), "evil.md")
+            self.assertTrue(memory_writer.safe_relative_path(vault, "a\x00b.md", "Topic").endswith("ab.md"))
 
     def test_propose_parses_and_marks_create_or_append(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,7 +126,7 @@ class TestMemoryWriter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             proposal = memory_writer.MemoryProposal(path="N.md", title="N", tags=[], body="B", mode="create")
-            preview = memory_writer.preview(vault, proposal)
+            preview = memory_writer.preview(proposal)
             target = memory_writer.write_note(vault, proposal)
             self.assertEqual(target.read_text(encoding="utf-8"), preview)
 

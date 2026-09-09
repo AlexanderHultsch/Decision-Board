@@ -30,27 +30,6 @@ def audit_log_path(audit_folder: Path | str) -> Path:
     return Path(audit_folder) / AUDIT_LOG_NAME
 
 
-def read_entries(audit_folder: Path | str, limit: int | None = None) -> list[dict[str, Any]]:
-    """The audit trail, oldest first, or the last ``limit`` entries.
-
-    A line that does not parse is returned as ``{"malformed": <the line>}``
-    rather than skipped: a trail with a hole in it must show the hole (NFR-8).
-    """
-    path = audit_log_path(audit_folder)
-    if not path.exists():
-        return []
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if limit is not None:
-        lines = lines[-limit:]
-    entries = []
-    for line in lines:
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            entries.append({"malformed": line})
-    return entries
-
-
 def _append(audit_folder: Path | str, entry: dict[str, Any]) -> Path:
     folder = Path(audit_folder)
     folder.mkdir(parents=True, exist_ok=True)

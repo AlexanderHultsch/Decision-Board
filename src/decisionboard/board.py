@@ -20,6 +20,13 @@ than reporting "not configured" and carrying on.
 The module renders nothing but the tables and prose FR-3.5 asks Python,
 not the model, to produce - ``render`` turns a ``BoardResult`` into text;
 the CLI (``cli.py``) is the only place that prints it.
+
+Since 9 September 2026 there is also a combined form, ``run_board_combined``:
+one call writes every chosen member's entry and the synthesis. It is not
+the default and it is exactly the batching the paragraph above argues
+against; it exists as a stated cost trade-off (about one call instead of
+N+1), the interface names it, and ``_entry_flags`` checks each entry for
+the convergence the isolation was meant to prevent.
 """
 
 from __future__ import annotations
@@ -212,39 +219,56 @@ def _parse_member_response(text: str) -> dict[str, Any] | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
+    return _parse_member_dict(data)
+
+
+def _parse_member_dict(data: Any) -> dict[str, Any] | None:
+    """One member's answer as the fields the board keeps, or ``None`` when
+    the three required keys are missing."""
     if not isinstance(data, dict) or not all(key in data for key in ("view", "risks", "recommendation")):
         return None
-    risks = data["risks"]
-    if isinstance(risks, list):
-        # One bullet per risk: the interface shows lines starting with "- "
-        # as a list, the same way it shows view and recommendation.
-        risks = "\n".join(f"- {item}" for item in (str(r).strip() for r in risks) if item)
     applies = data.get("applies", True)
     if isinstance(applies, str):
         applies = applies.strip().lower() not in ("false", "no", "0")
-    impact = data.get("impact", "")
-    if isinstance(impact, list):
-        impact = "\n".join(f"- {item}" for item in (str(i).strip() for i in impact) if item)
+    raw_facts = data.get("facts_from_network")
     facts: list[dict[str, Any]] = []
-    for item in data.get("facts_from_network") or []:
+    for item in (raw_facts if isinstance(raw_facts, list) else []):
         if isinstance(item, dict):
             fact, source = str(item.get("fact", "")).strip(), str(item.get("source", "")).strip()
         else:
             fact, source = str(item).strip(), ""
         if fact:
             facts.append({"fact": fact, "source": source})
-    judgement = data.get("own_judgement", "")
-    if isinstance(judgement, list):
-        judgement = "\n".join(f"- {item}" for item in (str(i).strip() for i in judgement) if item)
     return {
-        "view": str(data["view"]),
-        "risks": str(risks),
-        "recommendation": str(data["recommendation"]),
+        "view": _bullets(data["view"]),
+        "risks": _bullets(data["risks"]),          # one bullet per risk; the interface shows "- " lines as a list
+        "recommendation": _bullets(data["recommendation"]),
         "applies": bool(applies),
-        "impact": str(impact or ""),
+        "impact": _bullets(data.get("impact", "")),
         "sources": tuple(facts),
-        "judgement": str(judgement or ""),
+        "judgement": _bullets(data.get("own_judgement", "")),
     }
+
+
+def _bullets(value: Any) -> str:
+    """A model field as text: a string as it is, a list as one "- " bullet
+    per item (nested lists flattened one level), ``None`` as empty - never
+    a Python repr in the reader's face."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            if isinstance(item, list):
+                items.extend(str(x).strip() for x in item if str(x).strip())
+            elif isinstance(item, dict):
+                items.append(", ".join(f"{k}: {v}" for k, v in item.items()))
+            elif str(item).strip():
+                items.append(str(item).strip())
+        return "\n".join(f"- {item}" for item in items)
+    if isinstance(value, dict):
+        return "\n".join(f"- {k}: {v}" for k, v in value.items())
+    return str(value)
 
 
 _SOURCE_STOPWORDS = {"the", "and", "for", "with", "that", "this", "from", "have", "will", "which", "about",
@@ -263,10 +287,15 @@ def verify_sources(facts: list[dict[str, Any]] | tuple[dict[str, Any], ...], sen
     fact must appear in that note. A fact that fails is kept and flagged,
     never dropped: the reader sees what the model claimed and what held."""
     by_key: dict[str, tuple[str, str]] = {}
+    names: dict[str, int] = {}
+    for path in sent:
+        names[_note_key(path).rsplit("/", 1)[-1]] = names.get(_note_key(path).rsplit("/", 1)[-1], 0) + 1
     for path, body in sent.items():
         key = _note_key(path)
         by_key[key] = (path, body)
-        by_key[key.rsplit("/", 1)[-1]] = (path, body)
+        name = key.rsplit("/", 1)[-1]
+        if names[name] == 1:                     # a bare file name only when it is unambiguous
+            by_key[name] = (path, body)
     verdicts: list[dict[str, Any]] = []
     for item in facts:
         fact, source = str(item.get("fact", "")), str(item.get("source", ""))
@@ -278,7 +307,7 @@ def verify_sources(facts: list[dict[str, Any]] | tuple[dict[str, Any], ...], sen
         path, body = hit
         lowered = body.lower()
         words = [w for w in re.findall(r"[\w][\w.,%-]{3,}", fact.lower()) if w.strip(".,%-") not in _SOURCE_STOPWORDS]
-        found = [w for w in words if w in lowered]
+        found = [w for w in words if w in lowered]     # substring, so "6 weeks" matches "6-week" and plurals
         if words and not found:
             verdicts.append({"fact": fact, "source": path, "verified": False,
                              "note": "the note was sent, but none of the fact's words appear in it"})
@@ -290,8 +319,22 @@ def verify_sources(facts: list[dict[str, Any]] | tuple[dict[str, Any], ...], sen
 def _kpi_note_bodies(member_data_text: str) -> dict[str, str]:
     """The KPI notes inside one member's data block, by the ``### path``
     headings ``knowledge.kpi_notes`` writes."""
-    paths = re.findall(r"(?m)^### (.+\.md)\s*$", member_data_text or "")
-    return {path: member_data_text for path in paths}
+    bodies: dict[str, str] = {}
+    for chunk in re.split(r"(?m)^(?=### .+\.md\s*$)", member_data_text or ""):
+        match = re.match(r"^### (.+\.md)\s*$", chunk, re.M)
+        if match:
+            bodies[match.group(1).strip()] = chunk
+    return bodies
+
+
+def _sent_to(member: str, sent_notes: dict[str, str] | None, member_notes: dict[str, dict[str, str]] | None,
+             member_data: dict[str, str] | None) -> dict[str, str]:
+    """Everything this member received from the vault: the shared notes,
+    its own block, its KPI notes - the set its citations are checked against."""
+    sent = dict(sent_notes or {})
+    sent.update((member_notes or {}).get(member, {}))
+    sent.update(_kpi_note_bodies((member_data or {}).get(member, "")))
+    return sent
 
 
 def _summarise_sources(assessments: list[MemberAssessment]) -> dict[str, Any]:
@@ -377,16 +420,30 @@ def _is_tool_only_failure(exc: BaseException) -> bool:
     return any(marker in text for marker in _TOOL_ONLY_MARKERS)
 
 
+class CallFailed(RuntimeError):
+    """A member call that failed, carrying how many calls were made so the
+    cost is counted even when nothing came back."""
+
+    def __init__(self, cause: BaseException, calls: int) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.calls = calls
+
+
 def _complete_with_retry(provider: AiProvider, prompt: str) -> tuple[AiResult, int]:
     """One member call, retried once when the model called tools instead of
     answering (seen 9 September 2026: Manufacturing ran ``glob`` and
-    produced no text). Returns the result and the number of calls made."""
+    produced no text). Returns the result and the number of calls made;
+    raises ``CallFailed`` with the count when both attempts fail."""
     try:
         return provider.complete(TASK_BOARD, prompt), 1
     except Exception as exc:
         if not _is_tool_only_failure(exc):
-            raise
-    return provider.complete(TASK_BOARD, _RETRY_PREFIX + prompt), 2
+            raise CallFailed(exc, 1) from exc
+    try:
+        return provider.complete(TASK_BOARD, _RETRY_PREFIX + prompt), 2
+    except Exception as exc:
+        raise CallFailed(exc, 2) from exc
 
 
 def run_board(
@@ -398,7 +455,6 @@ def run_board(
     options: tuple[str, ...] = (),
     constraints: tuple[str, ...] = (),
     on_member: Callable[[str, str], None] | None = None,
-    roles: dict[str, RoleProfile] | None = None,
     on_assessment: Callable[[MemberAssessment], None] | None = None,
     board: Board | None = None,
     member_data: dict[str, str] | None = None,
@@ -434,11 +490,10 @@ def run_board(
             "AI Board has no model configured - set provider.models.board"
         )
 
-    if board is None and roles is None:
+    if board is None:
         board = load_board(config)
-    if board is not None:
-        roles = board.profiles
-    conduct = board.conduct if board is not None else ""
+    roles = board.profiles
+    conduct = board.conduct
     if members:
         # Decided 9 September 2026: Alex chooses which members are asked;
         # a topic need not concern every swim lane.
@@ -446,7 +501,7 @@ def run_board(
         roles = {name: role for name, role in roles.items() if name.lower() in chosen}
         if not roles:
             raise ValueError("none of the chosen members is on the board")
-    members = tuple(roles)
+    members = tuple(roles)                          # from here on: the members actually run
     if member_data is None:
         # The KPI data each member is judged against, attached deterministically
         # (AP-1) whatever the question - never left to the ranked selection.
@@ -499,25 +554,25 @@ def run_board(
             except Exception:   # a progress display must never take a run down
                 pass
 
-    retries = [0]
-    early: dict[str, MemberAssessment] = {}
+    extra_calls = [0]                               # retries, counted under the lock
+    early: dict[str, MemberAssessment] = {}         # parsed and verified as each answer arrives
     early_lock = threading.Lock()
 
     def _assessment(member: str, parsed: dict[str, Any]) -> MemberAssessment:
-        sent = dict(sent_notes or {})
-        sent.update((member_notes or {}).get(member, {}))
-        sent.update(_kpi_note_bodies(member_data.get(member, "")))
-        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+        parsed["sources"] = tuple(verify_sources(parsed["sources"], _sent_to(member, sent_notes, member_notes, member_data)))
         return MemberAssessment(member=member, **parsed)
 
     def _call(member: str, prompt: str) -> AiResult:
         _notify(member, "running")
         try:
             result, calls = _complete_with_retry(provider, prompt)
-        except Exception:
+        except CallFailed as failed:
+            with early_lock:
+                extra_calls[0] += failed.calls - 1
             _notify(member, "failed")
-            raise
-        retries[0] += calls - 1
+            raise failed.cause
+        with early_lock:
+            extra_calls[0] += calls - 1
         parsed = _parse_member_response(result.text)
         if parsed is not None:
             # Decided 9 September 2026: an answer can be read as soon as it
@@ -547,7 +602,7 @@ def run_board(
             except Exception as exc:
                 errors[index] = exc
 
-    llm_calls = len(members) + retries[0]
+    llm_calls = len(members) + extra_calls[0]
 
     for member, result, error in zip(members, results, errors):
         if error is not None:
@@ -556,18 +611,13 @@ def run_board(
         if member in early:
             assessments.append(early[member])
             continue
-        parsed = _parse_member_response(result.text)
-        if parsed is None:
-            questions = _member_questions(result.text)
-            if questions is not None:
-                asked = " | ".join(questions) if questions else "(none listed)"
-                failed_members.append(f"{member}: asked questions instead of assessing: {asked}")
-            else:
-                failed_members.append(
-                    f"{member}: response did not parse as JSON with view/risks/recommendation"
-                )
-            continue
-        assessments.append(_assessment(member, parsed))
+        # Not in ``early``: the answer did not parse. Say how it failed.
+        questions = _member_questions(result.text)
+        if questions is not None:
+            asked = " | ".join(questions) if questions else "(none listed)"
+            failed_members.append(f"{member}: asked questions instead of assessing: {asked}")
+        else:
+            failed_members.append(f"{member}: response did not parse as JSON with view/risks/recommendation")
 
     if len(assessments) < 2:
         return _log(BoardResult(
@@ -651,27 +701,38 @@ def _combined_prompt(
 
 
 _GENERIC_MIN_TERMS = 1
+_ROLE_TERM_NOISE = _SOURCE_STOPWORDS | {
+    "targets", "judged", "process", "protect", "cannot", "everything", "member", "network", "knowledge",
+    "values", "baseline", "record", "tasks", "official", "owner", "writes", "before", "answering", "question",
+    "touches", "defines", "points", "there", "every", "phase", "itself", "pages", "affected", "swimlanes",
+    "section", "level",
+}
+_ROLE_TERM_SECTIONS = ("## Targets I am judged on", "## Process", "## What I protect when I cannot have everything")
+_role_term_cache: dict[tuple[str, str], frozenset[str]] = {}
 
 
 def _role_terms(role: RoleProfile | None) -> set[str]:
     """Distinctive words from the sections that make a role its own: the
-    targets it is judged on, the process tasks that name it, its title."""
+    targets it is judged on, the process tasks that name it, its title.
+    Cached per profile text: a run asks for them once per member, the
+    combined check once per entry."""
     if role is None:
         return set()
-    text = role.title + " "
-    body = role.body
-    for heading in ("## Targets I am judged on", "## Process", "## What I protect when I cannot have everything"):
-        start = body.find(heading)
-        if start == -1:
-            continue
-        end = body.find("\n## ", start + len(heading))
-        text += body[start:end if end != -1 else None] + " "
-    words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z&-]{4,}", text)}
-    return words - _SOURCE_STOPWORDS - {"targets", "judged", "process", "protect", "cannot", "everything",
-                                        "member", "network", "knowledge", "values", "baseline", "record",
-                                        "tasks", "official", "owner", "process", "writes", "before", "answering",
-                                        "question", "touches", "defines", "points", "there", "every", "phase",
-                                        "itself", "pages", "affected", "swimlanes", "section", "level"}
+    key = (role.title, role.body)
+    cached = _role_term_cache.get(key)
+    if cached is None:
+        text = role.title + " "
+        for heading in _ROLE_TERM_SECTIONS:
+            start = role.body.find(heading)
+            if start == -1:
+                continue
+            end = role.body.find("\n## ", start + len(heading))
+            text += role.body[start:end if end != -1 else None] + " "
+        cached = frozenset(w.lower() for w in re.findall(r"[A-Za-z][A-Za-z&-]{4,}", text)) - _ROLE_TERM_NOISE
+        if len(_role_term_cache) > 256:
+            _role_term_cache.clear()
+        _role_term_cache[key] = cached
+    return set(cached)
 
 
 def _entry_flags(entry: dict[str, Any], role: RoleProfile | None) -> tuple[str, ...]:
@@ -680,7 +741,7 @@ def _entry_flags(entry: dict[str, Any], role: RoleProfile | None) -> tuple[str, 
     terms = _role_terms(role)
     if not terms:
         return ()
-    text = " ".join(str(entry.get(k, "")) for k in ("view", "impact", "risks", "recommendation", "own_judgement")).lower()
+    text = " ".join(str(entry.get(k, "")) for k in ("view", "impact", "risks", "recommendation", "judgement")).lower()
     hits = [t for t in terms if t in text]
     return () if len(hits) >= _GENERIC_MIN_TERMS else ("generic: names none of this role's measures or tasks",)
 
@@ -702,7 +763,7 @@ def _parse_combined(text: str, members: tuple[str, ...]) -> tuple[dict[str, dict
         name = wanted.get(str(item.get("member", "")).strip().lower())
         if name is None or name in entries:
             continue
-        parsed = _parse_member_response(json.dumps(item))
+        parsed = _parse_member_dict(item)
         if parsed is not None:
             entries[name] = parsed
     synthesis = data.get("synthesis") if isinstance(data.get("synthesis"), dict) else None
@@ -759,26 +820,31 @@ def run_board_combined(
                 except Exception:
                     pass
 
+    def _notify_one(member: str, state: str) -> None:
+        if on_member is not None:
+            try:
+                on_member(member, state)
+            except Exception:   # a progress display must never take a run down
+                pass
+
     _notify("running")
     try:
         ai_result, calls = _complete_with_retry(provider, prompt)
-    except Exception:
+    except CallFailed as failed_call:
         _notify("failed")
-        raise
+        raise failed_call.cause
     entries, synthesis_data, _follow = _parse_combined(ai_result.text, names)
+    unparsed = not entries and not synthesis_data
     assessments: list[MemberAssessment] = []
     failed: list[str] = []
     for member in names:
         parsed = entries.get(member)
         if parsed is None:
-            failed.append(f"{member}: no entry in the combined answer")
-            if on_member is not None:
-                on_member(member, "failed")
+            failed.append(f"{member}: " + ("the combined answer did not parse as JSON with members and synthesis"
+                                           if unparsed else "no entry in the combined answer"))
+            _notify_one(member, "failed")
             continue
-        sent = dict(sent_notes or {})
-        sent.update((member_notes or {}).get(member, {}))
-        sent.update(_kpi_note_bodies(member_data.get(member, "")))
-        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+        parsed["sources"] = tuple(verify_sources(parsed["sources"], _sent_to(member, sent_notes, member_notes, member_data)))
         parsed["flags"] = _entry_flags(parsed, roles.get(member))
         assessment = MemberAssessment(member=member, **parsed)
         assessments.append(assessment)
@@ -787,10 +853,7 @@ def run_board_combined(
                 on_assessment(assessment)
             except Exception:
                 pass
-        if on_member is not None:
-            on_member(member, "done")
-    if not entries and not synthesis_data:
-        failed = [f"{m}: the combined answer did not parse as JSON with members and synthesis" for m in names]
+        _notify_one(member, "done")
     if synthesis_data is not None:
         synthesis = _synthesis_text(synthesis_data)
     elif assessments:
@@ -953,7 +1016,9 @@ def ask_follow_up_full(
     With members named (decided 9 September 2026), each of them is asked
     again, in isolation, with its earlier assessment and the conversation
     in front of it, and the synthesis then answers over those new answers:
-    one call per member plus one.
+    one call per member plus one. With ``mode="combined"`` the named
+    members and the board's answer come from one call (``board_combined.md``,
+    "Follow-up turn").
 
     Raises ``AiNotConfiguredError`` under the same conditions ``run_board``
     does, and ``ValueError`` for a blank question."""
@@ -969,17 +1034,19 @@ def ask_follow_up_full(
     calls = 0
     if chosen and mode == "combined":
         # One call: every chosen member's answer and the board's answer together.
-        ai_result, calls = _complete_with_retry(provider, _combined_follow_up_prompt(conversation, chosen, question))
+        try:
+            ai_result, calls = _complete_with_retry(provider, _combined_follow_up_prompt(conversation, chosen, question))
+        except CallFailed as failed_call:
+            conversation.llm_calls += failed_call.calls
+            raise failed_call.cause
         entries, _synthesis, data = _parse_combined(ai_result.text, tuple(chosen))
         for member in chosen:
             parsed = entries.get(member)
             if parsed is None:
                 failed.append(f"{member}: no entry in the combined answer")
                 continue
-            sent = dict(conversation.sent_notes)
-            sent.update(conversation.member_notes.get(member, {}))
-            sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
-            parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+            parsed["sources"] = tuple(verify_sources(
+                parsed["sources"], _sent_to(member, conversation.sent_notes, conversation.member_notes, conversation.member_data)))
             parsed["flags"] = _entry_flags(parsed, (conversation.roles or {}).get(member))
             member_answers.append(MemberAssessment(member=member, **parsed))
         if isinstance(data, dict) and "answer" in data:
@@ -1001,6 +1068,9 @@ def ask_follow_up_full(
                     result, made = future.result()
                     results[member] = result
                     calls += made
+                except CallFailed as failed_call:
+                    results[member] = failed_call.cause
+                    calls += failed_call.calls
                 except Exception as exc:
                     results[member] = exc
                     calls += 1
@@ -1013,10 +1083,8 @@ def ask_follow_up_full(
             if parsed is None:
                 failed.append(f"{member}: response did not parse as JSON with view/risks/recommendation")
                 continue
-            sent = dict(conversation.sent_notes)
-            sent.update(conversation.member_notes.get(member, {}))
-            sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
-            parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+            parsed["sources"] = tuple(verify_sources(
+                parsed["sources"], _sent_to(member, conversation.sent_notes, conversation.member_notes, conversation.member_data)))
             member_answers.append(MemberAssessment(member=member, **parsed))
 
     prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question,

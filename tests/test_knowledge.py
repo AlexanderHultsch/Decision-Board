@@ -178,3 +178,60 @@ class TestSections(unittest.TestCase):
         self.assertIn("Fixtures", blocks["Manufacturing"].text)
         self.assertNotIn("Fixtures", blocks["Finance"].text)
         self.assertEqual(knowledge.gather_for_members({}, "q", {"A": []})["A"].text, "")
+
+
+class TestVaultEdgeCases(unittest.TestCase):
+    """Review of 9 September 2026: BOM, CRLF, code fences, symlinks, size."""
+
+    def test_a_bom_does_not_void_the_front_matter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "K.md").write_text("\ufeff---\nkind: kpi\naffected_swimlanes: [Hardware]\n---\n# K\n", encoding="utf-8")
+            note = knowledge.load_vault(Path(tmp))[0]
+        self.assertEqual(note.kind, "kpi")
+        self.assertEqual(note.member, ("Hardware",))
+
+    def test_crlf_notes_keep_document_order_and_fences_do_not_split(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            body = "# Top\r\n\r\n" + ("intro " * 250) + "\r\n\r\n## Second\r\n\r\n```python\r\n# not a heading\r\n```\r\n" + ("more " * 250) + "\r\n"
+            (Path(tmp) / "N.md").write_bytes(body.encode("utf-8"))
+            notes = knowledge.load_vault(Path(tmp))
+            parts = knowledge.split_sections(notes[0])
+            self.assertEqual([p.heading for p in parts], ["Top", "Second"])
+            selection = knowledge.select_sections(notes, "more", 6000)
+        self.assertEqual([s.heading for s in selection.sections], ["Top", "Second"])   # document order, not rank
+
+    def test_symlinked_folders_and_oversized_notes_stay_out(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            (Path(outside) / "secret.md").write_text("# secret\n", encoding="utf-8")
+            try:
+                (Path(tmp) / "Link").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("no symlinks here")
+            (Path(tmp) / "Big.md").write_text("x" * (knowledge.MAX_NOTE_BYTES + 1), encoding="utf-8")
+            (Path(tmp) / "Ok.md").write_text("# ok\n", encoding="utf-8")
+            names = [n.relative for n in knowledge.load_vault(Path(tmp))]
+        self.assertEqual(names, ["Ok.md"])
+
+    def test_the_cache_rereads_only_what_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "A.md"; a.write_text("# A one\n", encoding="utf-8")
+            first = knowledge.load_vault(Path(tmp))[0]
+            again = knowledge.load_vault(Path(tmp))[0]
+            self.assertIs(first, again)                       # unchanged: the cached note
+            import os, time
+            a.write_text("# A two\n", encoding="utf-8")
+            os.utime(a, (time.time() + 5, time.time() + 5))
+            changed = knowledge.load_vault(Path(tmp))[0]
+        self.assertIn("A two", changed.body)
+
+    def test_manual_picks_are_capped_and_a_project_page_pins_by_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "Huge.md").write_text("# Huge\n\n" + ("word " * 60000), encoding="utf-8")
+            (Path(tmp) / "P.md").write_text("---\nkind: project\ntitle: Dual DCDC\n---\n# Dual DCDC\n\nSOP 2028.\n", encoding="utf-8")
+            notes = knowledge.load_vault(Path(tmp))
+            pinned = knowledge._pinned(notes, ["Dual DCDC"])
+            self.assertEqual([n.relative for n in pinned], ["P.md"])
+            selection = knowledge.select_sections(notes, "anything", 500, pinned=pinned, extra=["Huge.md"])
+        self.assertTrue(selection.truncated)
+        self.assertLessEqual(selection.forced_tokens, knowledge.FORCED_CAP_TOKENS)
+        self.assertEqual(selection.notes[0].relative, "P.md")

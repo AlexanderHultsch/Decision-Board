@@ -525,6 +525,24 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("your question is kept", body["error"])
 
+    def test_only_this_machines_page_may_talk_to_the_server(self):
+        def raw(method, path, headers, body=b""):
+            request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=body or None, method=method, headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status
+            except urllib.error.HTTPError as exc:
+                return exc.code
+        self.assertEqual(raw("GET", "/api/config", {"Host": "evil.example.com"}), 403)                 # DNS rebinding
+        self.assertEqual(raw("GET", "/api/config", {"Host": f"127.0.0.1:{self.port + 1}"}), 403)      # another port
+        self.assertEqual(raw("POST", "/api/sessions", {"Host": f"127.0.0.1:{self.port}", "Origin": "http://evil.example.com",
+                                                        "Content-Type": "application/json"}, b'{"question": "x"}'), 403)
+        self.assertEqual(raw("POST", "/api/sessions", {"Host": f"127.0.0.1:{self.port}", "Content-Type": "text/plain"},
+                             b'{"question": "x"}'), 415)                                                # a "simple" cross-origin POST
+        self.assertEqual(raw("POST", "/api/sessions", {"Host": f"127.0.0.1:{self.port}", "Content-Type": "application/json",
+                                                        "Content-Length": "abc"}, b"{}"), 400)
+        self.assertEqual(raw("GET", "/api/config", {"Host": f"localhost:{self.port}"}), 200)
+
     def test_actions_out_of_order_are_refused(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
         sid = state["id"]

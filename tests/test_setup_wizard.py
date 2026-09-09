@@ -170,7 +170,7 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
                  patch_subprocess(fake_run), \
                  mock.patch.dict(setup_wizard.os.environ, {"LITELLM_KEY": "secret"}), \
-                 mock.patch.object(setup_wizard.urllib.request, "urlopen", lambda req, timeout: FakeResponse()):
+                 mock.patch.object(setup_wizard, "_gateway_get", lambda url, key, timeout: FakeResponse().read()):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=True, out=out,
                                              opencode_config=str(company), roles=str(make_roles(Path(tmp) / "roles")))
                 code = wizard.run()
@@ -182,7 +182,29 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
             self.assertEqual(seen_env.get("OPENCODE_CONFIG"), str(company))
             self.assertIn("model string: azure/Opencode-Kimi-K2.7", text)
             self.assertIn("plain http", text)
-            self.assertIn("claude-sonnet-5", text)
+            self.assertIn("only sent over https", text)          # the key never travels over http
+            self.assertNotIn("claude-sonnet-5", text)
+
+    def test_the_gateway_list_is_fetched_over_https_without_redirects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            company = Path(tmp) / "opencode.json"
+            company.write_text(json.dumps({"provider": {"azure": {"options": {"baseURL": "https://gw.example.com/v1", "apiKey": "{env:LITELLM_KEY}"},
+                                                                    "models": {"Opencode-Kimi-K2.7": {}}}}}), encoding="utf-8")
+            out = io.StringIO()
+            seen = {}
+
+            def fake_get(url, api_key, *, timeout):
+                seen.update(url=url, key=api_key)
+                return json.dumps({"data": [{"id": "Opencode-Kimi-K2.7"}, {"id": "claude-sonnet-5"}]}).encode()
+
+            with mock.patch.object(setup_wizard, "_gateway_get", fake_get), \
+                 mock.patch.dict(setup_wizard.os.environ, {"LITELLM_KEY": "secret"}):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model="azure/Opencode-Kimi-K2.7", run_test=False, out=out)
+                wizard.describe_opencode_config(str(company))
+            self.assertEqual(seen, {"url": "https://gw.example.com/v1/models", "key": "secret"})
+            self.assertIn("claude-sonnet-5", out.getvalue())
+            with self.assertRaises(OSError):
+                setup_wizard._gateway_get("http://gw.example.com/v1/models", "k", timeout=1)
 
     def test_placeholder_key_is_flagged_and_gateway_not_queried(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -191,7 +213,7 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
                                                                    "models": {"m": {}}}}}), encoding="utf-8")
             out = io.StringIO()
             wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False, out=out)
-            with mock.patch.object(setup_wizard.urllib.request, "urlopen", side_effect=AssertionError("must not be called")):
+            with mock.patch.object(setup_wizard, "_gateway_get", side_effect=AssertionError("must not be called")):
                 defined = wizard.describe_opencode_config(str(company))
             self.assertEqual(defined, ["azure/m"])
             self.assertIn("placeholder", out.getvalue())
@@ -343,7 +365,7 @@ class TestProfiles(unittest.TestCase):
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
                  patch_subprocess(lambda command, **kw: mock.Mock(stdout="", stderr="", returncode=0)), \
-                 mock.patch.object(setup_wizard.urllib.request, "urlopen", side_effect=OSError("offline")):
+                 mock.patch.object(setup_wizard, "_gateway_get", side_effect=OSError("offline")):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
                                              out=out, opencode_config=str(company))
                 wizard.run()

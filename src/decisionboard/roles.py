@@ -121,7 +121,7 @@ class RoleProfile:
     source: str           # "configured" or "vault"
     path: Path | None
     icon: str = "person"
-    color: str = PALETTE[0]
+    color: str = ""              # assigned from PALETTE by load_board
     short: str = ""
     order: int = 999
     level: int = DEFAULT_LEVEL           # of the highest-ranked role
@@ -132,7 +132,8 @@ def _strip_front_matter(text: str) -> str:
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
-            return text[end + 4:].lstrip("\n")
+            newline = text.find("\n", end + 1)          # past the closing fence line, CRLF included
+            return (text[newline + 1:] if newline != -1 else "").lstrip("\r\n")
     return text
 
 
@@ -173,13 +174,6 @@ def _member_from_stem(stem: str) -> str:
                 return rest.lstrip(" _-:").strip() or name
     return name
 
-
-def _first_heading(body: str) -> str:
-    match = _H1.search(body)
-    return match.group(1).strip() if match else ""
-
-
-_H1 = re.compile(r"^# +(.+?)\s*$", re.MULTILINE)
 
 
 def _meta_str(meta: dict, key: str) -> str:
@@ -227,6 +221,9 @@ def _make_profile(member: str, meta: dict, body: str, source: str, path: Path | 
 _KEY_LINE = re.compile(r"^(member|title|perspective|icon|color|short|order|kind|level):\s*(.*)$", re.IGNORECASE)
 
 
+_H1 = re.compile(r"^# +(.+?)\s*$", re.MULTILINE)
+
+
 def _sections(body: str) -> list[tuple[str, dict, str]]:
     """(heading, metadata, text) per level-one heading; metadata is the
     ``key: value`` lines directly under the heading."""
@@ -253,7 +250,7 @@ def _sections(body: str) -> list[tuple[str, dict, str]]:
 def parse_file(path: Path, source: str) -> list[RoleProfile]:
     """The one member a file defines - a swim lane - with every role inside
     it ranked by ``level``. Returned as a one-element list."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
     meta = _front_matter(text)
     body = _strip_front_matter(text)
     # A role page names its swim lane as lead_swimlane (the vault's key) or
@@ -263,11 +260,14 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
     roles: list[Role] = []
     for index, (heading, section_meta, section_text) in enumerate(sections):
         roles.append(Role(name=heading, level=_int(section_meta, "level", DEFAULT_LEVEL + index), body=section_text))
+    # The top-ranked role's own metadata counts for the member: remember
+    # where it sits before the sort, the first heading is not always it.
+    top_index = min(range(len(roles)), key=lambda i: (roles[i].level, i)) if roles else 0
     roles.sort(key=lambda role: role.level)
     merged = dict(meta)
     if sections:
         # the top role's own metadata (perspective, icon, ...) counts for the member
-        top_meta = sections[[r.name for r in roles].index(roles[0].name) if roles else 0][1]
+        top_meta = sections[top_index][1]
         for key in _META_KEYS:
             if key in top_meta and key not in merged:
                 merged[key] = top_meta[key]
@@ -329,7 +329,7 @@ def _off_board(path: Path) -> bool:
     tasks can link to it) but does not sit on the board - for example
     Account Management (decided 9 September 2026)."""
     try:
-        meta = _front_matter(path.read_text(encoding="utf-8", errors="replace"))
+        meta = _front_matter(path.read_text(encoding="utf-8-sig", errors="replace"))
     except OSError:
         return False
     value = _meta_str(meta, MEMBERSHIP_KEY.lower()) or _meta_str(meta, "board")
@@ -338,7 +338,7 @@ def _off_board(path: Path) -> bool:
 
 def _kind(path: Path) -> str:
     try:
-        return _meta_str(_front_matter(path.read_text(encoding="utf-8", errors="replace")), "kind").lower()
+        return _meta_str(_front_matter(path.read_text(encoding="utf-8-sig", errors="replace")), "kind").lower()
     except OSError:
         return ""
 
@@ -349,7 +349,7 @@ def _filled(profile: RoleProfile) -> bool:
     return len(content.strip()) >= _MIN_BODY_CHARS
 
 
-def load_folder(folder: Path, source: str) -> tuple[list[RoleProfile], list[tuple[str, str]]]:
+def load_folder(folder: Path, source: str) -> list[RoleProfile]:
     """Every profile the folder defines, unmerged and unfiltered. Whether a
     member is filled is decided after merging (``load_board``): an official
     role description and its addendum can each be short on their own."""
@@ -361,7 +361,7 @@ def load_folder(folder: Path, source: str) -> tuple[list[RoleProfile], list[tupl
             profiles.extend(parse_file(path, source))
         except OSError as exc:
             raise RolesUnavailable(f"role profile could not be read: {path} ({exc})") from exc
-    return profiles, []
+    return profiles
 
 
 def load_conduct(folder: Path) -> tuple[str, list[Path]]:
@@ -374,7 +374,7 @@ def load_conduct(folder: Path) -> tuple[str, list[Path]]:
         candidates = [folder / CONDUCT_NAME]
     if not candidates:
         return "", []
-    texts = [_strip_front_matter(path.read_text(encoding="utf-8", errors="replace")).strip() for path in candidates]
+    texts = [_strip_front_matter(path.read_text(encoding="utf-8-sig", errors="replace")).strip() for path in candidates]
     return "\n\n".join(text for text in texts if text), candidates
 
 
@@ -388,7 +388,7 @@ def load_board(config: dict) -> Board:
         raise RolesUnavailable("no roles folder chosen - the board has no members")
     if not folder.is_dir():
         raise RolesUnavailable(f"roles folder not found: {folder}")
-    parsed, _ = load_folder(folder, source)
+    parsed = load_folder(folder, source)
     ordered = sorted(enumerate(parsed), key=lambda item: (item[1].order, item[0]))
     profiles: dict[str, RoleProfile] = {}
     skipped: list[tuple[str, str]] = []
@@ -406,7 +406,7 @@ def load_board(config: dict) -> Board:
         short = profile.short or _short_name(profile.title)
         profiles[profile.member] = RoleProfile(**{**profile.__dict__, "color": color, "short": short})
 
-    # A member is on the board once its files together say something. A
+    # A member is on the board once its profile says something. A
     # heading with nothing under it is not an opinion.
     for member in [m for m, profile in profiles.items() if not _filled(profile)]:
         files = ", ".join(sorted({p.name for p in [profiles[member].path] if p})) or "no file"
@@ -436,12 +436,6 @@ def _short_name(title: str) -> str:
     first = words[0]
     return (first if len(first) > 3 else " ".join(words[:2]))[:14]
 
-
-def folder_of(profiles: dict[str, RoleProfile]) -> Path | None:
-    for profile in profiles.values():
-        if profile.path is not None:
-            return profile.path.parent
-    return None
 
 
 def summary(board: Board) -> dict[str, object]:
@@ -477,7 +471,7 @@ def members_in(folder: Path) -> list[str]:
         # Below the minimum is not a board, but the caller still wants to
         # know what is there.
         seen: dict[str, RoleProfile] = {}
-        for profile in load_folder(folder, "configured")[0]:
+        for profile in load_folder(folder, "configured"):
             seen.setdefault(profile.member, profile)
         return [member for member, profile in seen.items() if _filled(profile)]
 

@@ -58,7 +58,7 @@
   }
   function avatar(name, cls) {
     const m = meta(name);
-    const icon = ICONS[m.icon] || ICONS.person;
+    const icon = Object.prototype.hasOwnProperty.call(ICONS, m.icon) ? ICONS[m.icon] : ICONS.person;
     return `<span class="avatar ${cls || ""}" style="background:${esc(m.color)}" aria-hidden="true"><svg viewBox="0 0 24 24">${icon}</svg></span>`;
   }
   async function api(method, path, body) {
@@ -129,6 +129,14 @@
   }
   function modeOf(id) { return $(id).value || "individual"; }
   function setMode(id, value) { $(id).value = value; if ($(id).value !== value) $(id).value = "individual"; }
+  // One member's answer as rows: the full assessment, or the reasons why the
+  // topic does not touch it. Used on the member cards and inside follow-ups.
+  function memberBody(a) {
+    if (a.applies === false) {
+      return `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`;
+    }
+    return `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}</dl>`;
+  }
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
   }
@@ -227,16 +235,19 @@
     } catch (err) { setError("options-error", err.message); }
   }
 
-  async function browse() {
-    const btn = $("btn-browse");
+  // One folder or file dialog on the server, its result written into an input.
+  async function browseInto(buttonId, inputId, endpoint, extra) {
+    const btn = $(buttonId);
     btn.disabled = true; btn.textContent = "Choose in the dialog…";
     try {
-      const data = await api("POST", "/api/pick-folder", { initial: $("opt-vault").value });
-      if (data.path) $("opt-vault").value = data.path;
-      else if (data.path === null) $("opt-vault-status").textContent = "No folder chosen (or no folder dialog available on this machine - type the path instead).";
+      const data = await api("POST", endpoint, Object.assign({ initial: $(inputId).value }, extra || {}));
+      if (data.path) $(inputId).value = data.path;
     } catch (err) { setError("options-error", err.message); }
     btn.disabled = false; btn.textContent = "Browse…";
   }
+  const browse = () => browseInto("btn-browse", "opt-vault", "/api/pick-folder", { title: "Choose the knowledge source (Obsidian vault)" });
+  const browseRoles = () => browseInto("btn-browse-roles", "opt-roles", "/api/pick-folder", { title: "Choose the roles folder" });
+  const browseConfigFile = () => browseInto("btn-browse-occonfig", "opt-occonfig", "/api/pick-file");
 
   function renderRolesStatus(r) {
     const el = $("opt-roles-status");
@@ -254,17 +265,6 @@
     $("btn-install-roles").hidden = conduct.length > 0;
   }
 
-  async function browseRoles() {
-    const btn = $("btn-browse-roles");
-    btn.disabled = true; btn.textContent = "Choose in the dialog…";
-    try {
-      const data = await api("POST", "/api/pick-folder", { initial: $("opt-roles").value || $("opt-vault").value,
-        title: "Choose the roles folder (one file per role, or one file with several roles)" });
-      if (data.path) $("opt-roles").value = data.path;
-    } catch (err) { setError("options-error", err.message); }
-    btn.disabled = false; btn.textContent = "Browse…";
-  }
-
   async function installRoles() {
     const btn = $("btn-install-roles");
     btn.disabled = true;
@@ -280,16 +280,6 @@
       if (r.written) $("opt-roles-status").textContent += ` Written ${r.written.length} file(s) to ${r.target}.`;
     } catch (err) { setError("options-error", err.message); }
     btn.disabled = false;
-  }
-
-  async function browseConfigFile() {
-    const btn = $("btn-browse-occonfig");
-    btn.disabled = true; btn.textContent = "Choose in the dialog…";
-    try {
-      const data = await api("POST", "/api/pick-file", { initial: $("opt-occonfig").value });
-      if (data.path) $("opt-occonfig").value = data.path;
-    } catch (err) { setError("options-error", err.message); }
-    btn.disabled = false; btn.textContent = "Browse…";
   }
 
   // -- session flow -----------------------------------------------------
@@ -479,9 +469,10 @@
   }
   function renderMemberSections(e) {
     $("estimate-notes").innerHTML = `<dl>${Object.entries(e.sections || {}).map(([m, secs]) => `<dt>${esc(m)}</dt><dd>${secs.length ? `<ul class="sec-list">${secs.map((s) => `
-      <li><input type="checkbox" data-id="${esc(s.id)}" checked title="Untick to leave this out for every member"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
+      <li><input type="checkbox" data-id="${esc(s.id)}" ${picks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out for every member"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
     $("estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
       const id = box.dataset.id;
+      picks.exclude = picks.exclude.filter((x) => x !== id);
       if (!box.checked) { picks.exclude.push(id); picks.extra = picks.extra.filter((x) => x !== id); }
       saveConfirmDraft(); requestEstimate();
     }));
@@ -669,7 +660,7 @@
     const answers = (t.assessments || []).map((a) => `
       <div class="turn-member" style="border-left-color:${esc(meta(a.member).color)}">
         <div class="who">${esc(a.member)}${a.applies === false ? ' <span class="na-note">· not affected</span>' : ""}</div>
-        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}`}</dl>
+        ${memberBody(a)}
       </div>`).join("");
     const failed = (t.failed_members || []).length ? `<p class="error small">Failed: ${t.failed_members.map(esc).join(" · ")}</p>` : "";
     const details = answers ? `<details class="turn-members"><summary class="muted small">What each member said</summary>${answers}</details>` : "";
@@ -707,7 +698,8 @@
       });
       $("ask-back").hidden = false;
     }
-    const turnsKey = JSON.stringify(session.turns);
+    const last = session.turns[session.turns.length - 1];
+    const turnsKey = `${session.turns.length}:${last ? `${last.pending}:${(last.answer || "").length}:${(last.assessments || []).length}` : ""}`;
     if ($("turns").dataset.key !== turnsKey) {     // redraw only on change: keeps <details> open while polling
       $("turns").innerHTML = session.turns.map(renderTurn).join("");
       $("turns").dataset.key = turnsKey;
@@ -726,10 +718,8 @@
     $("member-cards").innerHTML = Object.keys(session.members).filter((n) => openMembers.has(n) && answered.has(n)).map((name) => {
       const a = answered.get(name);
       return `<div class="card member-card" style="border-left-color:${esc(meta(name).color)}">
-        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${meta(name).level}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${meta(name).roles.length} roles` : ""}</div></div></div>
-        ${a.applies === false
-          ? `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`
-          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}</dl>`}
+        <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${esc(meta(name).level)}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${esc(meta(name).roles.length)} roles` : ""}</div></div></div>
+        ${memberBody(a)}
       </div>`;
     }).join("");
   }
@@ -914,7 +904,7 @@
   $("btn-followup-mode-info").addEventListener("click", () => { $("mode-info").hidden = false; $("mode-info").scrollIntoView({ block: "center" }); });
   $("btn-stats").addEventListener("click", openStats);
   $("btn-stats-close").addEventListener("click", () => { $("stats-dialog").hidden = true; });
-  $("btn-back-home").addEventListener("click", newTopic);
+  $("btn-back-home").addEventListener("click", () => newTopic(false));
   $("btn-run").addEventListener("click", runBoard);
   $("btn-back-questions").addEventListener("click", goBack);
   $("followup-form").addEventListener("submit", followUp);
@@ -925,7 +915,7 @@
   $("btn-close-yes").addEventListener("click", () => closeTopic(true));
   $("btn-write").addEventListener("click", writeMemory);
   $("btn-discard").addEventListener("click", discardMemory);
-  $("btn-new").addEventListener("click", newTopic);
+  $("btn-new").addEventListener("click", () => newTopic(false));
   $("btn-error-home").addEventListener("click", () => newTopic(true));
   $("btn-brand").addEventListener("click", () => newTopic(false));
   $("btn-projects").addEventListener("click", () => toggleProjectMenu());

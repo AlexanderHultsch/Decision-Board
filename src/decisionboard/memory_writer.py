@@ -82,16 +82,27 @@ def safe_relative_path(vault: Path, proposed: str, fallback_title: str) -> str:
     candidate = (proposed or "").strip().replace("\\", "/").lstrip("/")
     if not candidate.lower().endswith(".md"):
         candidate = f"{DEFAULT_SUBFOLDER}/{_slug(fallback_title)}.md" if not candidate else candidate + ".md"
-    parts = [part for part in candidate.split("/") if part not in ("", ".", "..")]
-    parts = [re.sub(r'[<>:"|?*]', "", part).strip() for part in parts]
-    parts = [part for part in parts if part]
+    # Sanitise first, then drop ".." - the other way round, '..:' would be
+    # cleaned into '..' after the filter had run.
+    parts = [re.sub(r'[<>:"|?*\x00]', "", part).strip() for part in candidate.split("/")]
+    parts = [part for part in parts if part not in ("", ".", "..")]
     if not parts:
         parts = [DEFAULT_SUBFOLDER, f"{_slug(fallback_title)}.md"]
-    relative = "/".join(parts)
-    resolved = (vault / relative).resolve()
-    if vault.resolve() not in resolved.parents:
-        relative = f"{DEFAULT_SUBFOLDER}/{_slug(fallback_title)}.md"
-    return relative
+    fallback = f"{DEFAULT_SUBFOLDER}/{_slug(fallback_title)}.md"
+    for relative in ("/".join(parts), fallback):
+        if _inside(vault, relative):
+            return relative
+    raise ValueError(f"no safe path inside the vault for {proposed!r}")
+
+
+def _inside(vault: Path, relative: str) -> bool:
+    """Whether ``vault/relative`` resolves - symbolic links followed - to a
+    place inside the vault."""
+    try:
+        resolved = (vault / relative).resolve()
+        return vault.resolve() in resolved.parents
+    except (OSError, ValueError):
+        return False
 
 
 def parse_proposal(text: str, vault: Path, topic: str) -> MemoryProposal:
@@ -141,10 +152,13 @@ def render_note(title: str, tags: list[str], body: str, *, today: date | None = 
     return "\n".join(front) + body.strip() + "\n"
 
 
-def preview(vault: Path | str, proposal: MemoryProposal) -> str:
-    """Exactly the text ``write_note`` will put on disk for this proposal."""
+def preview(proposal: MemoryProposal) -> str:
+    """Exactly the text ``write_note`` will put on disk for this proposal.
+    An appended section carries its tags as a line, since the existing
+    note's front matter is never touched."""
     if proposal.mode == "append":
-        return f"\n\n---\n\n## {proposal.title}\n\n{proposal.body.strip()}\n"
+        tags = f"Tags: {', '.join(proposal.tags)}\n\n" if proposal.tags else ""
+        return f"\n\n---\n\n## {proposal.title}\n\n{tags}{proposal.body.strip()}\n"
     return render_note(proposal.title, proposal.tags, proposal.body)
 
 
@@ -158,8 +172,8 @@ def write_note(vault: Path | str, proposal: MemoryProposal) -> Path:
     if target.exists():
         proposal.mode = "append"
         with target.open("a", encoding="utf-8") as handle:
-            handle.write(preview(vault_dir, proposal))
+            handle.write(preview(proposal))
     else:
         proposal.mode = "create"
-        target.write_text(preview(vault_dir, proposal), encoding="utf-8")
+        target.write_text(preview(proposal), encoding="utf-8")
     return target

@@ -416,3 +416,22 @@ class TestOffBoardAndLeadSwimlane(unittest.TestCase):
             b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
         self.assertIn("Hardware", b.profiles)
         self.assertEqual(b.profiles["Hardware"].title, "Project Manager HW")
+
+
+class TestReviewFixes(unittest.TestCase):
+    def test_the_top_ranked_roles_metadata_counts_even_when_it_is_not_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Finance",))
+            (folder / "R&R Hardware.md").write_text(
+                "---\nkind: role\nlead_swimlane: Hardware\n---\n# Junior\nlevel: 4\nperspective: junior view\n\n"
+                "Junior responsibilities that fill the profile with enough text to count as a member.\n\n"
+                "# Lead\nlevel: 1\nperspective: lead view\n\nLead responsibilities, also long enough to count.\n",
+                encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        hw = b.profiles["Hardware"]
+        self.assertEqual(hw.title, "Lead")
+        self.assertEqual(hw.perspective, "lead view")
+
+    def test_crlf_front_matter_is_stripped_cleanly(self):
+        self.assertEqual(roles._strip_front_matter("---\r\nkind: role\r\n---\r\n# T\r\nbody"), "# T\r\nbody")
+        self.assertEqual(roles._strip_front_matter("---\nkind: role\n---\n# T\nbody"), "# T\nbody")
