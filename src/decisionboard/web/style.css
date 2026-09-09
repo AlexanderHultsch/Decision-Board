@@ -60,8 +60,9 @@ svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-wi
   padding: .7rem 1.2rem; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: .55rem; font-weight: 600; }
-.brand-mark { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center;
-  border-radius: 8px; background: var(--accent); color: var(--accent-ink); }
+.brand-mark { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center;
+  border-radius: 9px; background: var(--accent); color: var(--accent-ink); }
+.brand-mark svg { width: 28px; height: 28px; transform: translateY(1px); }
 .topbar-right { display: flex; align-items: center; gap: .6rem; }
 
 .page { max-width: 1120px; margin: 0 auto; padding: 2.5rem 2rem 4rem; }
