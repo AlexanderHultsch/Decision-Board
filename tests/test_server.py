@@ -367,6 +367,60 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(status, 200)
         self.wait_for(sid, lambda s: s["phase"] == "result")
 
+    def test_back_while_the_board_works_stops_it_and_returns_to_confirm(self):
+        import time as _time
+        keep = self.provider.complete
+
+        def slow(task, prompt):
+            if "## Member (FR-3.3a)" in prompt:
+                _time.sleep(0.6)
+            return keep(task, prompt)
+        self.provider.complete = slow
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+            sid = state["id"]
+            self.wait_for(sid, lambda s: s["phase"] == "questions")
+            self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+            self.wait_for(sid, lambda s: s["phase"] == "confirm")
+            self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": CLASSIC[:2]})
+            state = self.wait_for(sid, lambda s: s["phase"] == "running")
+            self.assertTrue(state["nav"]["back"])
+            status, state = self.call("POST", f"/api/sessions/{sid}/back")
+            self.assertEqual(status, 200)
+            self.assertEqual(state["phase"], "confirm")
+            _time.sleep(1.0)                                   # the worker threads finish in the background
+            _, state = self.call("GET", f"/api/sessions/{sid}")
+            self.assertEqual(state["phase"], "confirm")        # their late result was discarded
+            self.assertIsNone(state["result"])
+            # and the board runs again from there
+            self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": CLASSIC[:2]})
+            state = self.wait_for(sid, lambda s: s["phase"] == "result")
+            self.assertEqual(len(state["result"]["assessments"]), 2)
+        finally:
+            self.provider.complete = keep
+
+    def test_back_from_the_result_and_forward_again(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": CLASSIC[:2]})
+        self.wait_for(sid, lambda s: s["phase"] == "result")
+        status, state = self.call("POST", f"/api/sessions/{sid}/back")
+        self.assertEqual(state["phase"], "confirm")
+        self.assertTrue(state["nav"]["forward"])
+        self.assertIsNotNone(state["result"])
+        status, state = self.call("POST", f"/api/sessions/{sid}/forward")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "result")
+        self.assertFalse(state["nav"]["forward"])
+        status, _ = self.call("POST", f"/api/sessions/{sid}/forward")
+        self.assertEqual(status, 409)
+        status, state = self.call("POST", f"/api/sessions/{sid}/abandon")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "closed")
+
     def test_back_with_nothing_behind_it_is_refused(self):
         original = self.config["knowledge"]["vault_path"]
         self.config["knowledge"]["vault_path"] = str(Path(self.tmp.name) / "missing")

@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _subprocess_fake import patch_subprocess  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from decisionboard.agent import opencode_client  # noqa: E402
@@ -32,13 +34,13 @@ def _probe(help_text: str):
 class TestBuildCommand(unittest.TestCase):
     def test_auto_is_not_passed_when_the_installed_version_does_not_list_it(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
+        with patch_subprocess(_probe(OLD_HELP)):
             command = provider._build_command("opencode/big-pickle", "hello")
         self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle", opencode_client.PROMPT_HEADER])
 
     def test_auto_and_dir_are_passed_when_listed(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(NEW_HELP)):
+        with patch_subprocess(_probe(NEW_HELP)):
             command = provider._build_command("opencode/big-pickle", "hello")
         self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle",
                                    "--dir", "/repo", "--auto", opencode_client.PROMPT_HEADER])
@@ -46,21 +48,21 @@ class TestBuildCommand(unittest.TestCase):
     def test_auto_approve_false_never_passes_auto(self):
         config = {"provider": {"models": {"board": "x/y"}, "opencode": {"auto_approve": False}}}
         provider = OpenCodeProvider(config)
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(NEW_HELP)):
+        with patch_subprocess(_probe(NEW_HELP)):
             command = provider._build_command("x/y", "hello")
         self.assertNotIn("--auto", command)
 
     def test_help_is_probed_once_per_provider(self):
         provider = OpenCodeProvider(CONFIG)
         probe = mock.Mock(side_effect=_probe(NEW_HELP))
-        with mock.patch.object(opencode_client.subprocess, "run", probe):
+        with patch_subprocess(probe):
             provider._build_command("x/y", "a")
             provider._build_command("x/y", "b")
         self.assertEqual(probe.call_count, 1)
 
     def test_a_failed_probe_means_no_optional_flags_not_a_failed_run(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
-        with mock.patch.object(opencode_client.subprocess, "run", side_effect=OSError("no binary")):
+        with patch_subprocess(side_effect=OSError("no binary")):
             command = provider._build_command("x/y", "hello")
         self.assertNotIn("--auto", command)
         self.assertNotIn("--dir", command)
@@ -79,7 +81,7 @@ class TestBuildCommand(unittest.TestCase):
             seen["input"] = kwargs.get("input")
             return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}\n', stderr="", returncode=0)
 
-        with mock.patch.object(opencode_client.subprocess, "run", fake_run), \
+        with patch_subprocess(fake_run), \
              mock.patch.object(opencode_client.sys, "platform", "win32"):
             provider.complete("ai_board", prompt)
         self.assertEqual(seen["input"], prompt)
@@ -112,7 +114,7 @@ class TestEnvironment(unittest.TestCase):
                 return mock.Mock(stdout="", stderr="", returncode=0)
             return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}\n', stderr="", returncode=0)
 
-        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+        with patch_subprocess(fake_run):
             provider.complete("ai_board", "hello")
         self.assertEqual(seen, [str(Path("/x/opencode.json"))] * 2)
 
@@ -163,7 +165,7 @@ class TestNoAnswerDiagnostics(unittest.TestCase):
         config = {"provider": {"models": {"board": "azure/m"},
                                "opencode": {"auto_approve": False, "extra_args": ["--agent", "plan"]}}}
         provider = OpenCodeProvider(config)
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
+        with patch_subprocess(_probe(OLD_HELP)):
             command = provider._build_command("azure/m", "hello")
         self.assertEqual(command[-3:], ["--agent", "plan", opencode_client.PROMPT_HEADER])
 
@@ -190,7 +192,7 @@ class TestEmptyAnswerRetry(unittest.TestCase):
 
     def test_an_empty_run_is_retried_once_with_a_nudge(self):
         provider, fake_run, calls = self._provider([self.EMPTY, self.GOOD])
-        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+        with patch_subprocess(fake_run):
             result = provider.complete("ai_board", "the prompt")
         self.assertEqual(result.text, '{"ok": true}')
         self.assertEqual(len(calls), 2)
@@ -200,7 +202,7 @@ class TestEmptyAnswerRetry(unittest.TestCase):
 
     def test_two_empty_runs_are_reported_with_both_attempts_and_the_token_story(self):
         provider, fake_run, calls = self._provider([self.EMPTY, self.EMPTY])
-        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+        with patch_subprocess(fake_run):
             with self.assertRaises(OpenCodeError) as raised:
                 provider.complete("ai_board", "the prompt")
         message = str(raised.exception)
@@ -211,7 +213,7 @@ class TestEmptyAnswerRetry(unittest.TestCase):
 
     def test_other_failures_are_not_retried(self):
         provider, fake_run, calls = self._provider(["not json at all\n", self.GOOD])
-        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+        with patch_subprocess(fake_run):
             with self.assertRaises(OpenCodeError):
                 provider.complete("ai_board", "the prompt")
         self.assertEqual(len(calls), 1)

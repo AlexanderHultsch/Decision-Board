@@ -38,6 +38,7 @@ from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
 from . import roles as roles_mod
+from .agent.opencode_client import stop_call
 from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
 from .board import BoardConversation, ask_follow_up_full, run_board, run_board_combined
 
@@ -113,13 +114,23 @@ class RecordingProvider(AiProvider):
     def complete(self, task: str, prompt: str) -> AiResult:
         started = time.monotonic()
         step, member = _call_label(prompt, self._session.phase)
+        session = self._session
+        if session.cancelled.is_set():
+            raise RuntimeError("stopped by Alex")
+        tid = threading.get_ident()
+        with session.lock:
+            session.active_threads.add(tid)
         try:
             result = self._inner.complete(task, prompt)
         except Exception as exc:
-            self._session.record_call(step, member, None, None, time.monotonic() - started, error=str(exc)[:120])
+            if not session.cancelled.is_set():
+                session.record_call(step, member, None, None, time.monotonic() - started, error=str(exc)[:120])
             raise
+        finally:
+            with session.lock:
+                session.active_threads.discard(tid)
         duration = result.duration_seconds if result.duration_seconds else time.monotonic() - started
-        self._session.record_call(step, member, result.input_tokens, result.output_tokens, duration)
+        session.record_call(step, member, result.input_tokens, result.output_tokens, duration)
         return result
 
 
@@ -131,6 +142,9 @@ class Session:
         self.lock = threading.Lock()
         self.question = question
         self.started = time.time()
+        self.cancelled = threading.Event()             # set when Alex goes back while the model works
+        self.active_threads: set[int] = set()          # threads waiting on a model call right now
+        self.forward: list[str] = []                   # phases to go forward to again, newest last
         self.calls: list[dict[str, Any]] = []          # every model call: step, member, tokens, seconds
         self.marks: list[dict[str, Any]] = [{"phase": "started", "at": self.started}]   # phase changes, for wall time
         self.phase = "clarifying"
@@ -199,6 +213,7 @@ class Session:
                 "partial": self.partial,
                 "mode": self.mode,
                 "stats": {"calls": self.calls, "marks": self.marks, "started": self.started},
+                "nav": self._nav(),
                 "result": self.result,
                 "turns": self.turns,
                 "llm_calls": self.llm_calls,
@@ -206,7 +221,25 @@ class Session:
                 "written_path": self.written_path,
             })
 
+    def _nav(self) -> dict[str, bool]:
+        """What the Back and Forward buttons may do in this state (under the lock)."""
+        working = self.phase in ("clarifying", "running", "synthesising", "proposing") or self.busy
+        back = working or self.phase in ("confirm", "result", "proposal", "error") or \
+            (self.phase == "questions" and len(self.rounds) > 0)
+        return {"back": back, "forward": bool(self.forward) and not working}
+
+    def stop_work(self) -> int:
+        """Stop every model call this session is waiting on. Returns how many
+        were running. The threads end on their own with an error the
+        cancelled flag tells them to ignore."""
+        self.cancelled.set()
+        with self.lock:
+            threads = list(self.active_threads)
+        return sum(1 for tid in threads if stop_call(tid))
+
     def fail(self, message: str) -> None:
+        if self.cancelled.is_set():
+            return          # Alex went back: the failure is the stop, not an error to show
         with self.lock:
             self.phase = "error"
             self.error = message
@@ -489,6 +522,10 @@ class BoardServer:
             }
             session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
+            session.cancelled.clear()
+            session.forward = []
+            session.result = None
+            session.turns = []
             session.phase = "running"
             session.mark("running")
             session.members = {member: "pending" for member in session.selected_members}
@@ -511,6 +548,8 @@ class BoardServer:
 
     def _run_board(self, session: Session) -> None:
         def on_member(member: str, state: str) -> None:
+            if session.cancelled.is_set():
+                return
             with session.lock:
                 session.members[member] = state
                 if all(s in ("done", "failed") for s in session.members.values()) and session.phase != "synthesising":
@@ -518,6 +557,8 @@ class BoardServer:
                     session.mark("synthesising")
 
         def on_assessment(assessment) -> None:
+            if session.cancelled.is_set():
+                return
             with session.lock:
                 session.partial[assessment.member] = asdict(assessment)
 
@@ -552,6 +593,8 @@ class BoardServer:
         except Exception as exc:
             session.fail(str(exc))
             return
+        if session.cancelled.is_set():
+            return          # Alex went back while the board worked: the result is not wanted
         with session.lock:
             session.conversation = BoardConversation(
                 result=result, turns=[], roles=profiles,
@@ -592,6 +635,8 @@ class BoardServer:
                 wanted = {str(m).strip().lower() for m in members}
                 chosen = [m for m in session.members if m.lower() in wanted]
             follow_mode = "combined" if str(mode or "").lower() == "combined" else "individual"
+            session.cancelled.clear()
+            session.forward = []
             session.busy = True
             session.mark("follow-up")
             session.turns.append({"question": question, "answer": "", "pending": True, "members": chosen,
@@ -603,11 +648,15 @@ class BoardServer:
             turn = ask_follow_up_full(self.config, RecordingProvider(self.provider(), session), session.conversation,
                                       question, chosen, follow_mode)
         except Exception as exc:
+            if session.cancelled.is_set():
+                return
             with session.lock:
                 session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
                                      "error": True, "members": chosen, "mode": follow_mode, "data": None,
                                      "assessments": [], "failed_members": []}
                 session.busy = False
+            return
+        if session.cancelled.is_set():
             return
         with session.lock:
             session.turns[-1] = {
@@ -620,23 +669,66 @@ class BoardServer:
             session.mark("follow-up answered")
 
     def back(self, session: Session) -> None:
-        """After an error (or from the confirm screen): return to the last
-        step Alex can edit, with everything he typed still there (decided
-        9 September 2026: nothing typed is lost to an error). The confirm
-        screen when the input was already assembled, else the last round of
-        questions with its answers; with nothing to go back to, 409 and the
-        page starts over with the question kept."""
+        """One step back from wherever the topic is, with everything typed
+        kept (decided 9 September 2026, extended the same day to every
+        stage). While the model works, Back stops the running calls first.
+        409 with "your question is kept" when there is nothing behind."""
         with session.lock:
-            if session.busy:
-                raise ApiError(409, "The board is still working.")
-            if session.phase in ("result", "proposal", "proposing", "written", "closed"):
-                raise ApiError(409, "This topic has a result; ask back or close it.")
+            phase, busy = session.phase, session.busy
+        if phase in ("running", "synthesising"):
+            session.stop_work()
+            with session.lock:
+                session.phase = "confirm"
+                session.error = None
+                session.members = {member: "pending" for member in session.selected_members}
+                session.partial = {}
+                session.forward = []
+                session.mark("stopped")
+            return
+        if phase == "clarifying":
+            session.stop_work()
+            with session.lock:
+                if session.rounds:
+                    last = session.rounds.pop()
+                    session.clarification.questions = list(last["questions"])
+                    session.answers = list(last["answers"])
+                    session.phase = "questions"
+                    session.forward = []
+                    return
+            raise ApiError(409, "Nothing to go back to - start over; your question is kept.")
+        if phase == "result" and busy:
+            session.stop_work()
+            with session.lock:
+                if session.turns and session.turns[-1].get("pending"):
+                    session.turns.pop()
+                session.busy = False
+                session.mark("stopped")
+            return
+        if phase == "proposing":
+            session.stop_work()
+            with session.lock:
+                session.phase = "result"
+                session.proposal = None
+                session.forward = []
+            return
+        with session.lock:
+            if session.phase == "proposal":
+                session.phase = "result"
+                session.proposal = None
+                session.forward = []
+                return
+            if session.phase == "result":
+                session.forward.append("result")
+                session.phase = "confirm"
+                return
             if session.phase == "error" and session.inputs and session.clarification is not None:
                 session.phase = "confirm"
                 session.error = None
                 session.members = {member: "pending" for member in session.selected_members}
                 return
-            if session.phase in ("error", "confirm") and session.rounds and session.clarification is not None:
+            if session.phase in ("error", "confirm", "questions") and session.rounds and session.clarification is not None:
+                if session.phase == "confirm":
+                    session.forward.append("confirm")
                 last = session.rounds.pop()
                 # The clarifier may have replaced the questions before failing;
                 # the questions Alex answered are the ones to show again.
@@ -646,6 +738,30 @@ class BoardServer:
                 session.error = None
                 return
             raise ApiError(409, "Nothing to go back to - start over; your question is kept.")
+
+    def forward(self, session: Session) -> None:
+        """Forward again after Back, as long as nothing new was done since."""
+        with session.lock:
+            if not session.forward:
+                raise ApiError(409, "Nothing to go forward to.")
+            target = session.forward.pop()
+            if target == "result" and session.result is not None and session.phase == "confirm":
+                session.phase = "result"
+                return
+            if target == "confirm" and session.inputs and session.phase == "questions":
+                session.rounds.append({"questions": list(session.clarification.questions), "answers": list(session.answers)})
+                session.phase = "confirm"
+                return
+            session.forward = []
+            raise ApiError(409, "Nothing to go forward to.")
+
+    def abandon(self, session: Session) -> None:
+        """Leave the topic: stop any running call and close it without a note."""
+        session.stop_work()
+        with session.lock:
+            session.busy = False
+            session.phase = "closed"
+            session.mark("abandoned")
 
     def close(self, session: Session, remember: bool) -> None:
         with session.lock:
@@ -840,6 +956,10 @@ def make_handler(server: BoardServer):
                         server.follow_up(session, str(body.get("question") or ""), body.get("members"), body.get("mode"))
                     elif action == "back":
                         server.back(session)
+                    elif action == "forward":
+                        server.forward(session)
+                    elif action == "abandon":
+                        server.abandon(session)
                     elif action == "close":
                         server.close(session, bool(body.get("remember")))
                     elif action == "memory":

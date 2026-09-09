@@ -303,8 +303,23 @@
     } catch (err) { setError("home-error", err.message); }
   }
 
+  function renderNav() {
+    const nav = (session && session.nav) || { back: false, forward: false };
+    const onHome = !$("screen-home").hidden;
+    $("btn-nav-back").disabled = !session || onHome || !nav.back && !["questions"].includes(session.phase);
+    $("btn-nav-forward").disabled = !session || (onHome ? ["closed", "written"].includes(session.phase) : !nav.forward);
+  }
+
+  let lastPhase = null;
+  function pushHistory() {
+    const phase = session ? `${session.id}:${session.phase}` : "home";
+    if (phase === lastPhase) return;
+    lastPhase = phase;
+    try { history.pushState({ phase }, ""); } catch (e) { /* not available */ }
+  }
+
   function render() {
-    if (!session) return show("home");
+    if (!session) { show("home"); renderNav(); return; }
     store.set("session", session.id);
     if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
     if (needsPolling(session)) { if (!pollTimer) startPolling(); } else stopPolling();
@@ -323,6 +338,9 @@
       default: return showError(`Unknown state: ${session.phase}`);
     }
   }
+  // Every render also refreshes the arrows and the browser history.
+  const _render = render;
+  render = function () { _render(); renderNav(); pushHistory(); };
 
   function showError(message) {
     $("error-detail").textContent = message || "Unknown error.";
@@ -414,14 +432,23 @@
 
   async function goBack() {
     if (!session) return newTopic();
+    if (!$("screen-home").hidden) return;                 // nothing behind the home screen
     try {
       session = await api("POST", `/api/sessions/${session.id}/back`);
       render();
     } catch (err) {
-      // Nothing to return to on the server: start over with the question kept.
-      newTopic(true);
-      setError("home-error", err.message);
+      // Nothing to return to on the server: the home screen with the question kept,
+      // the topic still reachable with Forward.
+      $("question").value = session.question;
+      show("home"); renderNav(); pushHistory();
     }
+  }
+
+  async function goForward() {
+    if (!session) return;
+    if (!$("screen-home").hidden) { render(); return; }    // back into the open topic
+    try { session = await api("POST", `/api/sessions/${session.id}/forward`); render(); }
+    catch (err) { setError("home-error", err.message); }
   }
 
   async function runBoard() {
@@ -755,6 +782,9 @@
   function newTopic(keepQuestion) {
     stopPolling();
     const question = session ? session.question : (store.get("question") || "");
+    if (session && (["clarifying", "running", "synthesising", "proposing"].includes(session.phase) || session.busy)) {
+      api("POST", `/api/sessions/${session.id}/abandon`).catch(() => {});   // stop the running calls
+    }
     forgetSession();
     session = null;
     openMembers.clear();
@@ -809,6 +839,13 @@
   $("btn-discard").addEventListener("click", discardMemory);
   $("btn-new").addEventListener("click", newTopic);
   $("btn-error-home").addEventListener("click", () => newTopic(true));
+  $("btn-brand").addEventListener("click", () => newTopic(false));
+  $("btn-nav-back").addEventListener("click", goBack);
+  $("btn-nav-forward").addEventListener("click", goForward);
+  window.addEventListener("popstate", () => {
+    // The browser's own Back: one step back in the topic, not out of the page.
+    if (session && $("screen-home").hidden) goBack(); else if (session) goForward();
+  });
   $("btn-error-back").addEventListener("click", goBack);
   $("question").addEventListener("input", () => store.set("question", $("question").value));
   $("followup").addEventListener("input", () => saveDraft({ followup: $("followup").value }));

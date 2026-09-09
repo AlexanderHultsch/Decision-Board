@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _subprocess_fake import patch_subprocess  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
@@ -83,7 +85,7 @@ class TestWizard(unittest.TestCase):
 
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-                 mock.patch.object(setup_wizard.subprocess, "run", fake_run):
+                 patch_subprocess(fake_run):
                 wizard = setup_wizard.Wizard(interactive=False, vault=str(vault), model="opencode/big-pickle",
                                              run_test=True, out=out, roles=str(make_roles(Path(tmp) / "roles")))
                 code = wizard.run()
@@ -111,7 +113,7 @@ class TestWizard(unittest.TestCase):
 
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-                 mock.patch.object(setup_wizard.subprocess, "run", fake_run):
+                 patch_subprocess(fake_run):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=True, out=out)
                 code = wizard.run()
             text = out.getvalue()
@@ -166,7 +168,7 @@ class TestCompanyOpencodeConfig(unittest.TestCase):
 
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-                 mock.patch.object(setup_wizard.subprocess, "run", fake_run), \
+                 patch_subprocess(fake_run), \
                  mock.patch.dict(setup_wizard.os.environ, {"LITELLM_KEY": "secret"}), \
                  mock.patch.object(setup_wizard.urllib.request, "urlopen", lambda req, timeout: FakeResponse()):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=True, out=out,
@@ -217,7 +219,7 @@ class TestDatabaseRepair(unittest.TestCase):
 
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-                 mock.patch.object(setup_wizard.subprocess, "run", fake_run), \
+                 patch_subprocess(fake_run), \
                  mock.patch.dict(setup_wizard.os.environ, {"XDG_DATA_HOME": tmp}):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=True, out=out,
                                              roles=str(make_roles(Path(tmp) / "roles")))
@@ -293,7 +295,7 @@ class TestAllOnPath(unittest.TestCase):
     def test_a_probe_that_cannot_start_does_not_crash(self):
         out = io.StringIO()
         wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=False, out=out)
-        with mock.patch.object(setup_wizard.subprocess, "run", side_effect=OSError(193, "not a valid Win32 application")):
+        with patch_subprocess(side_effect=OSError(193, "not a valid Win32 application")):
             result = wizard._run(["opencode", "--version"], timeout=5)
         self.assertEqual(result.returncode, 126)
         self.assertIn("cannot be started", result.stderr)
@@ -316,7 +318,7 @@ class TestProfiles(unittest.TestCase):
 
         with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
              mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-             mock.patch.object(setup_wizard.subprocess, "run", fake_run):
+             patch_subprocess(fake_run):
             wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
                                          out=out, profile=profile)
             wizard.run()
@@ -340,8 +342,7 @@ class TestProfiles(unittest.TestCase):
             out = io.StringIO()
             with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
                  mock.patch.object(setup_wizard.shutil, "which", lambda name: "/bin/" + name), \
-                 mock.patch.object(setup_wizard.subprocess, "run",
-                                   lambda command, **kw: mock.Mock(stdout="", stderr="", returncode=0)), \
+                 patch_subprocess(lambda command, **kw: mock.Mock(stdout="", stderr="", returncode=0)), \
                  mock.patch.object(setup_wizard.urllib.request, "urlopen", side_effect=OSError("offline")):
                 wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
                                              out=out, opencode_config=str(company))

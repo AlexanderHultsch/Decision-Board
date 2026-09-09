@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import sys
 import time
 from pathlib import Path
@@ -47,6 +48,28 @@ PROMPT_HEADER = "The complete instruction follows on standard input. Follow it e
 EMPTY_RETRY_PREFIX = ("IMPORTANT: your previous attempt at this call produced reasoning but no answer text. "
                       "Write the answer now, in the shape the instruction asks for, and nothing else.\n\n")
 _NO_TEXT = "produced no answer text"
+
+# Running opencode processes by the thread that started them, so a session
+# can stop its own calls when Alex goes back (9 September 2026).
+_ACTIVE: dict[int, subprocess.Popen] = {}
+_STOPPED: set[int] = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def stop_call(thread_id: int) -> bool:
+    """Terminate the opencode process the given thread is waiting on, if
+    any. Returns whether there was one. The waiting thread then raises
+    ``OpenCodeError("opencode run was stopped")`` instead of a failure."""
+    with _ACTIVE_LOCK:
+        proc = _ACTIVE.get(thread_id)
+        if proc is None:
+            return False
+        _STOPPED.add(thread_id)
+    try:
+        proc.kill()
+    except OSError:
+        return False
+    return True
 _OPTIONAL_FLAGS = ("--auto", "--dir")
 
 
@@ -307,10 +330,27 @@ class OpenCodeProvider(AiProvider):
             # cp1252 and a German umlaut in a member's answer becomes mojibake
             # or, for some byte values, a UnicodeDecodeError that takes the
             # run down.
-            result = subprocess.run(
-                command, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=self._timeout_seconds, env=opencode_environment(self._config),
+            proc = subprocess.Popen(
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", env=opencode_environment(self._config),
             )
+            tid = threading.get_ident()
+            with _ACTIVE_LOCK:
+                _ACTIVE[tid] = proc
+            try:
+                out, err = proc.communicate(input=prompt, timeout=self._timeout_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise
+            finally:
+                with _ACTIVE_LOCK:
+                    _ACTIVE.pop(tid, None)
+                    stopped = tid in _STOPPED
+                    _STOPPED.discard(tid)
+            if stopped:
+                raise OpenCodeError("opencode run was stopped")
+            result = subprocess.CompletedProcess(command, proc.returncode, out, err)
         except FileNotFoundError as exc:
             raise OpenCodeError(
                 f"{self._binary!r} is not on PATH - OpenCode must be installed on this "

@@ -206,6 +206,14 @@ button.ghost { background: transparent; }
 .sources-block { margin-top: .9rem; padding-top: .8rem; border-top: 1px dashed var(--line); }
 /* Individual or combined (9 September 2026) */
 /* A dropdown without the browser's own chrome: rounded, a chevron, a focus ring. */
+button.brand { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+button.brand:hover .brand-mark { filter: brightness(1.1); }
+.nav-arrows { display: flex; gap: .3rem; margin-left: 1.2rem; }
+.nav-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .3rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: .85rem; cursor: pointer; }
+.nav-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.nav-btn:disabled { opacity: .35; cursor: default; }
+.nav-btn:not(:disabled):hover { border-color: var(--muted); }
+@media (max-width: 640px) { .nav-btn span { display: none; } }
 .select-wrap { position: relative; display: inline-block; width: 100%; max-width: 34rem; margin: .1rem 0 .9rem; }
 .select-wrap.compact { max-width: 24rem; margin: 0; }
 .select-modern { appearance: none; -webkit-appearance: none; width: 100%; padding: .6rem 2.6rem .6rem .95rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); font: inherit; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
