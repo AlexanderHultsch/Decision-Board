@@ -5,17 +5,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-CLASSIC = ("Finance", "HW Engineering", "Mechanical Engineering", "Manufacturing", "SW Engineering", "KPI Check")
+CLASSIC = ("Finance", "HW Engineering", "Mechanical Engineering", "Manufacturing", "SW Engineering")
 PERSPECTIVES = {
     "Finance": "Cost, budget vs forecast vs actuals, cBOM impact",
     "HW Engineering": "Hardware feasibility, maturity, technical risk",
     "Mechanical Engineering": "Mechanical feasibility, packaging, tolerances",
     "Manufacturing": "Manufacturability, ramp-up, supplier and plant capability",
     "SW Engineering": "Software scope, integration and test effort",
-    "KPI Check": "Fit with time, deliverables, cost and customer satisfaction",
 }
 ICONS = {"Finance": "dollar", "HW Engineering": "chip", "Mechanical Engineering": "gear",
-         "Manufacturing": "factory", "SW Engineering": "code", "KPI Check": "target"}
+         "Manufacturing": "factory", "SW Engineering": "code"}
 
 
 def write_member(folder: Path, member: str, body: str = "", **meta) -> Path:

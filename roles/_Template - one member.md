@@ -29,8 +29,10 @@ defects, quality indicators and escalations, budget and staff planning.
 
 ## Responsibilities
 
-What this member owns, one line per responsibility. Everything under this
-heading is what the member speaks for on the board.
+What this member owns, one line per responsibility, together with the
+measures that go with them - the KPIs, gates and dates this role is held
+to. They belong here, inside the responsibility, not in a section of their
+own and not with another member.
 
 Execution and Monitoring:
 ...

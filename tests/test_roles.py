@@ -294,10 +294,10 @@ class TestWizardRoles(unittest.TestCase):
         self.assertIn(roles.CONDUCT_NAME, names)
         self.assertIn(roles.TEMPLATE_NAME, names)
         self.assertIn("R&R Hardware.md", names)
-        self.assertEqual(len(members), 9)
+        self.assertEqual(len(members), 8)
         self.assertEqual(wizard.roles_folder, str(vault / "Roles"))
         self.assertEqual(wizard.failures, [])
-        self.assertIn("board of 9", out.getvalue())
+        self.assertIn("board of 8", out.getvalue())
 
     def test_wizard_finds_a_renamed_roles_folder_in_the_vault(self):
         with tempfile.TemporaryDirectory() as tmp:

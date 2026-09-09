@@ -39,8 +39,9 @@ persistent state:
 (section 3.4). There is no member list in the code, in the prompts or in
 this document, and the repository ships no members: adding a profile adds
 a member, removing one removes it, and a board needs at least two. Today
-the members are the project managers of the programme's swimlanes, each
-speaking for every role and responsibility under their lead; more roles
+the members are the programme lead and the project managers of the
+programme's swim lanes, each speaking for every role and responsibility
+under their lead; more roles
 (working level, leadership within a swimlane) can be added as profiles
 later. One board run is one call per member plus one synthesis call.
 
@@ -56,7 +57,8 @@ the board (3.1).
 | Rule | Reason |
 |---|---|
 | One folder, chosen by Alex: `knowledge.roles_folder`, picked in Options or by the setup wizard with the folder dialog. Empty means a folder in the vault whose name starts with "Roles" (`Roles`, `Roles&Responsibilities`) or reads "R&R". No folder, no board: the repository ships no member profiles | One place to look, named as Alex names it. Nothing in code can stand in for the board. |
-| **What is the same for every member** — character, how to answer, and the rule that a member speaks for every role and responsibility under its lead — is one note in the same folder with `kind: conduct` in its front matter (`_Board member conduct.md`), prepended to every member's profile on every call | The personality that is shared is written once, edited in one place, and never duplicated into every profile. |
+| **What is the same for every member** — character, how to answer, the rule that a member speaks for every role and responsibility under its lead, and that it judges options against its own measures — is one note in the same folder with `kind: conduct` in its front matter (`_Board member conduct.md`), prepended to every member's profile on every call | The personality that is shared is written once, edited in one place, and never duplicated into every profile. |
+| **KPIs live inside a member's own responsibilities**, never in a member of their own (decided 9 September 2026: the "KPI Check" member was removed) | Each swim lane is held to its own measures and is the one that knows them. A separate scorekeeper reads the same options with none of the responsibility, which is a weaker answer than the swim lane's own. |
 | A profile with a heading and nothing under it is *not filled yet*: it is left off the board and named on the confirm screen, in Options and in the CLI | An empty note must never produce an empty opinion, and must never disappear silently either. |
 | Notes whose name starts with `_`, or whose front matter says `kind: conduct` or `kind: template`, are never members | Support files live next to the profiles without joining the board. |
 | One file per role, or one file with several roles. A file whose front matter names a `member:`, or with at most one level-one heading, is one role (named by the front matter or the file). A file with two or more level-one headings is several roles, one per heading, with `key: value` lines directly under the heading as that role's metadata | Alex writes the board the way he thinks about it — six notes, or one note called Board. |

@@ -119,12 +119,12 @@ class TestRunBoard(unittest.TestCase):
     def setUp(self):
         self.config = {"provider": {"models": {"board": "test/model"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
 
-    def test_a_full_run_makes_six_member_calls_plus_one_synthesis_call(self):
+    def test_a_full_run_makes_one_call_per_member_plus_one_synthesis_call(self):
         provider = FakeProvider([_member_response() for _ in MEMBERS] + [SYNTHESIS_RESPONSE])
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
-        self.assertEqual(len(provider.calls), 7)
-        self.assertEqual(result.llm_calls, 7)
+        self.assertEqual(len(provider.calls), len(MEMBERS) + 1)
+        self.assertEqual(result.llm_calls, len(MEMBERS) + 1)
         self.assertEqual(len(result.assessments), len(MEMBERS))
         self.assertEqual({a.member for a in result.assessments}, set(MEMBERS))
 

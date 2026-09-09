@@ -14,7 +14,7 @@ your vault, any folder whose name starts with "Roles" (`Roles`,
 |---|---|
 | `_Board member conduct.md` | `kind: conduct`. What is the same for every member: character, how to answer, how to speak for all the roles and responsibilities under one's wing. Prepended to every member's profile on every call. |
 | `_Template - one member.md` | `kind: template`. The shape of a member note, with the optional keys. Never a member itself. |
-| `examples/` | Real, complete member notes (the roles and responsibilities of one programme's swim lanes), as examples of the shape. Not read by the board. |
+| `examples/` | Real, complete member notes: the eight swim lanes of one programme, as examples of the shape. Not read by the board unless you point the roles folder at them. |
 
 Notes whose name starts with `_`, or whose front matter says `kind:
 conduct` or `kind: template`, are never members. A member note that has a
@@ -65,3 +65,7 @@ level: 3
 The whole file is given to that member, and only to that member, on every
 call, behind the conduct note, roles in rank order. At least two filled
 members are needed for a board.
+
+**KPIs belong inside a member's own responsibilities**, not in a member of
+their own: each swim lane is held to its own measures and judges every
+option against them. There is deliberately no "KPI" board member.

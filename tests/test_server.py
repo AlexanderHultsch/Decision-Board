@@ -21,7 +21,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
 from decisionboard.server import create_http_server  # noqa: E402
-from _roles_fixture import make_roles  # noqa: E402
+from _roles_fixture import CLASSIC, make_roles  # noqa: E402
+
+MEMBER_COUNT = len(CLASSIC)
 
 CLARIFIER = json.dumps({"topic": "Rework or switch", "context": "SOP is fixed.", "options": ["Rework", "Switch"],
                         "constraints": ["SOP cannot move"], "questions": ["What is the budget?"]})
@@ -152,14 +154,14 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(status, 200)
         state = self.wait_for(sid, lambda s: s["phase"] == "result")
         self.assertEqual(state["result"]["topic"], "Rework or switch (edited)")
-        self.assertEqual(len(state["result"]["assessments"]), 6)
+        self.assertEqual(len(state["result"]["assessments"]), MEMBER_COUNT)
         self.assertEqual(state["result"]["synthesis_data"]["overall_recommendation"], "Rework")
         self.assertTrue(all(v == "done" for v in state["members"].values()))
-        self.assertEqual(state["llm_calls"], 8)   # clarifier + six members + synthesis
+        self.assertEqual(state["llm_calls"], MEMBER_COUNT + 2)   # clarifier + members + synthesis
 
         # Members received the knowledge and the clarification, never the clarifier's questions as a task.
         member_prompts = [p for p in self.provider.prompts[first_prompt:] if "Member: " in p]
-        self.assertEqual(len(member_prompts), 6)
+        self.assertEqual(len(member_prompts), MEMBER_COUNT)
         self.assertTrue(all("Tooling is late." in p for p in member_prompts))
         self.assertTrue(all("A: 200k" in p for p in member_prompts))
         self.assertFalse(any("## Question from Alex" in p for p in member_prompts))
@@ -168,7 +170,7 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(status, 200)
         state = self.wait_for(sid, lambda s: not s["busy"])
         self.assertEqual(state["turns"][0]["answer"], "Because time is the decisive criterion.")
-        self.assertEqual(state["llm_calls"], 9)
+        self.assertEqual(state["llm_calls"], MEMBER_COUNT + 3)
 
         status, state = self.call("POST", f"/api/sessions/{sid}/close", {"remember": True})
         self.assertEqual(status, 200)

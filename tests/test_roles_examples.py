@@ -20,7 +20,7 @@ class TestRealExamples(unittest.TestCase):
     def test_every_example_file_is_one_member_named_after_the_file(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
         self.assertEqual(sorted(board.profiles), sorted([
-            "Configuration & Integration", "Finance", "Hardware", "KPI Check", "Manufacturing",
+            "Configuration & Integration", "Finance", "Hardware", "Manufacturing",
             "Mechanical", "Program Lead", "Software", "Systems",
         ]))
         self.assertEqual(board.skipped, [])
@@ -53,13 +53,17 @@ class TestRealExamples(unittest.TestCase):
         self.assertEqual(board.profiles["Systems"].icon, "flask")
         self.assertEqual(board.profiles["Configuration & Integration"].icon, "layers")
         self.assertEqual(board.profiles["Program Lead"].icon, "chart")
-        self.assertEqual(board.profiles["KPI Check"].icon, "target")
         self.assertEqual(board.profiles["Finance"].icon, "dollar")
 
     def test_old_style_and_new_style_notes_mix(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
-        self.assertIn("## Character", board.profiles["KPI Check"].body)
+        self.assertIn("## Character", board.profiles["Finance"].body)
         self.assertIn("## Responsibilities", board.profiles["Systems"].body)
+
+    def test_there_is_no_kpi_member_kpis_belong_to_each_role(self):
+        board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
+        self.assertNotIn("KPI Check", board.profiles)
+        self.assertEqual(len(board.profiles), 8)
 
     def test_member_from_stem_strips_only_the_folder_prefix(self):
         self.assertEqual(roles._member_from_stem("R&R Hardware"), "Hardware")
