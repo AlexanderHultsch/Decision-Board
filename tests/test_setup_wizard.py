@@ -249,7 +249,27 @@ class TestChooseModel(unittest.TestCase):
     def test_y_is_rejected_and_asked_again(self):
         wizard, out = self._wizard(["y", ""])
         self.assertEqual(wizard.choose_model("azure/Kimi", ["azure/Kimi"], ""), "azure/Kimi")
-        self.assertIn("not a model string", out.getvalue())
+        self.assertIn("Nothing matches 'y'", out.getvalue())
+
+    def test_a_long_list_is_filtered_by_typing_part_of_a_name(self):
+        listed = "\n".join(f"openai/gpt-{i}" for i in range(40)) + "\nazure/Opencode-Kimi-K2.7\n"
+        wizard, out = self._wizard(["kimi", "1"])
+        self.assertEqual(wizard.choose_model("openai/gpt-0", [], listed), "azure/Opencode-Kimi-K2.7")
+        text = out.getvalue()
+        self.assertIn("26 more", text)                      # 41 listed, 15 shown
+        self.assertIn("Models matching 'kimi'", text)
+
+    def test_all_lists_every_model_and_numbers_then_reach_the_end(self):
+        listed = "\n".join(f"openai/gpt-{i}" for i in range(40)) + "\n"
+        wizard, out = self._wizard(["40", "all", "40"])
+        self.assertEqual(wizard.choose_model("openai/gpt-0", [], listed), "openai/gpt-39")
+        self.assertIn("40 is not in the list above (1 to 15)", out.getvalue())
+        self.assertIn("All 40 models", out.getvalue())
+
+    def test_the_company_file_is_tagged_in_the_list(self):
+        wizard, out = self._wizard([""])
+        wizard.choose_model("azure/Kimi", ["azure/Kimi"], "openai/gpt-5\n")
+        self.assertIn("azure/Kimi   <- defined in opencode.json, current", out.getvalue())
 
     def test_a_saved_invalid_model_is_replaced_by_the_defined_one(self):
         self.assertFalse(setup_wizard._looks_like_model_string("y"))
@@ -470,3 +490,64 @@ class TestConfigurationIsExplained(unittest.TestCase):
         self.assertEqual(config["ui"]["theme"], "dark")
         self.assertEqual(backup["knowledge"]["token_budget"], 4242)
         self.assertIn("only what you answer now changes", out.getvalue())
+
+
+class TestOpenCodeConfigCheck(unittest.TestCase):
+    """9 September 2026: Decision Board's own config.local.json was handed to
+    OpenCode as OPENCODE_CONFIG. OpenCode refused it ("unrecognized keys:
+    _comment, setup, storage, runtime, knowledge, ui") and the wizard blamed
+    the model string."""
+
+    def test_the_boards_own_config_is_refused_with_the_reason(self):
+        from decisionboard.agent.opencode_client import opencode_config_problem
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "config.local.json"
+            wrong.write_text(json.dumps({"setup": {"profile": "company"}, "knowledge": {}, "provider": {"models": {"board": "azure/x"}}}),
+                             encoding="utf-8")
+            problem = opencode_config_problem(str(wrong))
+            right = Path(tmp) / "opencode.json"
+            right.write_text(json.dumps({"$schema": "https://opencode.ai/config.json",
+                                         "provider": {"azure": {"options": {"baseURL": "http://gw"}, "models": {"Kimi": {}}}}}),
+                             encoding="utf-8")
+            self.assertIsNone(opencode_config_problem(str(right)))
+            empty = Path(tmp) / "empty.json"
+            empty.write_text("{}", encoding="utf-8")
+            self.assertIn("defines no provider", opencode_config_problem(str(empty)))
+        self.assertIn("Decision Board's own configuration", problem)
+        self.assertIn("knowledge, setup", problem)
+        self.assertIsNone(opencode_config_problem(""))
+        self.assertIn("not found", opencode_config_problem("/nowhere/opencode.json"))
+
+    def test_the_failure_text_and_the_diagnosis_name_the_configuration_file(self):
+        from decisionboard.agent.opencode_client import describe_failure
+        stdout = json.dumps({"type": "error", "error": {"message": "Config file is invalid: unrecognized keys: _comment, setup, storage"}})
+        text = describe_failure(stdout, "")
+        self.assertIn("unrecognized keys", text)
+        self.assertIn("not at Decision Board's config.local.json", text)
+        self.assertIn("rejected its configuration file", setup_wizard.diagnose(stdout, "")[0])
+
+    def test_a_wrong_file_in_opencode_config_is_not_offered_as_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "config.local.json"
+            wrong.write_text(json.dumps({"knowledge": {"vault_path": ""}, "provider": {}}), encoding="utf-8")
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=False, out=out)
+            with mock.patch.dict(os.environ, {"OPENCODE_CONFIG": str(wrong)}):
+                found = wizard.find_opencode_config()
+        self.assertNotEqual(found, str(wrong))
+        self.assertIn("not usable", out.getvalue())
+
+    def test_the_wizard_refuses_the_wrong_file_and_offers_to_choose_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "config.local.json"
+            wrong.write_text(json.dumps({"setup": {}, "provider": {}}), encoding="utf-8")
+            right = Path(tmp) / "opencode.json"
+            right.write_text(json.dumps({"provider": {"azure": {"models": {"Kimi": {}}}}}), encoding="utf-8")
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=True, vault="", model=None, run_test=False, out=out)
+            answers = ["3", str(wrong), "3", str(right)]
+            wizard.ask = lambda prompt, default="": answers.pop(0) if answers else default
+            chosen = wizard._choose_company_file(str(right))
+        self.assertEqual(chosen, str(right))
+        self.assertIn("Decision Board's own configuration", out.getvalue())
+        self.assertIn("Choose again", out.getvalue())

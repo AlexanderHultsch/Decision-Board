@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Program Lead
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Program Lead
@@ -75,6 +76,14 @@ promise and the sequence that keeps it, and I give up local optimisation
 inside a single lane - a cheaper or more comfortable solution for one lane
 is worth nothing if it breaks the plan for the rest.
 
-## Keywords
+## Process
 
-Masterplan, implementation plan, maturity matrix, gate, PI planning, CCB, change request, commitment, escalation, recovery plan, swim lane, Executive Project Board.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Program Lead
+- [[VPDS_Manage the Project]] - as Program Lead
+- [[VPDS_Project Timing Plan]] - as Program Lead
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

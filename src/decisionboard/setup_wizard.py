@@ -38,11 +38,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .agent.opencode_client import opencode_config_problem
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
 EXAMPLE_CONFIG = CONFIG_DIR / "config.example.json"
 LOCAL_CONFIG = CONFIG_DIR / "config.local.json"
 DEFAULT_MODEL = ""
+_MODELS_SHOWN = 15
 TEST_PROMPT = "Reply with the single word OK and nothing else."
 
 OK = "  [ok]  "
@@ -86,12 +89,30 @@ class Wizard:
         self.problems.append(text)
         self.failures.append(text)
 
+    def heading(self, title: str) -> None:
+        self.say("")
+        self.say(title)
+        self.say("-" * len(title))
+
+    def bullets(self, items: list[str], indent: int = 8) -> None:
+        pad = " " * indent
+        for item in items:
+            first, *rest = item.splitlines()
+            self.say(f"{pad}- {first}")
+            for line in rest:
+                self.say(f"{pad}  {line}")
+
     def ask(self, prompt: str, default: str = "") -> str:
+        """One question per prompt, on its own lines: a blank line, the
+        question with what Enter does, then the input line (9 September
+        2026: questions, options and the next step ran into one block)."""
         if not self.interactive:
             return default
-        suffix = f" [{default}]" if default else ""
+        suffix = f"   [Enter = {default}]" if default else ""
+        self.say("")
+        self.say(f"  ? {prompt}{suffix}")
         try:
-            answer = input(f"{prompt}{suffix}: ").strip()
+            answer = input("  > ").strip()
         except EOFError:
             return default
         return answer or default
@@ -105,7 +126,7 @@ class Wizard:
     # -- steps -------------------------------------------------------------
 
     def step_environment(self) -> None:
-        self.say("1. Environment")
+        self.heading("1. Environment")
         self.say(f"        repository  {REPO_ROOT}")
         self.say(f"        platform    {platform.system()} {platform.release()}, Python {platform.python_version()}")
         if sys.version_info < (3, 11):
@@ -126,7 +147,7 @@ class Wizard:
     def step_profile(self, config_seed: dict | None = None) -> str:
         """Company or private. The one question that changes what follows:
         where the model lives and who may see the prompts."""
-        self.say("\n2. How will you use Decision Board?")
+        self.heading("2. How will you use Decision Board?")
         if self.profile_arg:
             self.profile = self.profile_arg
             self.ok(f"profile: {self.profile} (given on the command line)")
@@ -139,15 +160,17 @@ class Wizard:
         stored = (config_seed or {}).get("setup", {}).get("profile", "")
         found_company_file = self.find_opencode_config()
         default = stored or ("company" if found_company_file else "private")
-        self.say("        1. Company or organisation - your IT provides an opencode.json that points")
-        self.say("           OpenCode at an internal gateway. Prompts and notes stay on approved")
-        self.say("           infrastructure. Nothing to log in to; the file carries the key.")
-        self.say("        2. Private or own account - OpenCode logs in to a provider you choose")
-        self.say("           (Anthropic, OpenAI, and others). Your question and the notes the board")
-        self.say("           selects are sent to that provider, so use it only with content you may")
-        self.say("           send there.")
+        self.say("        1. Company or organisation")
+        self.bullets(["your IT provides an opencode.json that points OpenCode at an internal gateway",
+                      "prompts and notes stay on approved infrastructure",
+                      "nothing to log in to: the file carries the key"], indent=11)
+        self.say("        2. Private or own account")
+        self.bullets(["OpenCode logs in to a provider you choose (Anthropic, OpenAI, and others)",
+                      "your question and the notes the board selects are sent to that provider",
+                      "use it only with content you may send there"], indent=11)
         if found_company_file:
-            self.say(f"        (a company opencode.json is already on this machine: {found_company_file})")
+            self.say("")
+            self.say(f"        A company opencode.json is already on this machine: {found_company_file}")
         if not self.interactive:
             self.profile = default
         else:
@@ -168,7 +191,7 @@ class Wizard:
 
     def step_login(self, info: dict) -> None:
         """Private setups only: make sure OpenCode has a provider login."""
-        self.say("\n4. Provider login")
+        self.heading("4. Provider login")
         if not info.get("found"):
             self.say("        skipped: opencode not found.")
             return
@@ -212,7 +235,7 @@ class Wizard:
                 "then open a new terminal."]
 
     def step_opencode(self) -> dict:
-        self.say("\n3. OpenCode")
+        self.heading("3. OpenCode")
         info = {"found": False, "version": "", "flags": [], "models": ""}
         if not self.opencode:
             self.fail("opencode is not on PATH.")
@@ -269,7 +292,7 @@ class Wizard:
         return info
 
     def step_config(self, info: dict) -> dict:
-        self.say("\n5. Configuration")
+        self.heading("5. Configuration")
         if LOCAL_CONFIG.exists():
             try:
                 config = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
@@ -378,22 +401,51 @@ class Wizard:
             choices.insert(0, current)
         if not self.interactive:
             return current
-        self.say("        Models (from opencode.json first, then `opencode models`):")
-        shown = choices[:15]
-        for index, choice in enumerate(shown, start=1):
-            marker = "  <- current" if choice == current else ""
-            self.say(f"          {index:2d}. {choice}{marker}")
+
+        def show(subset: list[str], note: str) -> None:
+            self.say("")
+            self.say(f"        {note}")
+            for index, choice in enumerate(subset, start=1):
+                tags = []
+                if choice in defined:
+                    tags.append("defined in opencode.json")
+                if choice == current:
+                    tags.append("current")
+                suffix = f"   <- {', '.join(tags)}" if tags else ""
+                self.say(f"          {index:3d}. {choice}{suffix}")
+
+        shown = choices[:_MODELS_SHOWN]
+        note = "Models, the ones defined in opencode.json first, then `opencode models`:"
         if len(choices) > len(shown):
-            self.say(f"              ... {len(choices) - len(shown)} more; type one as provider/model")
+            note = (f"Models, {len(choices)} in total, the ones defined in opencode.json first; "
+                    f"the first {len(shown)} are listed:")
+        show(shown, note)
+        if len(choices) > len(shown):
+            self.say(f"        ... {len(choices) - len(shown)} more. Type part of a name to filter "
+                     f"(e.g. kimi), or 'all' to list every one.")
         while True:
-            answer = self.ask("Model: Enter keeps the current one, or a number, or provider/model", "")
+            answer = self.ask("Model: Enter keeps the current one, a number picks one, "
+                              "or type provider/model", "")
             if not answer:
                 return current
-            if answer.isdigit() and 1 <= int(answer) <= len(shown):
-                return shown[int(answer) - 1]
+            if answer.isdigit():
+                if 1 <= int(answer) <= len(shown):
+                    return shown[int(answer) - 1]
+                self.say(f"        {answer} is not in the list above (1 to {len(shown)}).")
+                continue
+            if answer.lower() == "all":
+                shown = choices
+                show(shown, f"All {len(choices)} models:")
+                continue
             if _looks_like_model_string(answer):
                 return answer
-            self.say(f"        '{answer}' is not a model string (needs the form provider/model) - try again.")
+            matches = [choice for choice in choices if answer.lower() in choice.lower()]
+            if matches:
+                shown = matches
+                show(shown, f"Models matching '{answer}':")
+                continue
+            self.say(f"        Nothing matches '{answer}'. Type a number, part of a name, 'all', "
+                     "or a model string of the form provider/model.")
 
     def drop_stale_paths(self, config: dict) -> None:
         """Configured paths that no longer exist are forgotten, not offered.
@@ -431,25 +483,9 @@ class Wizard:
             if not self.interactive:
                 candidate = found
             elif found:
-                self.say(f"        company opencode.json found: {found}")
-                self.say("        1. use it     2. choose another with the file dialog     3. type a path")
-                while True:
-                    answer = self.ask("Choose 1, 2 or 3", "1")
-                    if answer == "1":
-                        candidate = found
-                        break
-                    if answer == "2":
-                        candidate = self.pick_file(found) or ""
-                        if candidate:
-                            break
-                        self.say("        no file chosen.")
-                        continue
-                    if answer == "3":
-                        candidate = self.ask("Path to opencode.json", found)
-                        break
-                    self.say("        Type 1, 2 or 3.")
+                candidate = self._choose_company_file(found)
             else:
-                self.say("        no company opencode.json found on this machine. A company setup needs one:")
+                self.say("        No company opencode.json found on this machine. A company setup needs one:")
                 self.say("        the file your IT provides, defining the internal gateway as a provider.")
                 candidate = self.pick_file("") or self.ask("Path to opencode.json", "")
         candidate = str(Path(candidate).expanduser()) if candidate else ""
@@ -457,11 +493,40 @@ class Wizard:
             self.fail("company setup without an opencode.json - the board cannot reach a model. "
                       "Get the file from IT, or choose the private profile.")
             return ""
-        if not Path(candidate).is_file():
-            self.fail(f"opencode.json not found: {candidate}")
+        problem = opencode_config_problem(candidate)
+        if problem:
+            self.fail(f"OpenCode configuration file {problem}")
             return ""
         self.ok(f"OpenCode configuration: {candidate}")
         return candidate
+
+    def _choose_company_file(self, found: str) -> str:
+        """Use the file found, or another one - and never accept a file
+        OpenCode would reject (9 September 2026: config.local.json was
+        handed to OpenCode, which refused its keys)."""
+        while True:
+            self.say(f"        Found: {found}")
+            self.say("        1. use it")
+            self.say("        2. choose another with the file dialog")
+            self.say("        3. type a path")
+            answer = self.ask("Choose 1, 2 or 3", "1")
+            if answer == "1":
+                candidate = found
+            elif answer == "2":
+                candidate = self.pick_file(found) or ""
+                if not candidate:
+                    self.say("        No file chosen.")
+                    continue
+            elif answer == "3":
+                candidate = self.ask("Path to opencode.json", found)
+            else:
+                self.say("        Type 1, 2 or 3.")
+                continue
+            problem = opencode_config_problem(candidate)
+            if not problem:
+                return candidate
+            self.warn(f"{candidate} {problem}")
+            self.say("        Choose again.")
 
     def find_opencode_config(self) -> str:
         """Likely locations: OPENCODE_CONFIG, OpenCode's global file, and an
@@ -472,8 +537,13 @@ class Wizard:
             for name in ("Opencode", "OpenCode", "opencode", "Opnecode"):
                 candidates.append(str(parent / name / "opencode.json"))
         for candidate in candidates:
-            if candidate and Path(candidate).is_file():
-                return candidate
+            if not candidate or not Path(candidate).is_file():
+                continue
+            problem = opencode_config_problem(candidate)
+            if problem:
+                self.say(f"        (not usable: {candidate} {problem})")
+                continue
+            return candidate
         return ""
 
     def describe_opencode_config(self, path: str) -> list[str]:
@@ -621,7 +691,7 @@ class Wizard:
         return path or None
 
     def step_test_call(self, config: dict, info: dict) -> None:
-        self.say("\n6. Test call through OpenCode")
+        self.heading("6. Test call through OpenCode")
         if not self.run_test:
             self.say("        skipped (--no-test).")
             return
@@ -789,11 +859,11 @@ class Wizard:
         if self.profile == "private":
             self.step_login(info)
         else:
-            self.say("\n4. Provider login")
+            self.heading("4. Provider login")
             self.say("        not needed: the company opencode.json carries the gateway key.")
         config = self.step_config(info)
         self.step_test_call(config, info)
-        self.say("\n7. Summary")
+        self.heading("7. Summary")
         notes = [problem for problem in self.problems if problem not in self.failures]
         if self.failures:
             self.say("        Must be fixed before the board can run:")
@@ -808,8 +878,10 @@ class Wizard:
         elif self.failures:
             self.say("\n        Fix the items above, then run this script again.")
         launcher = "python scripts\\run_board.py serve" if sys.platform == "win32" else "python3 scripts/run_board.py serve"
-        self.say(f"\n        Start the board:   {launcher}")
-        self.say("        Change any of this later in the interface under Options.")
+        self.say("")
+        self.say("        Next:")
+        self.bullets([f"start the board:  {launcher}",
+                      "change any of this later in the interface under Options"])
         if self.interactive and not self.failures and self.confirm("Start the board now?", True):
             from decisionboard.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
@@ -905,6 +977,13 @@ def diagnose(stdout: str | None, stderr: str | None) -> list[str]:
     """What a failed test call most likely means, from signatures seen on
     real machines. Falls back to the generic list."""
     text = (stdout or "") + (stderr or "")
+    if any(marker in text.lower() for marker in ("unrecognized key", "invalid config", "config file is invalid")):
+        return [
+            "OpenCode rejected its configuration file. OPENCODE_CONFIG (provider.opencode.config_file) points at a",
+            "file that is not an opencode.json - the keys it names (setup, storage, knowledge, ...) are Decision",
+            "Board's own config.local.json. Point it at the opencode.json from IT, which defines the provider and",
+            "the gateway, and run this script again.",
+        ]
     if is_database_mismatch(stdout, stderr):
         return [
             "This is OpenCode's own local database, not the board: its schema does not match the",

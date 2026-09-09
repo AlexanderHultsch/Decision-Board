@@ -50,6 +50,43 @@ class OpenCodeError(RuntimeError):
     """
 
 
+_BOARD_CONFIG_KEYS = ("knowledge", "setup", "storage", "runtime", "ui", "server")
+_CONFIG_REJECTED = ("unrecognized key", "unrecognized_keys", "invalid config", "config file is invalid")
+
+
+def opencode_config_problem(path: str | Path | None) -> str | None:
+    """Why ``path`` cannot serve as OpenCode's configuration, or ``None``
+    when it can. Seen 9 September 2026: Decision Board's own
+    ``config.local.json`` was handed to OpenCode as OPENCODE_CONFIG, and
+    OpenCode refused it with "unrecognized keys: _comment, setup, storage,
+    runtime, knowledge, ui" - which the wizard then blamed on the model
+    string. The two files share the key ``provider``; the check looks at
+    the keys only one of them has."""
+    if path in (None, ""):
+        return None
+    file = Path(str(path)).expanduser()
+    if not file.is_file():
+        return f"not found: {file}"
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"cannot be read: {exc}"
+    except json.JSONDecodeError as exc:
+        return f"is not valid JSON: {exc}"
+    if not isinstance(data, dict):
+        return "is not a JSON object"
+    board_keys = [key for key in _BOARD_CONFIG_KEYS if key in data]
+    provider = data.get("provider")
+    if board_keys or (isinstance(provider, dict) and isinstance(provider.get("models"), dict)
+                      and "board" in provider["models"]):
+        return (f"is Decision Board's own configuration (keys {', '.join(board_keys) or 'provider.models.board'}), "
+                "not an opencode.json. OpenCode needs the file from IT that defines the provider and the gateway "
+                "(keys: $schema, provider, model)")
+    if not any(key in data for key in ("provider", "model", "$schema", "mcp", "agent")):
+        return "defines no provider and no model - OpenCode would run on its own defaults, not on the gateway"
+    return None
+
+
 def describe_failure(stdout: str | None, stderr: str | None) -> str:
     """What a failed ``opencode run`` actually said. With ``--format json``
     OpenCode reports errors on **stdout**, as JSON events, and often writes
@@ -82,7 +119,11 @@ def describe_failure(stdout: str | None, stderr: str | None) -> str:
         parts.append(" ".join(other_lines)[:_STDERR_TRIM])
     if not parts:
         return "(no output - run `opencode auth list` and `opencode models` to check login and model name)"
-    return " | ".join(parts)
+    text = " | ".join(parts)
+    if any(marker in text.lower() for marker in _CONFIG_REJECTED):
+        text += (" - OpenCode rejected its configuration file: OPENCODE_CONFIG (Options: OpenCode configuration "
+                 "file) must point at the opencode.json from IT, not at Decision Board's config.local.json")
+    return text
 
 
 def _error_text(event: dict) -> str:

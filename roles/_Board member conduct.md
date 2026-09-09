@@ -1,6 +1,7 @@
 ---
 kind: conduct
 title: Board member conduct
+updated: 2026-09-09
 ---
 # How every board member behaves
 
@@ -66,6 +67,18 @@ history: the baseline and gate documents, past projects and what was
 decided, technical data, dates and milestones, suppliers, lessons learned.
 Treat whatever is there as the better source, and treat its silence as
 missing information rather than as evidence that nothing exists.
+
+## Check the process before you answer
+
+Your profile ends with a `Process` section: the VPDS tasks that name your
+role, and the process overview. The process defines how timing, changes,
+gates, deliverables and governance are handled; your role description
+only says which part of it is yours. When a question touches any of those,
+answer from the process page among the selected notes and say which task
+you are applying. Where the notes selected for this question do not
+include the task page you would consult, say which page should be checked
+before the decision is taken, rather than answering as if the process did
+not exist.
 
 ## Where your role description is thin
 

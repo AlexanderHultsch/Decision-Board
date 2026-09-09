@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Mechanical
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Mechanical Engineering
@@ -59,6 +60,14 @@ that make it. When something has to give, I protect the tooling schedule and
 the tolerance chain, and I give up late cosmetic and convenience changes -
 a tool cut twice costs weeks that no other lane can give back.
 
-## Keywords
+## Process
 
-MDO, cBOM, tolerance stack-up, GD&T, datum, tool kick-off, first article, draft angle, packaging, keep-out, sealing, PPAP, sample.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Project Managers
+- [[VPDS_Manage the Project]] - as Program Management Team
+- [[VPDS_Project Timing Plan]] - as Project Managers
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

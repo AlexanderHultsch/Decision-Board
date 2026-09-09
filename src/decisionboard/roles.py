@@ -320,15 +320,20 @@ def _is_member_file(path: Path) -> bool:
     return path.is_file() and not name.startswith("_") and not name.startswith("readme")
 
 
+MEMBERSHIP_KEY = "Part of Decision Board AI"     # a checkbox property in Obsidian
+
+
 def _off_board(path: Path) -> bool:
-    """``board: false`` in the front matter: a role page that lives with the
-    others (so tasks can link to it) but does not sit on the board - for
-    example Account Management (decided 9 September 2026)."""
+    """``Part of Decision Board AI: false`` in the front matter (``board:
+    false`` is still read): a role page that lives with the others (so
+    tasks can link to it) but does not sit on the board - for example
+    Account Management (decided 9 September 2026)."""
     try:
         meta = _front_matter(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return False
-    return _meta_str(meta, "board").lower() in ("false", "no", "0")
+    value = _meta_str(meta, MEMBERSHIP_KEY.lower()) or _meta_str(meta, "board")
+    return value.lower() in ("false", "no", "0")
 
 
 def _kind(path: Path) -> str:

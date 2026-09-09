@@ -74,11 +74,12 @@ class TestRealExamples(unittest.TestCase):
             for heading in ("## Official description",
                             "## Targets I am judged on",
                             "## What I protect when I cannot have everything",
-                            "## Keywords"):
+                            "## Process"):
                 self.assertIn(heading, profile.body, f"{member}: {heading}")
             for gone in ("## How this lane usually fails",
                          "## What I decide alone",
-                         "## Vocabulary"):
+                         "## Vocabulary",
+                         "## Keywords"):
                 self.assertNotIn(gone, profile.body, f"{member}: {gone}")
         # the official wording is untouched inside its section
         self.assertIn("VPDS Process Compliance", board.profiles["Hardware"].body)

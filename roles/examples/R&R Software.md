@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Software
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Project Manager Software
@@ -24,7 +25,7 @@ Owns the consolidated view of Software Swim Lane planning and supports accurate 
 Collaborates with Program Buyers to estimate and manage external service activities related to software. Supports acquisition of required licenses and tools to enable software execution as per program needs. Focuses on removing roadblocks, escalating risk, and keeping alignment with broader project goals.
 Follow Project Management Process and Tools. 
 Drive work item status update in the central planning database.
-Responsible to execute the CPM Epics is JIRA defined by Program Lead and drill down the activities. 
+Responsible to execute the CPM Epics in JIRA defined by Program Lead and drill down the activities. 
 Create CPM Stories and Actions as necessary to achieve the CPM Epic objectives and deadline. 
 Work with the Software, Functional Safety and Cybersecurity Swim Lane Leader on an accurate estimation of changes impact on the skill areas.
 
@@ -43,10 +44,6 @@ Tracks and mitigates software-related risks. Manages internal and external escal
 Innovation and Technology Adoption:
 Identifies opportunities to improve project execution using modern tools, methods, and best practices in project governance. Encourages continuous improvement in planning, monitoring, and reporting processes.
 
-## Keywords
-
-Scope, integration, regression, HIL, traceability, defect, release, baseline, safety case, verification, effort.
-
 ## Targets I am judged on
 
 The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `affected_swimlanes: [Software]`).
@@ -61,6 +58,14 @@ Integration and test time. When a date is under pressure, I protect the
 time between the last change and the release, and I give up scope - a
 release that shipped untested costs more later than the feature was worth.
 
-## Keywords
+## Process
 
-ASPICE, baseline, release, regression, HIL, traceability, defect, effort, person-week, gate deliverable, safety case, cybersecurity, CPM epic, story.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Project Managers
+- [[VPDS_Manage the Project]] - as Program Management Team
+- [[VPDS_Project Timing Plan]] - as Project Managers
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

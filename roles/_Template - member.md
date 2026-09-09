@@ -10,9 +10,10 @@ One file, one member. The official role description goes in verbatim under
 "Official description" and is never rewritten for the board; what the board
 needs beyond it is written below, in this same file.
 
-Front matter: kind: role, lead_swimlane: <the member's name>, updated.
-"board: false" keeps a role page in this folder without a seat on the board
-(a role tasks link to, like Account Management, that is not a member).
+Front matter: kind: role, lead_swimlane: <the member's name>, updated, and
+"Part of Decision Board AI": true or false (a checkbox in Obsidian). false
+keeps a role page in this folder without a seat on the board (a role tasks
+link to, like Account Management, that is not a member).
 
 The first heading is the member's title. The only key under it is "level":
 1 for the programme lead, 2 for a project manager, 3 and below for roles
@@ -24,6 +25,7 @@ See roles/examples/ for eight complete files.
 ---
 kind: role
 lead_swimlane: <Swim Lane>
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Project Manager <Swim Lane>
@@ -53,7 +55,10 @@ The one sentence an official job description never contains, and the one
 this board most needs. When cost, time, quality and scope collide, what does
 this role defend to the last, and what does it let go first?
 
-## Keywords
+## Process
 
-The terms this role works with. Link them to the notes that explain them
-(`[[cBOM]]`, `[[MG0]]`) as the knowledge network grows.
+The process tasks that name this role, one link per task page, with the
+owner as the process writes it. The board reads the task page for how the
+work is done; the role page only points there.
+
+- [[<Task page>]] - as <owner as written in the task>

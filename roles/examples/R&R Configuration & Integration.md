@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Configuration & Integration
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Project Manager Configuration & Integration
@@ -68,6 +69,12 @@ correct, released, traceable configuration, and I give up the comfort of
 late changes - a release that went out with a wrong BOM costs more to undo
 than the change was worth.
 
-## Keywords
+## Process
 
-GBC, BOM, change notice, temporary change, IMDS, release, sample, prototype, MP&L, procurement, homologation sample, configuration.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Configuration and Integration Project Manager
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

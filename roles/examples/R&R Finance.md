@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Finance
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Finance
@@ -36,6 +37,12 @@ arithmetic collide, I protect the forecast and the cost frame, and I give up
 speed of decision - a decision taken on a number nobody has checked is
 taken twice.
 
-## Keywords
+## Process
 
-Budget, forecast, actuals, cost-to-complete, cBOM, piece price, one-off, tooling, amortisation, exposure, variance, break-even, cost of delay.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Finance
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

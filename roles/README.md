@@ -24,12 +24,15 @@ files as you like.
 **One file, one member.** The official role description is kept word for
 word under `## Official description`, and what the board needs beyond it is
 written in the same file below: the targets the role is judged on, what it
-protects when it cannot have everything, and its keywords. A second file
+protects when it cannot have everything, and the process tasks that name it
+(links to the task pages, never a copy). A second file
 naming the same member is ignored and reported, never merged.
 
 Front matter on every role page: `kind: role`, `lead_swimlane: <the
-member>`, `updated: YYYY-MM-DD`. `board: false` keeps a role page in the
-folder - so process pages can link to it - without a seat on the board.
+member>`, `updated: YYYY-MM-DD`, and `Part of Decision Board AI: true` - a
+checkbox in Obsidian. `false` keeps a role page in the folder - so process
+pages can link to it - without a seat on the board (`board: false` is still
+read).
 The only key under the heading is `level:` - 1 the programme lead, 2 a
 project manager, 3 and below the roles under them. Nothing about
 presentation belongs in a role file: the icon and colour are derived from

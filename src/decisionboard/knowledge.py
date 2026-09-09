@@ -79,7 +79,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def _front_matter(text: str) -> dict[str, str | list[str]]:
-    """The minimal YAML this tool needs: ``title:`` and ``tags:``, either
+    """The minimal YAML this tool needs: ``title:``, ``tags:`` and the like, either
     inline (``tags: [a, b]`` / ``tags: a, b``) or as a ``- item`` list. No
     YAML library - standard library only, and Obsidian front matter in the
     wild is rarely more than this."""
@@ -100,7 +100,9 @@ def _front_matter(text: str) -> dict[str, str | list[str]]:
             if isinstance(items, list):
                 items.append(list_item.group(1).strip().strip("'\""))
             continue
-        key_value = re.match(r"^([A-Za-z_][\w-]*):\s*(.*)$", line)
+        # Keys may carry spaces ("Part of Decision Board AI: true" is a
+        # checkbox property in Obsidian); they are read lower-cased.
+        key_value = re.match(r"^([A-Za-z_][\w -]*?):\s*(.*)$", line)
         if not key_value:
             continue
         key, value = key_value.group(1).lower(), key_value.group(2).strip()

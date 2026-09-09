@@ -393,6 +393,20 @@ class TestOffBoardAndLeadSwimlane(unittest.TestCase):
         self.assertEqual(sorted(b.profiles), ["Finance", "Hardware"])
         self.assertEqual(b.skipped, [])
 
+    def test_the_checkbox_property_decides_membership(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Hardware", "Finance"))
+            (folder / "R&R Account Management.md").write_text(
+                "---\nkind: role\nlead_swimlane: Account Management\nPart of Decision Board AI: false\n---\n"
+                "# Account Manager\n\nReceives change requests from the customer and negotiates price and tooling orders.\n",
+                encoding="utf-8")
+            (folder / "R&R Quality.md").write_text(
+                "---\nkind: role\nlead_swimlane: Quality\nPart of Decision Board AI: true\n---\n"
+                "# Customer Group Quality\n\nOwns the customer quality indicators and the PPAP status of every part.\n",
+                encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(sorted(b.profiles), ["Finance", "Hardware", "Quality"])
+
     def test_lead_swimlane_names_the_member(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = make_roles(Path(tmp) / "r", ("Finance",))

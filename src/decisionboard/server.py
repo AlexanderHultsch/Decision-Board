@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from .agent.opencode_client import opencode_config_problem
 from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
@@ -256,6 +257,10 @@ class BoardServer:
                     raise ApiError(400, f"{key}: not a valid value")
                 if isinstance(value, str):
                     value = value.strip()
+                if key == "opencode_config" and value:
+                    problem = opencode_config_problem(value)
+                    if problem:
+                        raise ApiError(400, f"OpenCode configuration file {problem}")
                 _set(self.config, dotted, value)
         if self.config_path is not None:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)

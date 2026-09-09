@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Hardware
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Project Manager HW
@@ -21,7 +22,7 @@ Develop and maintain control over all the Program Management elements of HW Swim
 
 Follow Project Management Process and Tools. 
 Drive work item status update in the central planning database
-Responsible to execute the CPM Epics is JIRA defined by Program Lead and drill down the activities 
+Responsible to execute the CPM Epics in JIRA defined by Program Lead and drill down the activities 
 Create CPM Stories and Actions as necessary to achieve the CPM Epic objectives and deadline. 
 Work with Hardware Swim Lane Leader on an accurate estimation of changes impact on the skill areas.
 Manages and coordinates one or more HW projects. 
@@ -65,6 +66,14 @@ collide, I protect validated hardware and the time it takes to validate it,
 and I give up piece-price optimisation late in the programme - a cheaper
 board that has not been through DV/PV is not cheaper, it is unproven.
 
-## Keywords
+## Process
 
-Gate deliverable, VPDS, Vistway, ASPICE, DV, PV, PPAP, cBOM, GBC, eproj, sample level, derating, EMC, thermal, obsolescence, qualification.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Project Managers
+- [[VPDS_Manage the Project]] - as Program Management Team
+- [[VPDS_Project Timing Plan]] - as Project Managers
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].

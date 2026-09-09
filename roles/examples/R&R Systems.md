@@ -1,6 +1,7 @@
 ---
 kind: role
 lead_swimlane: Systems
+Part of Decision Board AI: true
 updated: 2026-09-09
 ---
 # Project Manager Systems
@@ -25,7 +26,7 @@ Follow Project Management Process and Tools.
 Drive work item status update in the central planning database.
 Manages and controls Product Configuration. 
 Responsible for Configuration Management.
-Responsible to execute the CPM Epics is JIRA defined by Program Lead and drill down the activities 
+Responsible to execute the CPM Epics in JIRA defined by Program Lead and drill down the activities 
 Create CPM Stories and CPM Actions as necessary to achieve the Epic objectives and deadline. 
 Work with Systems Swim Lane Leader on an accurate estimation of changes impact on the skill areas. 
 Manages one or more Systems projects, according to decision matrix based on project complexity matrix. 
@@ -72,6 +73,14 @@ date presses, I protect the evidence that the product does what it must,
 and I give up lane-local optimisation - a trade-off that helps one
 discipline and shrinks test coverage is a trade-off against the product.
 
-## Keywords
+## Process
 
-TDR, DFMEA, DV, PV, ENV, homologation, certification, configuration, diversity, test coverage, requirement, traceability, lab, bench, eproj.
+The VPDS tasks that name this role, with the owner as the process writes it.
+Read the task page before answering a question that touches it: the process
+defines each task once, this page only points there.
+
+- [[VPDS_Change Management]] - as Project Managers
+- [[VPDS_Manage the Project]] - as Program Management Team
+- [[VPDS_Project Timing Plan]] - as Project Managers
+
+Every task by phase: [[VPDS_Task_Overview]]. The process itself: [[VPDS_Overview]].
