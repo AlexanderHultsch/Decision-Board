@@ -87,8 +87,8 @@ members are needed for a board.
 **KPIs: the role names them, the network holds the numbers.** Each member's
 own profile lists the measures it is judged on - they differ from member to
 member - and carries no values. The values live in the vault, in one note
-per member with `kind: kpi` and `member: <name>` in its front matter, with
-`updated: YYYY-MM-DD`. Such a note is attached to its member on every call,
+per member with `kind: kpi` and `affected_swimlanes: [<name>, ...]` in its front
+matter, with `updated: YYYY-MM-DD`. Such a note is attached to its member on every call,
 whatever the question, and is never part of the ranked selection. The
 program states the note's age above it and marks it when it is stale
 (`knowledge.kpi_stale_days`, default 30), so a member can quote the date

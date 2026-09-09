@@ -31,7 +31,7 @@ level: 2
 The measures, not the numbers. Baseline is MG0. The values - baseline,
 target, current and estimate at completion, each with the date it was
 recorded - live in the knowledge network, in the KPI note for this member
-(`kind: kpi`, `member: <this member>`).
+(`kind: kpi`, `affected_swimlanes: [<this member>]`).
 
 - Resources: within the budget approved at MG0 - budget variance, estimate at completion.
 - Expenses: within the budget approved at MG0 - budget variance, estimate at completion.

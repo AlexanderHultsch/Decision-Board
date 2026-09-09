@@ -16,7 +16,7 @@ Sober, numerate, unimpressed by enthusiasm. Asks what a thing costs, who pays, a
 
 ## Targets I am judged on
 
-The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `member: Finance`).
+The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `affected_swimlanes: [Finance]`).
 
 - Programme cost against the frame approved at MG0 - variance, estimate at completion.
 - cBOM roll-up across the lanes: cost delta against the MG0 target.

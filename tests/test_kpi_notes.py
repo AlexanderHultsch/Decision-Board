@@ -24,7 +24,7 @@ def _vault(tmp: Path) -> Path:
     vault = tmp / "vault"
     (vault / "KPI").mkdir(parents=True)
     (vault / "KPI" / "KPI Hardware.md").write_text(
-        "---\nkind: kpi\nmember: Hardware\nbaseline: MG0\n---\n# KPI Hardware\n\n"
+        "---\nkind: kpi\naffected_swimlanes: [Hardware]\nbaseline: MG0\n---\n# KPI Hardware\n\n"
         "| KPI | MG0 | Target | Current |\n|---|---|---|---|\n| cBOM cost | 100 | 95 | 104 |\n", encoding="utf-8")
     (vault / "KPI" / "KPI shared.md").write_text(
         "---\nkind: kpi\nmember: [Hardware, Finance]\n---\nMilestone slip: 2 weeks.\n", encoding="utf-8")
@@ -33,6 +33,13 @@ def _vault(tmp: Path) -> Path:
 
 
 class TestKpiNotes(unittest.TestCase):
+    def test_the_old_member_key_is_still_read(self):
+        # KPI shared.md in the fixture uses "member:"; both keys attach the note
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = _vault(Path(tmp))
+            data = knowledge.kpi_notes({"knowledge": {"vault_path": str(vault)}}, ["Finance"])
+        self.assertIn("Milestone slip", data["Finance"])
+
     def test_notes_are_attached_to_the_members_they_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = _vault(Path(tmp))

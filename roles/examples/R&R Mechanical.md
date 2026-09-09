@@ -39,7 +39,7 @@ Identifying and evaluating emerging technologies, tools, and industry trends to 
 
 ## Targets I am judged on
 
-The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `member: Mechanical`).
+The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `affected_swimlanes: [Mechanical]`).
 
 - cBOM (costed bill of materials): cost delta against the target set at MG0.
 - Component usage within the product: change against the usage recorded at MG0.

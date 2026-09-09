@@ -44,7 +44,7 @@ Scope, integration, regression, HIL, traceability, defect, release, baseline, sa
 
 ## Targets I am judged on
 
-The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `member: Software`).
+The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `affected_swimlanes: [Software]`).
 
 - Resources: within the budget approved at MG0 - budget variance, estimate at completion.
 - Expenses: within the budget approved at MG0 - budget variance, estimate at completion.

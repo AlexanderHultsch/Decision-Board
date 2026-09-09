@@ -54,8 +54,8 @@ class Note:
     title: str
     tags: tuple[str, ...]
     body: str               # full file text, front matter included
-    kind: str = ""          # front matter ``kind``: "kpi" marks a member's KPI data note
-    member: tuple[str, ...] = ()   # front matter ``member`` (one or several), for kind: kpi
+    kind: str = ""          # front matter ``kind``: "kpi" marks a KPI data note
+    member: tuple[str, ...] = ()   # front matter ``affected_swimlanes`` (``member`` still accepted): who the note is attached to
 
 
 @dataclass
@@ -125,7 +125,9 @@ def _load_note(vault: Path, path: Path) -> Note:
         tags = tuple(str(tag).lstrip("#") for tag in tags_raw)
     relative = path.relative_to(vault).as_posix()
     kind = meta.get("kind") if isinstance(meta.get("kind"), str) else ""
-    member_raw = meta.get("member", ())
+    # ``affected_swimlanes`` is the key (decided 9 September 2026: a page says
+    # which swim lanes it affects); ``member`` is read as well for old notes.
+    member_raw = meta.get("affected_swimlanes", meta.get("member", ()))
     if isinstance(member_raw, str):
         members = tuple(m.strip() for m in member_raw.split(",") if m.strip())
     else:
@@ -283,8 +285,9 @@ def _freshness(note: "Note", today: date, stale_days: int) -> str:
 def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date | None = None) -> dict[str, str]:
     """The KPI data block for each member (spec 3.4, decided 9 September
     2026): every note in the vault whose front matter says ``kind: kpi`` and
-    names the member is attached to that member's call, always, whatever
-    the question - the role says which KPI, the network holds the number.
+    lists the member under ``affected_swimlanes`` is attached to that
+    member's call, always, whatever the question - the role says which KPI,
+    the network holds the number.
     Members without a note get no block; the role profile tells them to say
     the target is not in the network yet. Raises ``KnowledgeUnavailable`` as
     ``gather`` does."""

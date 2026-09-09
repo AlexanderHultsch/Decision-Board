@@ -90,7 +90,7 @@ class TestRealExamples(unittest.TestCase):
         for member, profile in board.profiles.items():
             section = profile.body.split("## Targets I am judged on")[1].split("## What I protect")[0]
             self.assertIn("MG0", section, member)
-            self.assertIn(f"`member: {member}`", section, member)
+            self.assertIn(f"`affected_swimlanes: [{member}]`", section, member)
             for kpi in ("Resources", "Expenses", "Milestones"):
                 self.assertIn(kpi, section, f"{member}: {kpi}")
             has_cbom = "cBOM" in section

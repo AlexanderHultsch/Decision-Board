@@ -40,7 +40,7 @@ Identifying and evaluating emerging technologies, tools, and industry trends to 
 
 ## Targets I am judged on
 
-The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `member: Manufacturing`).
+The measures, not the numbers. Baseline is MG0. The values - baseline, target, current and estimate at completion, each with the date it was recorded - live in the knowledge network, in the KPI note for this member (`kind: kpi`, `affected_swimlanes: [Manufacturing]`).
 
 - Resources: within the budget approved at MG0 - budget variance, estimate at completion.
 - Expenses: within the budget approved at MG0 - budget variance, estimate at completion.
