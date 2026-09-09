@@ -127,14 +127,8 @@
     const flags = (a.flags || []).length ? `<dt class="bad">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
     return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
-  function modeOf(id) {
-    const box = document.querySelector(`#${id} input:checked`);
-    return box ? box.value : "individual";
-  }
-  function setMode(id, value) {
-    const box = document.querySelector(`#${id} input[value="${value}"]`);
-    if (box) box.checked = true;
-  }
+  function modeOf(id) { return $(id).value || "individual"; }
+  function setMode(id, value) { $(id).value = value; if ($(id).value !== value) $(id).value = "individual"; }
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
   }
@@ -406,7 +400,7 @@
         : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${combined ? "1 model call follows (combined)" : `${n + 1} model calls follow`}.`;
     };
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
-    $("run-mode").querySelectorAll("input").forEach((box) => { box.onchange = () => { countLine(); saveConfirmDraft(); }; });
+    $("run-mode").onchange = () => { countLine(); saveConfirmDraft(); };
     countLine();
     show("confirm");
   }
@@ -606,7 +600,7 @@
     $("btn-followup").disabled = session.busy;
     $("btn-close").disabled = session.busy;
     const again = picked($("followup-members")).length;
-    $("followup-mode").hidden = again === 0;
+    $("followup-mode-row").hidden = again === 0;
     const combinedFollow = modeOf("followup-mode") === "combined";
     $("result-hint").textContent = `${session.llm_calls} model call(s) so far · this follow-up costs ${again ? (combinedFollow ? "one (combined)" : `${again + 1} (${again} member(s) asked again, plus one)`) : "one"}`;
     setError("result-error", session.error || "");

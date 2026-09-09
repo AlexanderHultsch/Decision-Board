@@ -76,9 +76,11 @@
       <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
     </form>
     <p class="eyebrow">How the board is asked <button type="button" class="info-btn" id="btn-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button></p>
-    <div class="segmented" id="run-mode" role="radiogroup">
-      <label><input type="radio" name="run-mode" value="individual" checked><span>Ask for individual feedback from each board member</span></label>
-      <label><input type="radio" name="run-mode" value="combined"><span>Ask for combined feedback from the board members</span></label>
+    <div class="select-wrap">
+      <select id="run-mode" class="select-modern">
+        <option value="individual">Ask for individual feedback from each board member</option>
+        <option value="combined">Ask for combined feedback from the board members</option>
+      </select>
     </div>
     <div id="mode-info" class="small info-text" hidden><strong>Individual</strong> (default)<br>One call per ticked member, each answering alone, then one call that consolidates. Members cannot see each other, so disagreements stay visible.<br><span class="muted">Cost: one call per member, plus one.</span>
 <br><br><strong>Combined</strong><br>One call receives every ticked profile, the KPI notes and the same knowledge, and writes all entries and the direction in one pass. One model writes them all and sees the earlier entries while writing the later, so fewer disagreements surface.<br><span class="muted">Cost: one call. Good for a quick first opinion, follow-ups and topics that concern few swim lanes.</span>
@@ -119,9 +121,13 @@
         <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
         <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
         <div id="followup-members" class="member-picks compact"></div>
-        <div class="segmented compact" id="followup-mode" role="radiogroup" hidden>
-          <label><input type="radio" name="followup-mode" value="individual" checked><span>Individually: one call each, plus one</span></label>
-          <label><input type="radio" name="followup-mode" value="combined"><span>Combined: one call for all</span></label>
+        <div class="row" id="followup-mode-row" hidden>
+          <div class="select-wrap compact">
+            <select id="followup-mode" class="select-modern">
+              <option value="individual">Ask them individually: one call each, plus one</option>
+              <option value="combined">Ask them combined: one call for all</option>
+            </select>
+          </div>
           <button type="button" class="info-btn" id="btn-followup-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
         </div>
         <div class="row between">
