@@ -24,6 +24,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from copy import deepcopy
 from dataclasses import asdict
@@ -37,7 +38,7 @@ from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
 from . import roles as roles_mod
-from .agent.provider import AiNotConfiguredError, AiProvider, build_provider
+from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
 from .board import BoardConversation, ask_follow_up_full, run_board, run_board_combined
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -77,6 +78,51 @@ def _set(config: dict, dotted: str, value: Any) -> None:
     node[parts[-1]] = value
 
 
+def _call_label(prompt: str, phase: str) -> tuple[str, str]:
+    """What a model call was for, read from the markers each prompt builder
+    puts in (the same markers the tests route on): a step name and, for a
+    member call, the member. Deterministic, no model involved."""
+    if "## Question from Alex" in prompt:
+        return ("clarifier", "")
+    if "## Vault outline" in prompt:
+        return ("memory proposal", "")
+    if "## Members to ask again" in prompt:
+        return ("follow-up, combined", "")
+    if "## Members to assess" in prompt:
+        return ("board, combined", "")
+    if "## Your earlier assessment" in prompt:
+        return ("follow-up, member", prompt.split("Member: ", 1)[1].splitlines()[0] if "Member: " in prompt else "")
+    if "## New question" in prompt:
+        return ("follow-up, board", "")
+    if "## Assessments" in prompt:
+        return ("synthesis", "")
+    if "## Member (FR-3.3a)" in prompt or "Member: " in prompt:
+        return ("member", prompt.split("Member: ", 1)[1].splitlines()[0] if "Member: " in prompt else "")
+    return (phase or "call", "")
+
+
+class RecordingProvider(AiProvider):
+    """Wraps the real provider for one session and writes every call's
+    tokens and duration into the session's statistics (decided
+    9 September 2026: how much did this question cost, step by step)."""
+
+    def __init__(self, inner: AiProvider, session: "Session") -> None:
+        self._inner = inner
+        self._session = session
+
+    def complete(self, task: str, prompt: str) -> AiResult:
+        started = time.monotonic()
+        step, member = _call_label(prompt, self._session.phase)
+        try:
+            result = self._inner.complete(task, prompt)
+        except Exception as exc:
+            self._session.record_call(step, member, None, None, time.monotonic() - started, error=str(exc)[:120])
+            raise
+        duration = result.duration_seconds if result.duration_seconds else time.monotonic() - started
+        self._session.record_call(step, member, result.input_tokens, result.output_tokens, duration)
+        return result
+
+
 class Session:
     """One topic, from the typed question to the closed topic."""
 
@@ -84,6 +130,9 @@ class Session:
         self.id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.question = question
+        self.started = time.time()
+        self.calls: list[dict[str, Any]] = []          # every model call: step, member, tokens, seconds
+        self.marks: list[dict[str, Any]] = [{"phase": "started", "at": self.started}]   # phase changes, for wall time
         self.phase = "clarifying"
         self.error: str | None = None
         self.busy = False
@@ -149,6 +198,7 @@ class Session:
                 "members": self.members,
                 "partial": self.partial,
                 "mode": self.mode,
+                "stats": {"calls": self.calls, "marks": self.marks, "started": self.started},
                 "result": self.result,
                 "turns": self.turns,
                 "llm_calls": self.llm_calls,
@@ -161,6 +211,20 @@ class Session:
             self.phase = "error"
             self.error = message
             self.busy = False
+            self.marks.append({"phase": "error", "at": time.time()})
+
+    def mark(self, phase: str) -> None:
+        """Under the caller's lock or not - appending is atomic enough."""
+        self.marks.append({"phase": phase, "at": time.time()})
+
+    def record_call(self, step: str, member: str, input_tokens: int | None, output_tokens: int | None,
+                    seconds: float, error: str | None = None) -> None:
+        with self.lock:
+            self.calls.append({
+                "n": len(self.calls) + 1, "step": step, "member": member, "phase": self.phase,
+                "input_tokens": input_tokens, "output_tokens": output_tokens, "seconds": round(seconds, 1),
+                "error": error, "at": time.time(),
+            })
 
 
 class BoardServer:
@@ -339,7 +403,7 @@ class BoardServer:
             session.knowledge_text = selection.text
             session.sent_notes = {note.relative: note.body for note in selection.notes}
         try:
-            provider = self.provider()
+            provider = RecordingProvider(self.provider(), session)
             clarification = clarify_mod.clarify(provider, session.question, session.knowledge_text)
         except Exception as exc:   # any provider failure ends the session visibly
             session.fail(str(exc))
@@ -348,6 +412,7 @@ class BoardServer:
             session.clarification = clarification
             session.llm_calls += 1
             session.phase = "questions"
+            session.mark("questions")
 
     def answer(self, session: Session, answers: list[str], *, final: bool = False) -> None:
         """Alex's answers to the current round. Unless ``final`` (the "ask
@@ -382,11 +447,13 @@ class BoardServer:
             "constraints": list(clarification.constraints),
         }
         session.phase = "confirm"
+        session.mark("confirm")
 
     def _clarify_more(self, session: Session) -> None:
         rounds = [(r["questions"], r["answers"]) for r in session.rounds]
         try:
-            clarification = clarify_mod.clarify(self.provider(), session.question, session.knowledge_text, rounds)
+            clarification = clarify_mod.clarify(RecordingProvider(self.provider(), session), session.question,
+                                                session.knowledge_text, rounds)
         except Exception as exc:
             session.fail(str(exc))
             return
@@ -403,6 +470,7 @@ class BoardServer:
             session.answers = []
             if clarification.questions:
                 session.phase = "questions"
+                session.mark("questions")
             else:
                 self._to_confirm(session)
 
@@ -422,6 +490,7 @@ class BoardServer:
             session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
             session.phase = "running"
+            session.mark("running")
             session.members = {member: "pending" for member in session.selected_members}
         self._spawn(session, self._run_board, session)
 
@@ -444,8 +513,9 @@ class BoardServer:
         def on_member(member: str, state: str) -> None:
             with session.lock:
                 session.members[member] = state
-                if all(s in ("done", "failed") for s in session.members.values()):
+                if all(s in ("done", "failed") for s in session.members.values()) and session.phase != "synthesising":
                     session.phase = "synthesising"
+                    session.mark("synthesising")
 
         def on_assessment(assessment) -> None:
             with session.lock:
@@ -473,7 +543,7 @@ class BoardServer:
                 session.partial = {}
             runner = run_board_combined if session.mode == "combined" else run_board
             result = runner(
-                self.config, self.provider(),
+                self.config, RecordingProvider(self.provider(), session),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
                 on_member=on_member, board=board, member_data=member_data, members=selected,
@@ -503,6 +573,7 @@ class BoardServer:
             }
             session.llm_calls += result.llm_calls
             session.phase = "result"
+            session.mark("result")
 
     def follow_up(self, session: Session, question: str, members: Any = None, mode: Any = None) -> None:
         """A follow-up. ``members`` names the members to ask again (decided
@@ -522,13 +593,15 @@ class BoardServer:
                 chosen = [m for m in session.members if m.lower() in wanted]
             follow_mode = "combined" if str(mode or "").lower() == "combined" else "individual"
             session.busy = True
+            session.mark("follow-up")
             session.turns.append({"question": question, "answer": "", "pending": True, "members": chosen,
                                   "mode": follow_mode, "data": None, "assessments": [], "failed_members": []})
         self._spawn(session, self._follow_up, session, question, chosen, follow_mode)
 
     def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual") -> None:
         try:
-            turn = ask_follow_up_full(self.config, self.provider(), session.conversation, question, chosen, follow_mode)
+            turn = ask_follow_up_full(self.config, RecordingProvider(self.provider(), session), session.conversation,
+                                      question, chosen, follow_mode)
         except Exception as exc:
             with session.lock:
                 session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
@@ -544,6 +617,7 @@ class BoardServer:
             }
             session.llm_calls += turn.llm_calls
             session.busy = False
+            session.mark("follow-up answered")
 
     def back(self, session: Session) -> None:
         """After an error (or from the confirm screen): return to the last
@@ -591,7 +665,7 @@ class BoardServer:
     def _propose(self, session: Session) -> None:
         try:
             proposal = memory_writer.propose(
-                self.provider(), Path(session.knowledge["vault_path"]),
+                RecordingProvider(self.provider(), session), Path(session.knowledge["vault_path"]),
                 topic=session.inputs["topic"], inputs=session.inputs,
                 synthesis=(session.result or {}).get("synthesis_data") or (session.result or {}).get("synthesis", ""),
                 turns=[(t["question"], t["answer"]) for t in session.turns if not t.get("pending")],

@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
 from decisionboard.server import create_http_server  # noqa: E402
+from decisionboard import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
 MEMBER_COUNT = len(CLASSIC)
@@ -282,7 +283,7 @@ class TestServerFlow(unittest.TestCase):
         try:
             _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
             sid = state["id"]
-            for round_number in range(1, 4):
+            for round_number in range(1, clarify_mod.MAX_ROUNDS + 1):
                 state = self.wait_for(sid, lambda s: s["phase"] in ("questions", "confirm"))
                 if state["phase"] == "confirm":
                     break

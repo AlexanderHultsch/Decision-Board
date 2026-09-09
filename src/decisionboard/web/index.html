@@ -15,6 +15,9 @@
   </div>
   <div class="topbar-right">
     <span id="knowledge-chip" class="chip" title="Knowledge source"></span>
+    <button id="btn-stats" class="icon-btn" title="Statistics: tokens and time for this topic" aria-label="Statistics">
+      <svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M6 17v-5M11 17V7M16 17v-8M21 17V4"/></svg>
+    </button>
     <button id="btn-options" class="icon-btn" title="Options" aria-label="Options">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
@@ -72,15 +75,14 @@
       <label>Options under consideration <span class="muted small">one per line</span><textarea id="in-options" rows="4"></textarea></label>
       <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
     </form>
-    <p class="eyebrow">How the board is asked</p>
-    <div class="row mode-row">
-      <select id="run-mode">
-        <option value="individual">Ask for individual feedback from each board member</option>
-        <option value="combined">Ask for combined feedback from the board members</option>
-      </select>
-      <button type="button" class="icon-btn info-btn" id="btn-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
+    <p class="eyebrow">How the board is asked <button type="button" class="info-btn" id="btn-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button></p>
+    <div class="segmented" id="run-mode" role="radiogroup">
+      <label><input type="radio" name="run-mode" value="individual" checked><span>Ask for individual feedback from each board member</span></label>
+      <label><input type="radio" name="run-mode" value="combined"><span>Ask for combined feedback from the board members</span></label>
     </div>
-    <p id="mode-info" class="muted small info-text" hidden>Individual: one call per ticked member, each answering alone, then one call that consolidates. Members cannot see each other, so disagreements stay visible. Costs one call per member plus one. Combined: one call receives every ticked profile, the KPI notes and the same knowledge, writes every member's entry and the board direction in one pass. About one ninth of the cost with eight members. The trade: one model writes all entries and sees the earlier ones while writing the later, so the entries lean towards each other and fewer disagreements surface. The program checks that every member came back, that each entry names its own measures or tasks, and every citation, in both modes. Use combined for a quick first opinion, follow-ups, or topics that concern few swim lanes; use individual for a decision that matters.</p>
+    <div id="mode-info" class="small info-text" hidden><strong>Individual</strong> (default)<br>One call per ticked member, each answering alone, then one call that consolidates. Members cannot see each other, so disagreements stay visible.<br><span class="muted">Cost: one call per member, plus one.</span>
+<br><br><strong>Combined</strong><br>One call receives every ticked profile, the KPI notes and the same knowledge, and writes all entries and the direction in one pass. One model writes them all and sees the earlier entries while writing the later, so fewer disagreements surface.<br><span class="muted">Cost: one call. Good for a quick first opinion, follow-ups and topics that concern few swim lanes.</span>
+<br><br>In both modes the program checks that every member came back, that each entry names its own measures or tasks, and every citation.</div>
     <p class="eyebrow">Who is asked <span class="muted small">untick a swim lane the topic does not concern</span></p>
     <div id="confirm-members" class="member-picks"></div>
     <p id="confirm-knowledge" class="muted small"></p>
@@ -117,12 +119,10 @@
         <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
         <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
         <div id="followup-members" class="member-picks compact"></div>
-        <div class="row mode-row" id="followup-mode-row" hidden>
-          <select id="followup-mode">
-            <option value="individual">Ask them individually (one call each, plus one)</option>
-            <option value="combined">Ask them combined (one call for all)</option>
-          </select>
-          <button type="button" class="icon-btn info-btn" id="btn-followup-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
+        <div class="segmented compact" id="followup-mode" role="radiogroup" hidden>
+          <label><input type="radio" name="followup-mode" value="individual" checked><span>Individually: one call each, plus one</span></label>
+          <label><input type="radio" name="followup-mode" value="combined"><span>Combined: one call for all</span></label>
+          <button type="button" class="info-btn" id="btn-followup-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
         </div>
         <div class="row between">
           <span id="result-hint" class="muted small"></span>
@@ -186,6 +186,14 @@
     </div>
   </section>
 </main>
+<div id="stats-dialog" class="modal" hidden>
+  <div class="modal-card wide">
+    <h2>Statistics</h2>
+    <p id="stats-summary" class="muted small"></p>
+    <div id="stats-body" class="stats"></div>
+    <div class="row end"><button id="btn-stats-close" type="button" class="ghost">Close</button></div>
+  </div>
+</div>
 <footer class="colophon">© Alexander Hultsch</footer>
 
 <!-- Close dialog -->

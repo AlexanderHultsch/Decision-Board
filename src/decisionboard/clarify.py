@@ -39,7 +39,7 @@ class Clarification:
     parse_error: str | None = None
 
 
-MAX_ROUNDS = 3       # clarification rounds before the board is asked regardless
+MAX_ROUNDS = 5       # clarification rounds before the board is asked regardless (raised from 3, 9 September 2026)
 
 
 def clarifier_prompt(question: str, knowledge_text: str, rounds: list[tuple[list[str], list[str]]] | None = None) -> str:

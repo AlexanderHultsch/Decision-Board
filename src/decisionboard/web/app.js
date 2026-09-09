@@ -127,6 +127,14 @@
     const flags = (a.flags || []).length ? `<dt class="bad">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
     return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
+  function modeOf(id) {
+    const box = document.querySelector(`#${id} input:checked`);
+    return box ? box.value : "individual";
+  }
+  function setMode(id, value) {
+    const box = document.querySelector(`#${id} input[value="${value}"]`);
+    if (box) box.checked = true;
+  }
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
   }
@@ -353,7 +361,7 @@
       <label><span class="q-text">${i + 1}. ${esc(q)}</span>
         <textarea rows="2" data-index="${i}" placeholder="Your answer, or leave blank">${esc(session.answers[i] || (kept.key === key ? kept.values[i] : "") || "")}</textarea></label>`).join("");
     form.oninput = () => saveDraft({ answers: { key, values: Array.from(form.querySelectorAll("textarea")).map((t) => t.value) } });
-    const last = round >= (session.max_rounds || 3);
+    const last = round >= (session.max_rounds || 5);
     $("btn-answers").textContent = last ? "Continue to the board" : "Continue";
     $("btn-answers-final").hidden = last;
     $("questions-hint").textContent = last
@@ -389,16 +397,16 @@
     const ticked = new Set(kept && kept.members ? kept.members : (session.selected_members && session.selected_members.length ? session.selected_members : names));
     renderPicks($("confirm-members"), names, ticked);
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
-    $("run-mode").value = (kept && kept.mode) || session.mode || "individual";
+    setMode("run-mode", (kept && kept.mode) || session.mode || "individual");
     const countLine = () => {
       const n = picked($("confirm-members")).length;
-      const combined = $("run-mode").value === "combined";
+      const combined = modeOf("run-mode") === "combined";
       $("confirm-knowledge").textContent = (k && k.vault_path
         ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
         : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${combined ? "1 model call follows (combined)" : `${n + 1} model calls follow`}.`;
     };
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
-    $("run-mode").onchange = () => { countLine(); saveConfirmDraft(); };
+    $("run-mode").querySelectorAll("input").forEach((box) => { box.onchange = () => { countLine(); saveConfirmDraft(); }; });
     countLine();
     show("confirm");
   }
@@ -406,7 +414,7 @@
   function saveConfirmDraft() {
     saveDraft({ confirm: {
       topic: $("in-topic").value, context: $("in-context").value, options: $("in-options").value,
-      constraints: $("in-constraints").value, members: picked($("confirm-members")), mode: $("run-mode").value,
+      constraints: $("in-constraints").value, members: picked($("confirm-members")), mode: modeOf("run-mode"),
     } });
   }
 
@@ -428,7 +436,7 @@
     const body = {
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
-      members, mode: $("run-mode").value,
+      members, mode: modeOf("run-mode"),
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
     catch (err) { showError(err.message); }
@@ -475,9 +483,12 @@
     const count = Object.values(session.members).filter((s) => s === "done").length;
     $("result-topic").textContent = (session.inputs && session.inputs.topic) || session.question || "";
     const early = new Map(Object.entries(session.partial || {}));
-    $("board-state").textContent = synthesising
-      ? "Every member has answered. One more call reads every answer and writes the board direction."
-      : `The board is in session: ${n} member(s), each answering without seeing the others.${early.size ? " Answers already in can be read now." : ""}`;
+    const combined = session.mode === "combined";
+    $("board-state").textContent = combined
+      ? `The board is in session, combined: one call writes the entries of ${n} member(s) and the direction together.`
+      : synthesising
+        ? "Every member has answered. One more call reads every answer and writes the board direction."
+        : `The board is in session: ${n} member(s), each answering without seeing the others.${early.size ? " Answers already in can be read now." : ""}`;
     const failedNow = new Map(Object.entries(session.members).filter(([, s]) => s === "failed").map(([m]) => [m, m]));
     const key = `${session.phase}:${Object.values(session.members).join(",")}:${early.size}:${Array.from(openMembers).join(",")}`;
     if ($("member-grid").dataset.key !== key) {     // redraw only on change: keeps the open cards steady
@@ -489,10 +500,13 @@
     const card = $("synthesis-card");
     card.className = `card synthesis direction-tile ${synthesising ? "running" : "pending"}`;
     card.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
-    $("direction-state").textContent = synthesising
-      ? "Thinking: reading all answers, weighing the disagreements, writing the recommendation…"
-      : `Waits for every member to answer (${count} of ${n} so far)`;
-    $("direction-spinner").hidden = !synthesising;
+    $("direction-state").textContent = combined
+      ? "Thinking: one call writes every member's entry and the direction…"
+      : synthesising
+        ? "Thinking: reading all answers, weighing the disagreements, writing the recommendation…"
+        : `Waits for every member to answer (${count} of ${n} so far)`;
+    $("direction-spinner").hidden = !(synthesising || combined);
+    if (combined) card.className = "card synthesis direction-tile running";
     $("synthesis-body").innerHTML = "";
     $("ask-back").hidden = true;
     show("result");
@@ -592,8 +606,8 @@
     $("btn-followup").disabled = session.busy;
     $("btn-close").disabled = session.busy;
     const again = picked($("followup-members")).length;
-    $("followup-mode-row").hidden = again === 0;
-    const combinedFollow = $("followup-mode").value === "combined";
+    $("followup-mode").hidden = again === 0;
+    const combinedFollow = modeOf("followup-mode") === "combined";
     $("result-hint").textContent = `${session.llm_calls} model call(s) so far · this follow-up costs ${again ? (combinedFollow ? "one (combined)" : `${again + 1} (${again} member(s) asked again, plus one)`) : "one"}`;
     setError("result-error", session.error || "");
     show("result");
@@ -617,7 +631,7 @@
     if (!question) return;
     const members = picked($("followup-members"));
     try {
-      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members, mode: $("followup-mode").value });
+      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members, mode: modeOf("followup-mode") });
       $("followup").value = "";
       saveDraft({ followup: "" });
       $("followup-members").querySelectorAll("input").forEach((box) => { box.checked = false; box.closest("label").classList.add("off"); });
@@ -661,6 +675,75 @@
   async function discardMemory() {
     try { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); }
     catch (err) { setError("proposal-error", err.message); }
+  }
+
+  // -- statistics: tokens and time per step (9 September 2026) ----------------
+
+  function fmtNum(n) { return n == null ? "–" : Number(n).toLocaleString("en-GB"); }
+  function fmtSec(s) { return s == null ? "–" : s < 60 ? `${Number(s).toFixed(1)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; }
+
+  function wallTimes(marks) {
+    // Wall time per phase, from the phase marks: each mark lasts until the next.
+    const rows = [];
+    const names = { running: "board members", synthesising: "consolidation", "follow-up": "follow-up", proposing: "memory proposal" };
+    let followUps = 0;
+    for (let i = 0; i < marks.length - 1; i++) {
+      const name = marks[i].phase;
+      if (!names[name]) continue;   // the rest is time waiting for Alex, not for the model
+      const seconds = marks[i + 1].at - marks[i].at;
+      if (seconds < 0.05) continue;  // the combined mode has no separate consolidation
+      rows.push({ phase: name === "follow-up" ? `follow-up ${++followUps}` : names[name], seconds });
+    }
+    // The clarifier's own time: from the start (or an answer) to the questions.
+    const clar = [];
+    for (let i = 0; i < marks.length - 1; i++) {
+      if (["started", "questions"].includes(marks[i].phase) && ["questions", "confirm"].includes(marks[i + 1].phase) && marks[i + 1].at - marks[i].at < 3600) {
+        clar.push(marks[i + 1].at - marks[i].at);
+      }
+    }
+    return { rows, clarifier: clar.reduce((a, b) => a + b, 0) };
+  }
+
+  function openStats() {
+    const dialog = $("stats-dialog");
+    const stats = session && session.stats;
+    if (!stats || !stats.calls.length) {
+      $("stats-summary").textContent = session ? "No model call yet for this topic." : "Start a topic; the statistics fill in as the board works.";
+      $("stats-body").innerHTML = "";
+      dialog.hidden = false;
+      return;
+    }
+    const calls = stats.calls;
+    const sum = (key) => calls.reduce((a, c) => a + (c[key] || 0), 0);
+    const groups = new Map();
+    calls.forEach((c) => {
+      const key = c.step;
+      const g = groups.get(key) || { step: key, calls: 0, input: 0, output: 0, seconds: 0, members: [] };
+      g.calls += 1; g.input += c.input_tokens || 0; g.output += c.output_tokens || 0; g.seconds += c.seconds || 0;
+      if (c.member) g.members.push(c);
+      groups.set(key, g);
+    });
+    const wall = wallTimes(stats.marks || []);
+    const last = stats.marks && stats.marks.length ? stats.marks[stats.marks.length - 1].at : Date.now() / 1000;
+    const total = last - stats.started;
+    $("stats-summary").textContent = `${calls.length} model call(s) · ${fmtNum(sum("input_tokens"))} tokens in · ${fmtNum(sum("output_tokens"))} tokens out · ${fmtSec(sum("seconds"))} of model time · ${fmtSec(total)} from the question to now`;
+    const rows = [];
+    groups.forEach((g) => {
+      rows.push(`<tr><td>${esc(g.step)}</td><td class="num">${g.calls}</td><td class="num">${fmtNum(g.input)}</td><td class="num">${fmtNum(g.output)}</td><td class="num">${fmtSec(g.seconds)}</td></tr>`);
+      g.members.forEach((c) => {
+        rows.push(`<tr class="group"><td>&nbsp;&nbsp;${esc(c.member)}${c.error ? ` <span class="err">failed: ${esc(c.error)}</span>` : ""}</td><td class="num">1</td><td class="num">${fmtNum(c.input_tokens)}</td><td class="num">${fmtNum(c.output_tokens)}</td><td class="num">${fmtSec(c.seconds)}</td></tr>`);
+      });
+    });
+    rows.push(`<tr class="total"><td>Total</td><td class="num">${calls.length}</td><td class="num">${fmtNum(sum("input_tokens"))}</td><td class="num">${fmtNum(sum("output_tokens"))}</td><td class="num">${fmtSec(sum("seconds"))}</td></tr>`);
+    const wallRows = wall.rows.map((r) => `<tr><td>${esc(r.phase)}</td><td class="num">${fmtSec(r.seconds)}</td></tr>`).join("");
+    $("stats-body").innerHTML = `
+      <table><thead><tr><th>Step</th><th class="num">Calls</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Model time</th></tr></thead><tbody>${rows.join("")}</tbody></table>
+      <p class="eyebrow">Wall time <span class="muted small">members run in parallel, so a step is shorter than its calls added up</span></p>
+      <table><thead><tr><th>Phase</th><th class="num">Duration</th></tr></thead><tbody>
+        <tr><td>clarifier (all rounds)</td><td class="num">${fmtSec(wall.clarifier)}</td></tr>${wallRows}
+        <tr class="total"><td>From the question to now</td><td class="num">${fmtSec(total)}</td></tr></tbody></table>
+      <p class="muted small">A retried empty run counts once, with the retry's tokens. Time you spent answering questions is not counted as model time.</p>`;
+    dialog.hidden = false;
   }
 
   function renderDone() {
@@ -716,7 +799,9 @@
   $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("followup-mode").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("btn-mode-info").addEventListener("click", () => { $("mode-info").hidden = !$("mode-info").hidden; });
-  $("btn-followup-mode-info").addEventListener("click", () => { alert($("mode-info").textContent); });
+  $("btn-followup-mode-info").addEventListener("click", () => { $("mode-info").hidden = false; $("mode-info").scrollIntoView({ block: "center" }); });
+  $("btn-stats").addEventListener("click", openStats);
+  $("btn-stats-close").addEventListener("click", () => { $("stats-dialog").hidden = true; });
   $("btn-back-home").addEventListener("click", newTopic);
   $("btn-run").addEventListener("click", runBoard);
   $("btn-back-questions").addEventListener("click", goBack);
