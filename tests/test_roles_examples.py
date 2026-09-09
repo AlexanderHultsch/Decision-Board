@@ -42,16 +42,25 @@ class TestRealExamples(unittest.TestCase):
         self.assertTrue(all(p.level == 2 for m, p in board.profiles.items() if m != "Program Lead"))
         self.assertEqual(board.profiles["Hardware"].roles[0].name, "Project Manager HW")
 
-    def test_titles_perspectives_and_icons_come_from_the_files(self):
+    def test_a_role_file_carries_level_only_and_the_rest_is_derived(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
+        for path in sorted(EXAMPLES.glob("*.md")):
+            head = path.read_text(encoding="utf-8").split("## ", 1)[0]
+            for key in ("icon:", "perspective:", "color:", "short:", "order:"):
+                self.assertNotIn(key, head, f"{path.name}: {key}")
+            self.assertIn("level:", head, path.name)
         hw = board.profiles["Hardware"]
         self.assertEqual(hw.title, "Project Manager HW")
-        self.assertEqual(hw.perspective,
-                         "Hardware feasibility, design maturity, validation evidence and hardware cost")
+        self.assertEqual(hw.icon, "chip")            # derived from the name
+        # the synthesis line is what the member protects, not shared boilerplate
+        self.assertEqual(hw.perspective, "Technical maturity and the evidence behind it.")
+        seen = set()
         for member, profile in board.profiles.items():
             self.assertTrue(profile.perspective, member)
-            self.assertNotIn("Taken from the internal role description", profile.perspective, member)
+            self.assertNotIn("Develop and maintain control", profile.perspective, member)
             self.assertLessEqual(len(profile.perspective), 200, member)
+            seen.add(profile.perspective)
+        self.assertEqual(len(seen), len(board.profiles))
         self.assertEqual(hw.icon, "chip")
         self.assertEqual(board.profiles["Software"].icon, "code")
         self.assertEqual(board.profiles["Systems"].icon, "flask")
@@ -65,10 +74,12 @@ class TestRealExamples(unittest.TestCase):
             for heading in ("## Official description",
                             "## Targets I am judged on",
                             "## What I protect when I cannot have everything",
-                            "## How this lane usually fails",
-                            "## What I decide alone, and what I escalate",
-                            "## Vocabulary"):
+                            "## Keywords"):
                 self.assertIn(heading, profile.body, f"{member}: {heading}")
+            for gone in ("## How this lane usually fails",
+                         "## What I decide alone",
+                         "## Vocabulary"):
+                self.assertNotIn(gone, profile.body, f"{member}: {gone}")
         # the official wording is untouched inside its section
         self.assertIn("VPDS Process Compliance", board.profiles["Hardware"].body)
         self.assertIn("Champions as Project Manager VPRS preliminary analysis",
@@ -83,7 +94,7 @@ class TestRealExamples(unittest.TestCase):
             for kpi in ("Resources", "Expenses", "Milestones"):
                 self.assertIn(kpi, section, f"{member}: {kpi}")
             has_cbom = "cBOM" in section
-            self.assertEqual(has_cbom, member in ("Hardware", "Mechanical"), member)
+            self.assertEqual(has_cbom, member in ("Hardware", "Mechanical", "Finance"), member)
             self.assertIsNone(__import__("re").search(r"\d{2,}\s?(k|%|EUR|€)", section), f"{member}: a number in a role file")
 
     def test_what_each_member_protects_is_different(self):

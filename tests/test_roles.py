@@ -34,8 +34,8 @@ def _single(folder: Path, member: str, body: str = "", **meta) -> Path:
 class TestNothingShipped(unittest.TestCase):
     def test_the_repository_ships_no_members_only_support_files(self):
         names = sorted(p.name for p in roles.SUPPORT_DIR.glob("*.md"))
-        self.assertEqual(names, sorted(["README.md", roles.CONDUCT_NAME, roles.CONTEXT_NAME,
-                                        roles.TEMPLATE_NAME, roles.KPI_TEMPLATE_NAME]))
+        self.assertEqual(names, sorted(["README.md", roles.CONDUCT_NAME, roles.TEMPLATE_NAME,
+                                        roles.KPI_TEMPLATE_NAME]))
         self.assertEqual(roles.members_in(roles.SUPPORT_DIR), [])
 
     def test_no_folder_means_no_board(self):
@@ -154,8 +154,7 @@ class TestLoadRoles(unittest.TestCase):
             again = roles.install_support_files(folder)
             kept = (folder / roles.CONDUCT_NAME).read_text(encoding="utf-8")
             members = roles.members_in(folder)
-        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.CONTEXT_NAME, roles.TEMPLATE_NAME,
-                                        roles.KPI_TEMPLATE_NAME]))
+        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.TEMPLATE_NAME, roles.KPI_TEMPLATE_NAME]))
         self.assertEqual(again, [])
         self.assertEqual(kept, "mine")
         self.assertEqual(members, [])
@@ -342,14 +341,14 @@ class TestCommonNotesAndAddenda(unittest.TestCase):
     def test_every_conduct_note_is_prepended_in_name_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = make_roles(Path(tmp) / "r", ("Legal", "Customer"))
-            (folder / "_Programme context.md").write_text(
-                "---\nkind: conduct\n---\n# Context\n\nStart of production is March.\n", encoding="utf-8")
+            (folder / "_Second note.md").write_text(
+                "---\nkind: conduct\n---\n# More\n\nStart of production is March.\n", encoding="utf-8")
             b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
         self.assertEqual([p.name for p in b.conduct_paths],
-                         ["_Board member conduct.md", "_Programme context.md"])
+                         ["_Board member conduct.md", "_Second note.md"])
         self.assertIn("Sceptical by default", b.conduct)
         self.assertIn("Start of production is March.", b.conduct)
-        self.assertEqual(roles.summary(b)["conduct"], ["_Board member conduct.md", "_Programme context.md"])
+        self.assertEqual(roles.summary(b)["conduct"], ["_Board member conduct.md", "_Second note.md"])
 
     def test_a_member_defined_twice_is_reported_not_merged(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -372,8 +371,11 @@ class TestCommonNotesAndAddenda(unittest.TestCase):
     def test_the_shipped_conduct_note_covers_kpis_and_the_knowledge_network(self):
         text = (roles.SUPPORT_DIR / roles.CONDUCT_NAME).read_text(encoding="utf-8")
         self.assertIn("Align with the KPIs", text)
-        self.assertIn("MG0", text); self.assertIn("Maturity Gate Zero", text)
-        self.assertIn("cBOM", text)
+        self.assertIn("MG0", text)
+        self.assertIn("Maturity Gate Zero", text)
+        self.assertIn("Say when a number was recorded", text)
+        self.assertIn("What you may decide", text)
+        self.assertNotIn("cBOM", text)   # a member's own measures are in its own profile
         self.assertIn("Check the knowledge network first", text)
         self.assertIn("Obsidian", text)
         for name in ("Software", "Finance", "Systems", "Program Lead"):

@@ -120,7 +120,8 @@ def _member_prompt(
             "",
             "The values behind the targets this member is judged on, as recorded in the "
             "knowledge network. Baseline MG0 unless the note says otherwise. Judge every "
-            "option against these numbers and name the delta.",
+            "option against these numbers, name the delta, and quote the date a value was "
+            "recorded whenever you use it.",
             "",
             kpi_data,
         ]

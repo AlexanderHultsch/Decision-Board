@@ -16,9 +16,9 @@ template (``roles/``), which the wizard installs into the folder.
 **What is the same for every member** - character, how to answer, how to
 treat the roles under one's responsibility - is in the notes marked
 ``kind: conduct`` in their front matter (installed as
-``_Board member conduct.md`` and ``_Programme context.md``). Every such
-note is prepended to every member's profile, in file-name order, so common
-ground can be split across several files.
+``_Board member conduct.md``). Every such note is prepended to every
+member's profile, in file-name order, so common ground can be split across
+several files if you want it split.
 
 **One file, one member.** A member is defined by exactly one file. Its
 official role description is kept verbatim under ``## Official description``
@@ -55,9 +55,12 @@ from .knowledge import _front_matter
 DEFAULT_SUBFOLDER = "Roles"
 SUPPORT_DIR = Path(__file__).resolve().parents[2] / "roles"
 CONDUCT_NAME = "_Board member conduct.md"
-CONTEXT_NAME = "_Programme context.md"
-TEMPLATE_NAME = "_Template - one member.md"
-KPI_TEMPLATE_NAME = "_Template - KPI note (for the vault).md"
+TEMPLATE_NAME = "_Template - member.md"
+KPI_TEMPLATE_NAME = "_Template - KPI note.md"
+# The heading whose first sentence is what the synthesis is told about a
+# member: what it protects is what distinguishes it, and official role
+# descriptions open with wording every lane shares.
+DISTINCTIVE_HEADING = "What I protect when I cannot have everything"
 MIN_MEMBERS = 2
 _MIN_BODY_CHARS = 40   # below this a profile is "not filled yet"
 
@@ -145,6 +148,18 @@ def _first_paragraph_line(body: str) -> str:
             sentence = match.group(1) if match else line
             return sentence[:200].rstrip(" ,:;")
     return ""
+
+
+def _distinctive_line(body: str) -> str:
+    """The first sentence under ``## What I protect when I cannot have
+    everything``. That section is what tells one member from another; the
+    official descriptions open with sentences every swim lane shares, so
+    the synthesis would learn nothing from those."""
+    marker = f"## {DISTINCTIVE_HEADING}"
+    if marker not in body:
+        return ""
+    section = body.split(marker, 1)[1].split("\n## ", 1)[0]
+    return _first_paragraph_line(section)
 
 
 def _member_from_stem(stem: str) -> str:
@@ -255,8 +270,9 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
                 merged[key] = top_meta[key]
     if not _meta_str(merged, "title"):
         merged["title"] = roles[0].name if roles else member
-    if not _meta_str(merged, "perspective") and roles:
-        merged["perspective"] = _first_paragraph_line(roles[0].body)
+    if not _meta_str(merged, "perspective"):
+        merged["perspective"] = _distinctive_line(body) or (
+            _first_paragraph_line(roles[0].body) if roles else "")
     # what the member reads: metadata lines stripped, roles in rank order
     if roles:
         clean_body = "\n\n".join(f"# {role.name}\n\n{role.body}".strip() for role in roles)
@@ -456,7 +472,7 @@ def install_support_files(folder: Path, *, examples: bool = False) -> list[Path]
     (one programme's swim lanes) as well. Nothing is ever overwritten."""
     folder.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    sources = [SUPPORT_DIR / name for name in (CONDUCT_NAME, CONTEXT_NAME, TEMPLATE_NAME, KPI_TEMPLATE_NAME)]
+    sources = [SUPPORT_DIR / name for name in (CONDUCT_NAME, TEMPLATE_NAME, KPI_TEMPLATE_NAME)]
     if examples and EXAMPLES_DIR.is_dir():
         sources += sorted(EXAMPLES_DIR.glob("*.md"))
     for source in sources:

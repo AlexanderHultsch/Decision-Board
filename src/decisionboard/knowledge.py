@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 
 DEFAULT_TOKEN_BUDGET = 6000
@@ -247,10 +248,39 @@ def gather(config: dict, question: str) -> KnowledgeSelection:
     return selection
 
 
-KPI_TOKEN_CAP = 2500   # per member; a KPI note is a table, not a chapter
+KPI_TOKEN_CAP = 2500       # per member; a KPI note is a table, not a chapter
+KPI_STALE_DAYS = 30        # beyond this the age is called out, not just stated
 
 
-def kpi_notes(config: dict, members: list[str] | tuple[str, ...]) -> dict[str, str]:
+def _updated_on(note: "Note") -> date | None:
+    meta = _front_matter(note.body)
+    raw = meta.get("updated")
+    if not isinstance(raw, str):
+        return None
+    for shape in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(raw.strip(), shape).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _freshness(note: "Note", today: date, stale_days: int) -> str:
+    """One line above a KPI note saying how old it is. Python computes the
+    age (AP-1) so a member can never quote a number without its date."""
+    updated = _updated_on(note)
+    if updated is None:
+        return ("Last updated: not recorded in this note. Treat every value in it as an "
+                "assumption and say so.")
+    age = (today - updated).days
+    when = f"Last updated {updated.isoformat()}, {age} day(s) ago."
+    if age > stale_days:
+        return (f"{when} **This is older than {stale_days} days: say so before you rely on a value "
+                f"from it, and name what would have to be re-checked.**")
+    return when
+
+
+def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date | None = None) -> dict[str, str]:
     """The KPI data block for each member (spec 3.4, decided 9 September
     2026): every note in the vault whose front matter says ``kind: kpi`` and
     names the member is attached to that member's call, always, whatever
@@ -264,13 +294,15 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...]) -> dict[str, s
     vault = Path(str(vault_path)).expanduser()
     notes = [n for n in load_vault(vault, skip_subfolders=_roles_inside(config, vault)) if n.kind == "kpi"]
     wanted = {m.lower(): m for m in members}
+    stale_days = int(_config_value(config, "knowledge.kpi_stale_days") or KPI_STALE_DAYS)
+    day = today or date.today()
     blocks: dict[str, list[str]] = {}
     for note in notes:
         for named in note.member:
             member = wanted.get(named.lower())
             if member is None:
                 continue
-            chunk = f"### {note.relative}\n{note.body.strip()}"
+            chunk = f"### {note.relative}\n{_freshness(note, day, stale_days)}\n\n{note.body.strip()}"
             blocks.setdefault(member, []).append(chunk)
     result: dict[str, str] = {}
     for member, chunks in blocks.items():
