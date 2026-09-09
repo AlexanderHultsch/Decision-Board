@@ -26,11 +26,33 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_config(path: Path) -> dict:
+    """The local configuration, or a clear instruction to create it.
+
+    A fresh clone has no ``config.local.json`` - it is git-ignored, because
+    it holds machine paths and, in a company setup, the endpoint that was
+    approved. Every entry point therefore has to name the one command that
+    writes it, rather than reporting a missing file (decided 9 September
+    2026, after a fresh clone left a user with nothing to go on)."""
     if not path.exists():
-        print(f"No configuration found at {path}.", file=sys.stderr)
+        script = "python scripts\\setup.py" if sys.platform == "win32" else "python3 scripts/setup.py"
+        print(
+            f"No configuration yet at {path}.\n"
+            f"\n"
+            f"Run the setup wizard once to create it:\n"
+            f"    {script}\n"
+            f"\n"
+            f"It checks this machine, asks where your model and your notes are, and writes\n"
+            f"the configuration for you. Running it again later keeps what is already set.",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
-    with path.open(encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        print(f"{path} is not valid JSON ({exc}). Fix it, or delete it and run the setup wizard again.",
+              file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 def _get(config: dict, dotted: str, default: Any = None) -> Any:

@@ -2,12 +2,33 @@
 
 Decision Board is a standalone decision-support tool with a browser
 interface and a command line. You give it a question, it asks you what it
-needs to know, and six standing members answer from six different
-professional perspectives — each in its own model call that cannot see any
-other member's answer. A seventh call synthesises the six into one
-recommendation, you can ask follow-up questions against that synthesis, and
-when you close the topic the board offers to write the decision into your
-Obsidian vault — after showing you exactly what and where.
+needs to know, and every board member answers from its own professional
+perspective — each in its own model call that cannot see any other member's
+answer. One more call synthesises them into a single recommendation, you can
+ask follow-up questions against that synthesis, and when you close the topic
+the board offers to write the decision into your Obsidian vault — after
+showing you exactly what and where.
+
+## Start here
+
+**Three commands on any machine, Windows, macOS or Linux:**
+
+```
+git clone https://github.com/AlexanderHultsch/Decision-Board.git
+cd Decision-Board
+python scripts/setup.py
+```
+
+**The third one is not optional.** Decision Board has no usable defaults:
+it does not know which model you may call, where your notes are, or who sits
+on your board. That belongs in `config/config.local.json`, which is
+deliberately **not** in this repository — it holds paths from your machine
+and, in a company setup, the endpoint your IT approved. Every clone starts
+without it, and the setup wizard is what writes it.
+
+Run the wizard again whenever something changes. It keeps everything already
+set, changes only what you answer, and saves the previous version as
+`config.local.json.bak` first.
 
 **Who sits on the board is decided by role profiles, not by code.** One
 folder of Markdown notes — a folder in your vault whose name starts with
@@ -35,15 +56,11 @@ the decision, one memory-proposal call after it.
 
 ## Install and run
 
-Python 3.11+, standard library only — no `pip` dependencies. Clone the
-repository:
+Python 3.11+ and git, standard library only — no `pip` dependencies. You
+also need [OpenCode](https://opencode.ai) on the machine; the wizard prints
+the install command for your platform if it is missing.
 
-```
-git clone https://github.com/AlexanderHultsch/Decision-Board.git
-cd Decision-Board
-```
-
-Then run the setup wizard. It works on Windows, macOS and Linux, and on a
+The setup wizard. It works on Windows, macOS and Linux, and on a
 company machine as well as a private one. It asks first how you will use
 Decision Board:
 

@@ -417,3 +417,56 @@ class TestMovedFolders(unittest.TestCase):
                 result = wizard.step_opencode_config(str(Path(tmp) / "gone" / "opencode.json"))
         self.assertEqual(result, "")
         self.assertTrue(any("without an opencode.json" in f for f in wizard.failures))
+
+
+class TestConfigurationIsExplained(unittest.TestCase):
+    """A fresh clone has no configuration; every entry point must name the
+    one command that writes it, and re-running must not cost settings."""
+
+    def test_a_missing_configuration_names_the_setup_command(self):
+        import io as _io
+        import contextlib
+        from decisionboard import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            stderr = _io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                cli.load_config(Path(tmp) / "config.local.json")
+        self.assertEqual(raised.exception.code, 2)
+        text = stderr.getvalue()
+        self.assertIn("scripts", text)
+        self.assertIn("setup.py", text)
+        self.assertIn("No configuration yet", text)
+
+    def test_broken_json_is_reported_rather_than_crashing(self):
+        import io as _io
+        import contextlib
+        from decisionboard import cli
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.local.json"
+            path.write_text("{not json", encoding="utf-8")
+            stderr = _io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                cli.load_config(path)
+        self.assertIn("not valid JSON", stderr.getvalue())
+
+    def test_running_the_wizard_again_keeps_settings_and_backs_them_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "config.local.json"
+            local.write_text(json.dumps({
+                "provider": {"models": {"board": "azure/kept"}, "opencode": {"config_file": ""}},
+                "knowledge": {"vault_path": "", "token_budget": 4242},
+                "ui": {"theme": "dark"},
+            }), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+                 mock.patch.object(setup_wizard.shutil, "which", lambda name: None):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
+                                             out=out, profile="private")
+                wizard.run()
+            config = json.loads(local.read_text(encoding="utf-8"))
+            backup = json.loads((Path(tmp) / "config.local.json.bak").read_text(encoding="utf-8"))
+        self.assertEqual(config["provider"]["models"]["board"], "azure/kept")
+        self.assertEqual(config["knowledge"]["token_budget"], 4242)
+        self.assertEqual(config["ui"]["theme"], "dark")
+        self.assertEqual(backup["knowledge"]["token_budget"], 4242)
+        self.assertIn("only what you answer now changes", out.getvalue())

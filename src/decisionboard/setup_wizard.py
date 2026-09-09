@@ -271,11 +271,28 @@ class Wizard:
     def step_config(self, info: dict) -> dict:
         self.say("\n5. Configuration")
         if LOCAL_CONFIG.exists():
-            config = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
-            self.ok(f"existing {LOCAL_CONFIG.name} kept; values below are updated in place.")
+            try:
+                config = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                self.warn(f"{LOCAL_CONFIG.name} is not valid JSON ({exc}) - starting from the example instead; "
+                          f"the old file is kept as {LOCAL_CONFIG.name}.bak")
+                LOCAL_CONFIG.replace(LOCAL_CONFIG.with_suffix(LOCAL_CONFIG.suffix + ".bak"))
+                config = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+            else:
+                # Running the wizard again must never cost someone their
+                # settings: everything already set is kept and only the
+                # answers given now are changed, with a copy of the previous
+                # file next to it.
+                backup = LOCAL_CONFIG.with_suffix(LOCAL_CONFIG.suffix + ".bak")
+                try:
+                    backup.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                except OSError:
+                    backup = None
+                self.ok(f"existing {LOCAL_CONFIG.name} kept; only what you answer now changes."
+                        + (f" Previous version saved as {backup.name}." if backup else ""))
         else:
             config = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
-            self.ok(f"created from {EXAMPLE_CONFIG.name}.")
+            self.ok(f"no configuration yet - creating {LOCAL_CONFIG.name} from {EXAMPLE_CONFIG.name}.")
         self.drop_stale_paths(config)
         config.setdefault("storage", {})["pc_name"] = os.environ.get("COMPUTERNAME") or platform.node()
         runtime = config.setdefault("runtime", {})

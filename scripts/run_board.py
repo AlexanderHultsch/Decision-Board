@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Launcher for the CLI, so it runs without installing the package.
 
-    python scripts/run_board.py board
+    python scripts/run_board.py serve     (browser interface)
+    python scripts/run_board.py board     (command line)
+
+Run ``python scripts/setup.py`` once first: it writes the configuration
+this needs.
 
 Deliberately not named ``decisionboard.py``: a same-named script placed on
 ``sys.path`` alongside ``scripts/`` would shadow the real ``decisionboard``
