@@ -80,6 +80,7 @@ class KnowledgeSelection:
     notes: list[Note] = field(default_factory=list)      # selected, in rank order
     sections: list[Section] = field(default_factory=list)   # the sections sent, in rank order
     sent: dict[str, str] = field(default_factory=dict)   # note path -> the text of it that was sent
+    forced_tokens: int = 0                                # what the manual picks added on top of the budget
     total_notes: int = 0
     tokens: int = 0                                       # estimate for ``text``
     truncated: bool = False                               # a note was cut to fit
@@ -202,14 +203,25 @@ def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ())
     return notes
 
 
-def for_project(notes: list[Note], project: str | None) -> list[Note]:
-    """The notes that apply to ``project``: every note without a
-    ``projects`` property (common to all projects) plus those that name it.
-    No active project: every note. Names match case-insensitively."""
-    if not project or not str(project).strip():
+def _project_list(project) -> list[str]:
+    """One project, several as a list, or several in one string separated by
+    commas or semicolons; empty means all."""
+    if project is None:
+        return []
+    if isinstance(project, (list, tuple, set)):
+        return [str(p).strip() for p in project if str(p).strip()]
+    return [p.strip() for p in re.split(r"[,;]", str(project)) if p.strip()]
+
+
+def for_project(notes: list[Note], project) -> list[Note]:
+    """The notes that apply to the project(s): every note without a
+    ``projects`` property (common to all projects) plus those that name
+    one of them. No active project: every note. Names match
+    case-insensitively."""
+    wanted = {p.lower() for p in _project_list(project)}
+    if not wanted:
         return list(notes)
-    wanted = str(project).strip().lower()
-    return [n for n in notes if not n.projects or any(p.lower() == wanted for p in n.projects)]
+    return [n for n in notes if not n.projects or any(p.lower() in wanted for p in n.projects)]
 
 
 def project_names(notes: list[Note]) -> list[str]:
@@ -227,10 +239,16 @@ def project_names(notes: list[Note]) -> list[str]:
     return sorted(seen.values(), key=str.lower)
 
 
+def active_projects(config: dict) -> list[str]:
+    """``knowledge.project`` as a list (decided 9 September 2026: a question
+    may concern several projects); empty means every page."""
+    return _project_list(_config_value(config, "knowledge.project"))
+
+
 def active_project(config: dict) -> str | None:
-    """``knowledge.project`` when set; the project every question is about."""
-    value = _config_value(config, "knowledge.project")
-    return str(value).strip() if value is not None and str(value).strip() else None
+    """The active project(s) as one string for a prompt line, or ``None``."""
+    projects = active_projects(config)
+    return ", ".join(projects) if projects else None
 
 
 def list_projects(config: dict) -> list[str]:
@@ -309,6 +327,7 @@ def score_section(section: Section, terms: list[str]) -> int:
 def select_sections(
     notes: list[Note], question: str, token_budget: int = DEFAULT_TOKEN_BUDGET,
     *, extra_terms: list[str] | tuple[str, ...] = (), pinned: list[Note] | None = None,
+    extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
 ) -> KnowledgeSelection:
     """Rank every section of every note against the question - and, for a
     member's own block, against ``extra_terms`` (the member's targets,
@@ -317,13 +336,19 @@ def select_sections(
     within a share of the budget. Everything fits: everything is sent. A
     section too big for what is left is cut to fit, once."""
     terms = query_terms(question)
-    extra = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
-    all_sections = [section for note in notes for section in split_sections(note)]
+    member_terms = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
+    forced = {str(x) for x in extra}
+    banned = {str(x) for x in exclude}
+    all_sections = [section for note in notes for section in split_sections(note)
+                    if section_id(section) not in banned and section.relative not in banned]
     pinned_paths = {n.relative for n in (pinned or [])}
 
+    def is_forced(section: Section) -> bool:
+        return section_id(section) in forced or section.relative in forced
+
     def rank(section: Section) -> tuple:
-        pin = 0 if section.relative in pinned_paths else 1
-        score = score_section(section, terms) * 2 + score_section(section, extra)
+        pin = 0 if is_forced(section) else 1 if section.relative in pinned_paths else 2
+        score = score_section(section, terms) * 2 + score_section(section, member_terms)
         mtime = -section.note.path.stat().st_mtime if section.note.path.exists() else 0
         return (pin, -score, mtime, section.relative)
 
@@ -339,6 +364,10 @@ def select_sections(
         label = f"### {section.relative}" + (f" - {section.heading}" if section.heading else "")
         chunk = f"{label}\n{section.body}\n\n"
         cost = estimate_tokens(chunk)
+        if is_forced(section):
+            chosen.append((section, chunk))    # a manual pick is sent whole, on top of the budget
+            selection.forced_tokens += cost
+            continue
         if section.relative in pinned_paths and pinned_used + cost > pinned_share and chosen:
             continue          # the project page may not eat the whole budget
         if cost <= remaining:
@@ -410,58 +439,82 @@ def select_notes(
     return select_sections(notes, question, token_budget)
 
 
-def _knowledge_notes(config: dict) -> tuple[Path | None, str | None, list[Note]]:
+def _knowledge_notes(config: dict, projects=None) -> tuple[Path | None, list[str], list[Note]]:
     vault_path = _config_value(config, "knowledge.vault_path")
     if not vault_path:
-        return None, None, []
+        return None, [], []
     vault = Path(str(vault_path)).expanduser()
-    project = active_project(config)
-    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), project)
+    chosen = _project_list(projects) if projects is not None else active_projects(config)
+    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), chosen)
              if n.kind != "kpi"]
-    return vault, project, notes
+    return vault, chosen, notes
 
 
-def _pinned(notes: list[Note], project: str | None) -> list[Note]:
+def _pinned(notes: list[Note], projects: list[str]) -> list[Note]:
     """The project page(s): the common core every member receives."""
-    if not project:
+    wanted = {p.lower() for p in projects}
+    if not wanted:
         return []
-    return [n for n in notes if n.kind == "project" and any(p.lower() == project.lower() for p in n.projects)]
+    return [n for n in notes if n.kind == "project" and any(p.lower() in wanted for p in n.projects)]
 
 
-def gather(config: dict, question: str, *, token_budget: int | None = None) -> KnowledgeSelection:
+def section_id(section: Section) -> str:
+    return f"{section.relative}#{section.heading}" if section.heading else section.relative
+
+
+def outline(config: dict, projects=None) -> list[dict]:
+    """Every note and its sections, with ids and token sizes, for the
+    manual picks under the estimate (decided 9 September 2026)."""
+    vault, _chosen, notes = _knowledge_notes(config, projects)
+    if vault is None:
+        return []
+    result = []
+    for note in notes:
+        sections = split_sections(note)
+        result.append({"path": note.relative, "title": note.title, "kind": note.kind,
+                       "sections": [{"id": section_id(s), "heading": s.heading or "(whole note)" if len(sections) == 1 else s.heading or "(opening)",
+                                     "tokens": estimate_tokens(s.body)} for s in sections]})
+    return result
+
+
+def gather(config: dict, question: str, *, token_budget: int | None = None, projects=None) -> KnowledgeSelection:
     """The knowledge block for ``question`` under the configured source.
 
     No source configured: an empty selection, the board runs on the
     question alone. A source configured but unreadable: ``KnowledgeUnavailable``."""
-    vault, project, notes = _knowledge_notes(config)
+    vault, chosen, notes = _knowledge_notes(config, projects)
     if vault is None:
         return KnowledgeSelection(vault_path=None)
     budget = token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET
-    selection = select_sections(notes, question, int(budget), pinned=_pinned(notes, project))
+    selection = select_sections(notes, question, int(budget), pinned=_pinned(notes, chosen))
     selection.vault_path = vault
-    selection.project = project
+    selection.project = ", ".join(chosen) if chosen else None
     return selection
 
 
 def gather_for_members(
     config: dict, question: str, member_terms: dict[str, list[str] | tuple[str, ...] | set[str]],
-    *, token_budget: int | None = None,
+    *, token_budget: int | None = None, projects=None,
+    extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
 ) -> dict[str, KnowledgeSelection]:
     """One knowledge block per member (decided 9 September 2026): the
     sections ranked by the question and by the member's own terms, so each
     member receives what concerns it, the project page first for all.
-    The vault is read once. No source configured: empty selections."""
-    vault, project, notes = _knowledge_notes(config)
+    ``extra`` section ids are sent to every member on top of the budget;
+    ``exclude`` ids are never sent. The vault is read once. No source
+    configured: empty selections."""
+    vault, chosen, notes = _knowledge_notes(config, projects)
     budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
     result: dict[str, KnowledgeSelection] = {}
-    pinned = _pinned(notes, project)
+    pinned = _pinned(notes, chosen)
     for member, terms in member_terms.items():
         if vault is None:
             result[member] = KnowledgeSelection(vault_path=None)
             continue
-        selection = select_sections(notes, question, budget, extra_terms=tuple(terms), pinned=pinned)
+        selection = select_sections(notes, question, budget, extra_terms=tuple(terms), pinned=pinned,
+                                    extra=extra, exclude=exclude)
         selection.vault_path = vault
-        selection.project = project
+        selection.project = ", ".join(chosen) if chosen else None
         result[member] = selection
     return result
 
@@ -498,7 +551,7 @@ def _freshness(note: "Note", today: date, stale_days: int) -> str:
     return when
 
 
-def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date | None = None) -> dict[str, str]:
+def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date | None = None, projects=None) -> dict[str, str]:
     """The KPI data block for each member (spec 3.4, decided 9 September
     2026): every note in the vault whose front matter says ``kind: kpi`` and
     lists the member under ``affected_swimlanes`` is attached to that
@@ -514,7 +567,8 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
         return {}
     vault = Path(str(vault_path)).expanduser()
     notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)),
-                                    active_project(config)) if n.kind == "kpi"]
+                                    _project_list(projects) if projects is not None else active_projects(config))
+             if n.kind == "kpi"]
     wanted = {m.lower(): m for m in members}
     stale_days = int(_config_value(config, "knowledge.kpi_stale_days") or KPI_STALE_DAYS)
     day = today or date.today()

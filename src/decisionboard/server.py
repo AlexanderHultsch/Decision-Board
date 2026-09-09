@@ -142,10 +142,13 @@ DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on t
 class Session:
     """One topic, from the typed question to the closed topic."""
 
-    def __init__(self, question: str) -> None:
+    def __init__(self, question: str, projects: list[str] | None = None) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.lock = threading.Lock()
         self.question = question
+        self.projects: list[str] = list(projects or [])   # the project(s) this question is about (home page picker)
+        self.extra: list[str] = []                        # section ids sent to every member on top of the budget
+        self.exclude: list[str] = []                      # section ids never sent
         self.started = time.time()
         self.cancelled = threading.Event()             # set when Alex goes back while the model works
         self.active_threads: set[int] = set()          # threads waiting on a model call right now
@@ -221,6 +224,9 @@ class Session:
                 "partial": self.partial,
                 "mode": self.mode,
                 "budget": self.budget,
+                "projects": self.projects,
+                "extra": self.extra,
+                "exclude": self.exclude,
                 "member_knowledge_paths": {m: sorted(paths) for m, paths in self.member_notes.items()},
                 "stats": {"calls": self.calls, "marks": self.marks, "started": self.started},
                 "nav": self._nav(),
@@ -399,11 +405,15 @@ class BoardServer:
 
     # -- sessions -------------------------------------------------------------
 
-    def start_session(self, question: str) -> Session:
+    def start_session(self, question: str, projects: Any = None) -> Session:
         question = (question or "").strip()
         if not question:
             raise ApiError(400, "Type a question first.")
-        session = Session(question)
+        if isinstance(projects, list):
+            chosen = [str(p).strip() for p in projects if str(p).strip()]
+        else:
+            chosen = knowledge_mod.active_projects(self.config)
+        session = Session(question, chosen)
         with self.lock:
             self.sessions[session.id] = session
         self._spawn(session, self._clarify, session)
@@ -429,7 +439,7 @@ class BoardServer:
 
     def _clarify(self, session: Session) -> None:
         try:
-            selection = knowledge_mod.gather(self.config, session.question)
+            selection = knowledge_mod.gather(self.config, session.question, projects=session.projects)
         except knowledge_mod.KnowledgeUnavailable as exc:
             session.fail(f"{exc}. Check the knowledge source in Options.")
             return
@@ -439,7 +449,7 @@ class BoardServer:
             session.fail(f"{exc}. Choose the roles folder in Options.")
             return
         try:
-            kpi = knowledge_mod.kpi_notes(self.config, list(board.profiles))
+            kpi = knowledge_mod.kpi_notes(self.config, list(board.profiles), projects=session.projects)
         except knowledge_mod.KnowledgeUnavailable:
             kpi = {}
         with session.lock:
@@ -546,6 +556,8 @@ class BoardServer:
             session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
             session.budget = self._budget(inputs.get("budget"))
+            session.extra = [str(x) for x in inputs.get("extra") or [] if str(x).strip()]
+            session.exclude = [str(x) for x in inputs.get("exclude") or [] if str(x).strip()]
             session.cancelled.clear()
             session.forward = []
             session.result = None
@@ -565,15 +577,24 @@ class BoardServer:
             budget = default
         return max(0, min(budget, MAX_BUDGET))
 
-    def _member_blocks(self, session: Session, board, selected: list[str], budget: int) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
-        """One knowledge block per chosen member for this topic (decided
+    def _member_selections(self, session: Session, board, selected: list[str], budget: int,
+                           extra: list[str] | None = None, exclude: list[str] | None = None) -> dict:
+        """One knowledge selection per chosen member for this topic (decided
         9 September 2026): the sections ranked by the topic and by the
-        member's own terms, within ``budget`` tokens each."""
-        if budget <= 0:
-            return {m: "" for m in selected}, {m: {} for m in selected}
+        member's own terms, within ``budget`` tokens each, plus the manual
+        picks on top and minus the exclusions."""
         query = f"{session.question}\n{session.inputs.get('topic', '')}"
         terms = {m: role_terms(board.profiles.get(m)) for m in selected}
-        selections = knowledge_mod.gather_for_members(self.config, query, terms, token_budget=budget)
+        return knowledge_mod.gather_for_members(
+            self.config, query, terms, token_budget=max(budget, 1),
+            projects=session.projects,
+            extra=list(extra if extra is not None else session.extra),
+            exclude=list(exclude if exclude is not None else session.exclude))
+
+    def _member_blocks(self, session: Session, board, selected: list[str], budget: int) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+        if budget <= 0 and not session.extra:
+            return {m: "" for m in selected}, {m: {} for m in selected}
+        selections = self._member_selections(session, board, selected, budget)
         return ({m: sel.text for m, sel in selections.items()},
                 {m: dict(sel.sent) for m, sel in selections.items()})
 
@@ -617,7 +638,7 @@ class BoardServer:
             selected = [m for m in board.profiles if m in session.selected_members] or list(board.profiles)
             profiles = {m: board.profiles[m] for m in selected}
             try:
-                member_data = knowledge_mod.kpi_notes(self.config, selected)
+                member_data = knowledge_mod.kpi_notes(self.config, selected, projects=session.projects)
             except knowledge_mod.KnowledgeUnavailable:
                 member_data = {}
             member_knowledge, member_notes = self._member_blocks(session, board, selected, session.budget or 0)
@@ -645,11 +666,11 @@ class BoardServer:
             return          # Alex went back while the board worked: the result is not wanted
         with session.lock:
             session.conversation = BoardConversation(
-                result=result, turns=[], roles=profiles,
+                result=result, turns=[], roles=dict(board.profiles),   # every member: a follow-up may bring one in
                 inputs={"topic": inputs["topic"], "context": context,
                         "options": list(inputs["options"]), "constraints": list(inputs["constraints"])},
                 conduct=board.conduct, member_data=member_data,
-                project=knowledge_mod.active_project(self.config) or "",
+                project=", ".join(session.projects),
                 sent_notes={}, member_knowledge=member_knowledge, member_notes=member_notes,
             )
             session.result = {
@@ -681,7 +702,8 @@ class BoardServer:
             chosen: list[str] = []
             if isinstance(members, list) and members:
                 wanted = {str(m).strip().lower() for m in members}
-                chosen = [m for m in session.members if m.lower() in wanted]
+                on_board = list(session.roles.get("members") or session.members)
+                chosen = [m for m in on_board if m.lower() in wanted]
             follow_mode = "combined" if str(mode or "").lower() == "combined" else "individual"
             session.cancelled.clear()
             session.forward = []
@@ -692,6 +714,21 @@ class BoardServer:
         self._spawn(session, self._follow_up, session, question, chosen, follow_mode)
 
     def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual") -> None:
+        conversation = session.conversation
+        missing = [m for m in chosen if m not in conversation.member_knowledge]
+        if missing:
+            # A member not asked in the first round gets its knowledge block
+            # and KPI data now (decided 9 September 2026: the whole board is
+            # on the follow-up list).
+            try:
+                board = roles_mod.load_board(self.config)
+                if (session.budget or 0) > 0 or session.extra:
+                    for m, sel in self._member_selections(session, board, missing, session.budget or 0).items():
+                        conversation.member_knowledge[m] = sel.text
+                        conversation.member_notes[m] = dict(sel.sent)
+                conversation.member_data.update(knowledge_mod.kpi_notes(self.config, missing, projects=session.projects))
+            except Exception:   # a missing block is not a reason to refuse the question
+                pass
         try:
             turn = ask_follow_up_full(self.config, RecordingProvider(self.provider(), session), session.conversation,
                                       question, chosen, follow_mode)
@@ -731,6 +768,8 @@ class BoardServer:
             constraints = tuple(str(c) for c in (body.get("constraints") or session.inputs.get("constraints") or []))
             mode = "combined" if str(body.get("mode") or "").lower() == "combined" else "individual"
             budget = self._budget(body.get("budget"))
+            extra = [str(x) for x in body.get("extra") or [] if str(x).strip()]
+            exclude = [str(x) for x in body.get("exclude") or [] if str(x).strip()]
         selected = self._chosen_members(session, body.get("members"))
         try:
             board = roles_mod.load_board(self.config)
@@ -738,13 +777,19 @@ class BoardServer:
             raise ApiError(409, str(exc))
         roles = {m: board.profiles[m] for m in selected if m in board.profiles}
         try:
-            member_data = knowledge_mod.kpi_notes(self.config, list(roles))
+            member_data = knowledge_mod.kpi_notes(self.config, list(roles), projects=session.projects)
         except knowledge_mod.KnowledgeUnavailable:
             member_data = {}
-        member_knowledge, member_notes = self._member_blocks(session, board, list(roles), budget)
+        if budget <= 0 and not extra:
+            selections = {}
+            member_knowledge, member_notes = {m: "" for m in roles}, {m: {} for m in roles}
+        else:
+            selections = self._member_selections(session, board, list(roles), budget, extra, exclude)
+            member_knowledge = {m: sel.text for m, sel in selections.items()}
+            member_notes = {m: dict(sel.sent) for m, sel in selections.items()}
         sizes = prompt_sizes(topic=topic, context=context, options=options, constraints=constraints,
                              roles=roles, conduct=board.conduct, member_data=member_data,
-                             project=knowledge_mod.active_project(self.config) or "",
+                             project=", ".join(session.projects),
                              member_knowledge=member_knowledge, mode=mode)
         overhead, learned_from = session.overhead_per_call()
         per_call = [{"label": label, "tokens": knowledge_mod.estimate_tokens_for(chars) + overhead} for label, chars in sizes]
@@ -756,6 +801,13 @@ class BoardServer:
             "overhead_learned_from": learned_from,
             "budget": budget,
             "members": {m: sorted(paths) for m, paths in member_notes.items()},
+            "sections": {m: [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
+                              "tokens": knowledge_mod.estimate_tokens(sec.body),
+                              "forced": knowledge_mod.section_id(sec) in extra or sec.relative in extra}
+                             for sec in sel.sections]
+                         for m, sel in selections.items()},
+            "forced_tokens": sum(sel.forced_tokens for sel in selections.values()),
+            "outline": knowledge_mod.outline(self.config, session.projects) if body.get("outline") else None,
         }
 
     def back(self, session: Session) -> None:
@@ -1032,7 +1084,7 @@ def make_handler(server: BoardServer):
                     chosen = pick_folder(str(body.get("initial") or ""), kind="file")
                     self._json(200, {"path": chosen})
                 elif path == "/api/sessions":
-                    session = server.start_session(str(body.get("question") or ""))
+                    session = server.start_session(str(body.get("question") or ""), body.get("projects"))
                     self._json(201, session.snapshot())
                 elif path.startswith("/api/sessions/"):
                     parts = path.split("/")

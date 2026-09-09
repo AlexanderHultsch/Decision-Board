@@ -37,7 +37,19 @@
     <form id="ask-form" class="ask">
       <textarea id="question" rows="5" placeholder="For example: We must choose between reworking the Gen6 housing tooling or switching supplier. Budget is tight and the SOP date cannot move."></textarea>
       <div class="row between">
-        <span id="home-hint" class="muted small"></span>
+        <div class="row">
+          <div class="picker" id="project-picker">
+            <button type="button" class="picker-btn" id="btn-projects" aria-haspopup="listbox" aria-expanded="false">
+              <span class="picker-label muted small">Project</span><span id="projects-label">All projects</span>
+              <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="picker-menu" id="projects-menu" hidden>
+              <div id="projects-list"></div>
+              <div class="picker-foot"><button type="button" class="ghost small-btn" id="btn-projects-default">Save as default</button></div>
+            </div>
+          </div>
+          <span id="home-hint" class="muted small"></span>
+        </div>
         <button type="submit" class="primary">Prepare the question</button>
       </div>
     </form>
@@ -97,7 +109,12 @@
       <span id="budget-value" class="budget-value">6,000 tokens</span>
     </div>
     <p id="estimate" class="estimate muted small">Estimating…</p>
-    <details id="estimate-detail" class="estimate-detail"><summary class="muted small">What each member would receive</summary><div id="estimate-notes"></div></details>
+    <details id="estimate-detail" class="estimate-detail"><summary class="muted small">What each member would receive, and what to add or leave out</summary>
+      <div id="estimate-notes"></div>
+      <p class="eyebrow">Add for every member <span class="muted small">sent whole, on top of the slider; the estimate follows, the slider does not move</span></p>
+      <input id="outline-filter" type="text" class="outline-filter" placeholder="Filter notes and sections…">
+      <div id="outline" class="outline"></div>
+    </details>
     <p id="confirm-knowledge" class="muted small"></p>
     <div class="row end">
       <button id="btn-back-questions" type="button" class="ghost">Back</button>
@@ -241,9 +258,6 @@
           </div>
         </label>
         <p id="opt-vault-status" class="small muted"></p>
-        <label>Project <span class="muted small">pages with a <code>projects</code> property are used only for this project; pages without one are common to all</span>
-          <select id="opt-project"><option value="">All projects</option></select>
-        </label>
         <label>Token budget for notes per model call<input id="opt-budget" type="number" min="500" step="500"></label>
       </fieldset>
       <fieldset>

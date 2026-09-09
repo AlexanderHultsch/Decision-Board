@@ -356,6 +356,64 @@ class TestServerFlow(unittest.TestCase):
         self.assertGreater(est2["overhead_learned_from"], 1)               # the members and the synthesis were recorded too
         self.assertEqual(est2["overhead_per_call"], 0)
 
+    def test_projects_come_from_the_home_page_and_scope_the_notes(self):
+        (self.vault / "Sister.md").write_text("---\nkind: project\nprojects: [Sister]\n---\nSister project tooling note.\n", encoding="utf-8")
+        (self.vault / "Dual.md").write_text("---\nkind: project\nprojects: [Dual DCDC]\n---\nDual project tooling note.\n", encoding="utf-8")
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Tooling?", "projects": ["Dual DCDC"]})
+            sid = state["id"]
+            self.assertEqual(state["projects"], ["Dual DCDC"])
+            state = self.wait_for(sid, lambda s: s["phase"] == "questions")
+            self.assertIn("Dual.md", state["knowledge"]["notes"])
+            self.assertNotIn("Sister.md", state["knowledge"]["notes"])
+            _, both = self.call("POST", "/api/sessions", {"question": "Tooling?", "projects": ["Dual DCDC", "Sister"]})
+            both = self.wait_for(both["id"], lambda s: s["phase"] == "questions")
+            self.assertIn("Sister.md", both["knowledge"]["notes"])
+            self.assertIn("Dual.md", both["knowledge"]["notes"])
+        finally:
+            (self.vault / "Sister.md").unlink(); (self.vault / "Dual.md").unlink()
+
+    def test_manual_picks_are_sent_on_top_of_the_budget_and_exclusions_never(self):
+        (self.vault / "Manual.md").write_text("# Manual\n\nA note nobody would rank for this question.\n", encoding="utf-8")
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Rework the tooling?"})
+            sid = state["id"]
+            self.wait_for(sid, lambda s: s["phase"] == "questions")
+            self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+            self.wait_for(sid, lambda s: s["phase"] == "confirm")
+            chosen = CLASSIC[:2]
+            _, plain = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "budget": 40, "outline": True})
+            self.assertTrue(any(n["path"] == "Manual.md" for n in plain["outline"]))
+            self.assertNotIn("Manual.md", plain["members"][chosen[0]])           # a 40-token budget: Tooling.md only
+            _, picked = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "budget": 40, "extra": ["Manual.md"], "exclude": ["Tooling.md"]})
+            self.assertIn("Manual.md", picked["members"][chosen[0]])
+            self.assertNotIn("Tooling.md", picked["members"][chosen[0]])
+            self.assertGreater(picked["forced_tokens"], 0)
+            self.assertTrue(any(s["forced"] for s in picked["sections"][chosen[0]]))
+            self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Rework?", "members": chosen, "budget": 40, "extra": ["Manual.md"], "exclude": ["Tooling.md"]})
+            state = self.wait_for(sid, lambda s: s["phase"] == "result")
+            self.assertEqual(state["extra"], ["Manual.md"])
+            self.assertEqual(state["member_knowledge_paths"][chosen[0]], ["Manual.md"])
+        finally:
+            (self.vault / "Manual.md").unlink()
+
+    def test_a_member_not_asked_at_first_can_be_asked_in_a_follow_up(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": CLASSIC[:2]})
+        self.wait_for(sid, lambda s: s["phase"] == "result")
+        later = CLASSIC[2]
+        first_prompt = len(self.provider.prompts)
+        self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "And you?", "members": [later]})
+        state = self.wait_for(sid, lambda s: not s["busy"])
+        self.assertEqual([a["member"] for a in state["turns"][0]["assessments"]], [later])
+        prompt = [p for p in self.provider.prompts[first_prompt:] if f"Member: {later}" in p][0]
+        self.assertIn("you did not produce an assessment in the first round", prompt)
+        self.assertIn("Tooling is late.", prompt)               # its knowledge block was built on demand
+
     def test_back_returns_to_the_questions_with_the_answers_kept(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
         sid = state["id"]
@@ -412,13 +470,16 @@ class TestServerFlow(unittest.TestCase):
             self.wait_for(sid, lambda s: s["phase"] == "questions")
             self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
             self.wait_for(sid, lambda s: s["phase"] == "confirm")
+            baseline = threading.active_count()
             self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": CLASSIC[:2]})
             state = self.wait_for(sid, lambda s: s["phase"] == "running")
             self.assertTrue(state["nav"]["back"])
             status, state = self.call("POST", f"/api/sessions/{sid}/back")
             self.assertEqual(status, 200)
             self.assertEqual(state["phase"], "confirm")
-            _time.sleep(1.0)                                   # the worker threads finish in the background
+            deadline = _time.monotonic() + 8
+            while threading.active_count() > baseline and _time.monotonic() < deadline:
+                _time.sleep(0.1)                               # the stopped worker threads finish in the background
             _, state = self.call("GET", f"/api/sessions/{sid}")
             self.assertEqual(state["phase"], "confirm")        # their late result was discarded
             self.assertIsNone(state["result"])

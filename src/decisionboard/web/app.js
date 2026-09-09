@@ -140,7 +140,7 @@
     const status = config.knowledge_status;
     chip.className = "chip";
     if (!status.configured) { chip.classList.add("none"); chip.textContent = "No knowledge source"; }
-    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes${config.project ? ` · ${config.project}` : ""}`; }
+    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes`; }
     else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
     // The path is a tooltip, not a label (9 September 2026): hover to see it.
     chip.title = status.error || (config.vault_path ? `Knowledge source: ${config.vault_path}` : "Set a vault folder in Options");
@@ -155,22 +155,42 @@
     config = await api("GET", "/api/config");
     applyTheme(config.theme);
     renderKnowledgeChip();
+    renderProjectPicker();
   }
 
-  function renderProjectOptions() {
-    const select = $("opt-project");
-    const current = config.project || "";
+  // The project picker on the home page: a dropdown with checkboxes, like a
+  // spreadsheet filter. The default comes from the configuration; the
+  // choice travels with the question.
+  let chosenProjects = null;   // null until the config is known
+  function defaultProjects() {
+    return String(config.project || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+  }
+  function renderProjectPicker() {
     const names = (config.projects || []).slice();
-    if (current && !names.some((n) => n.toLowerCase() === current.toLowerCase())) names.push(current);
-    select.innerHTML = `<option value="">All projects</option>` +
-      names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
-    select.value = current;
-    if (select.value !== current) select.value = "";
+    if (chosenProjects === null) chosenProjects = defaultProjects();
+    chosenProjects.forEach((p) => { if (!names.some((n) => n.toLowerCase() === p.toLowerCase())) names.push(p); });
+    const all = chosenProjects.length === 0;
+    $("projects-list").innerHTML = `<label class="all"><input type="checkbox" value="" ${all ? "checked" : ""}> All projects</label>` +
+      names.map((n) => `<label><input type="checkbox" value="${esc(n)}" ${chosenProjects.some((p) => p.toLowerCase() === n.toLowerCase()) ? "checked" : ""}> ${esc(n)}</label>`).join("");
+    $("projects-label").textContent = all ? "All projects" : chosenProjects.length === 1 ? chosenProjects[0] : `${chosenProjects.length} projects`;
+    $("projects-list").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      if (box.value === "") chosenProjects = [];
+      else {
+        chosenProjects = Array.from($("projects-list").querySelectorAll("input")).filter((b) => b.value && b.checked).map((b) => b.value);
+      }
+      renderProjectPicker();
+    }));
+    $("btn-projects").disabled = names.length === 0;
+    if (names.length === 0) $("projects-label").textContent = "No project pages in the vault";
+  }
+  function toggleProjectMenu(open) {
+    const menu = $("projects-menu");
+    menu.hidden = open === undefined ? !menu.hidden : !open;
+    $("btn-projects").setAttribute("aria-expanded", String(!menu.hidden));
   }
 
   function openOptions() {
     $("opt-vault").value = config.vault_path || "";
-    renderProjectOptions();
     $("opt-roles").value = config.roles_folder || "";
     $("opt-budget").value = config.token_budget || 6000;
     $("opt-model").value = config.model || "";
@@ -192,7 +212,6 @@
     try {
       config = await api("POST", "/api/config", {
         vault_path: $("opt-vault").value,
-        project: $("opt-project").value,
         roles_folder: $("opt-roles").value,
         token_budget: Number($("opt-budget").value) || 6000,
         model: $("opt-model").value,
@@ -253,7 +272,7 @@
       // Save the folder typed above first, so the examples land where the user said.
       if ($("opt-roles").value !== (config.roles_folder || "") || $("opt-vault").value !== (config.vault_path || "")) {
         config = await api("POST", "/api/config", { roles_folder: $("opt-roles").value, vault_path: $("opt-vault").value });
-        renderProjectOptions();
+        renderProjectPicker();
       }
       const r = await api("POST", "/api/roles/install");
       config.roles_status = r;
@@ -294,7 +313,7 @@
     if (!question) return;
     setError("home-error", "");
     try {
-      session = await api("POST", "/api/sessions", { question });
+      session = await api("POST", "/api/sessions", { question, projects: chosenProjects || [] });
       store.del("question");
       openMembers.clear();
       $("screen-result").dataset.phase = "";
@@ -412,6 +431,8 @@
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
     setMode("run-mode", (kept && kept.mode) || session.mode || "individual");
     $("budget").value = (kept && kept.budget != null) ? kept.budget : (session.budget != null ? session.budget : (config.token_budget || 6000));
+    picks = { extra: (kept && kept.extra) || session.extra || [], exclude: (kept && kept.exclude) || session.exclude || [] };
+    outlineCache = null;
     $("budget").disabled = !(k && k.vault_path);
     const countLine = () => {
       $("budget-value").textContent = `${fmtNum(Number($("budget").value))} tokens`;
@@ -429,7 +450,7 @@
     saveDraft({ confirm: {
       topic: $("in-topic").value, context: $("in-context").value, options: $("in-options").value,
       constraints: $("in-constraints").value, members: picked($("confirm-members")), mode: modeOf("run-mode"),
-      budget: Number($("budget").value),
+      budget: Number($("budget").value), extra: picks.extra, exclude: picks.exclude,
     } });
   }
 
@@ -437,6 +458,34 @@
   // prompt builders. Debounced, and a stale answer never overwrites a newer one.
   let estimateTimer = null;
   let estimateSeq = 0;
+  let picks = { extra: [], exclude: [] };     // manual picks for the open topic: section ids
+  let outlineCache = null;
+  function renderOutline() {
+    const filter = ($("outline-filter").value || "").toLowerCase();
+    const rows = (outlineCache || []).map((note) => {
+      const secs = note.sections.filter((s) => !filter || note.path.toLowerCase().includes(filter) || (s.heading || "").toLowerCase().includes(filter));
+      if (!secs.length) return "";
+      return `<div class="note"><div class="note-title">${esc(note.path)}</div>${secs.map((s) => `
+        <label><input type="checkbox" data-id="${esc(s.id)}" ${picks.extra.includes(s.id) ? "checked" : ""}> ${esc(s.heading || "(whole note)")}<span class="tok">${fmtNum(s.tokens)}</span></label>`).join("")}</div>`;
+    }).join("");
+    $("outline").innerHTML = rows || "<span class='muted small'>Nothing matches.</span>";
+    $("outline").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      const id = box.dataset.id;
+      picks.extra = picks.extra.filter((x) => x !== id);
+      picks.exclude = picks.exclude.filter((x) => x !== id);
+      if (box.checked) picks.extra.push(id);
+      saveConfirmDraft(); requestEstimate();
+    }));
+  }
+  function renderMemberSections(e) {
+    $("estimate-notes").innerHTML = `<dl>${Object.entries(e.sections || {}).map(([m, secs]) => `<dt>${esc(m)}</dt><dd>${secs.length ? `<ul class="sec-list">${secs.map((s) => `
+      <li><input type="checkbox" data-id="${esc(s.id)}" checked title="Untick to leave this out for every member"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
+    $("estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      const id = box.dataset.id;
+      if (!box.checked) { picks.exclude.push(id); picks.extra = picks.extra.filter((x) => x !== id); }
+      saveConfirmDraft(); requestEstimate();
+    }));
+  }
   function requestEstimate() {
     if (estimateTimer) clearTimeout(estimateTimer);
     estimateTimer = setTimeout(async () => {
@@ -449,11 +498,14 @@
           members, mode: modeOf("run-mode"), budget: Number($("budget").value),
           topic: $("in-topic").value, context: $("in-context").value,
           options: lines($("in-options").value), constraints: lines($("in-constraints").value),
+          extra: picks.extra, exclude: picks.exclude, outline: !outlineCache,
         });
         if (seq !== estimateSeq) return;
         const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} per call learned from ${e.overhead_learned_from} real call(s) of this topic` : `overhead of ${fmtNum(e.overhead_per_call)} per call assumed until the first real call`;
-        $("estimate").innerHTML = `<strong>${e.calls} model call(s)</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong> · ${esc(learned)} · tokens are an estimate, calls are exact`;
-        $("estimate-notes").innerHTML = `<dl>${Object.entries(e.members).map(([m, paths]) => `<dt>${esc(m)}</dt><dd>${paths.length ? paths.map(esc).join(", ") : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
+        const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
+        $("estimate").innerHTML = `<strong>${e.calls} model call(s)</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, calls are exact`;
+        renderMemberSections(e);
+        if (e.outline) { outlineCache = e.outline; renderOutline(); }
       } catch (err) {
         if (seq === estimateSeq) $("estimate").textContent = `No estimate: ${err.message}`;
       }
@@ -488,6 +540,7 @@
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
       members, mode: modeOf("run-mode"), budget: Number($("budget").value),
+      extra: picks.extra, exclude: picks.exclude,
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
     catch (err) { showError(err.message); }
@@ -646,7 +699,12 @@
         (r.mode === "combined" ? ` <span class="mode-mark" title="One call wrote every entry; the entries can lean towards each other.">combined</span>` : "");
       $("direction-spinner").hidden = true;
       $("synthesis-body").innerHTML = renderSynthesis(r);
-      renderPicks($("followup-members"), Object.keys(session.members).filter((n) => !failed.has(n)), new Set());
+      const board = (session.roles && session.roles.members && session.roles.members.length) ? session.roles.members : Object.keys(session.members);
+      renderPicks($("followup-members"), board.filter((n) => !failed.has(n)), new Set());
+      $("followup-members").querySelectorAll("label").forEach((label) => {
+        const name = label.querySelector("input").value;
+        if (!(name in session.members)) label.insertAdjacentHTML("beforeend", ' <span class="muted small">not asked yet</span>');
+      });
       $("ask-back").hidden = false;
     }
     const turnsKey = JSON.stringify(session.turns);
@@ -870,6 +928,13 @@
   $("btn-new").addEventListener("click", newTopic);
   $("btn-error-home").addEventListener("click", () => newTopic(true));
   $("btn-brand").addEventListener("click", () => newTopic(false));
+  $("btn-projects").addEventListener("click", () => toggleProjectMenu());
+  document.addEventListener("click", (e) => { if (!$("project-picker").contains(e.target)) toggleProjectMenu(false); });
+  $("btn-projects-default").addEventListener("click", async () => {
+    try { config = await api("POST", "/api/config", { project: (chosenProjects || []).join(", ") }); renderProjectPicker(); toggleProjectMenu(false); }
+    catch (err) { setError("home-error", err.message); }
+  });
+  $("outline-filter").addEventListener("input", renderOutline);
   $("btn-nav-back").addEventListener("click", goBack);
   $("btn-nav-forward").addEventListener("click", goForward);
   window.addEventListener("popstate", () => {

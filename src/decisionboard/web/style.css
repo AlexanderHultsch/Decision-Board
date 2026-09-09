@@ -226,6 +226,28 @@ button.brand:hover .brand-mark { filter: brightness(1.1); }
 .estimate-detail dl { display: grid; grid-template-columns: 12rem 1fr; gap: .3rem 1rem; margin: .5rem 0 0; font-size: .85rem; }
 .estimate-detail dt { color: var(--muted); }
 .estimate-detail dd { margin: 0; }
+/* The project picker on the home page: a dropdown with checkboxes (9 September 2026) */
+.picker { position: relative; }
+.picker-btn { display: inline-flex; align-items: center; gap: .5rem; padding: .45rem .8rem .45rem .9rem; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; cursor: pointer; box-shadow: var(--shadow); }
+.picker-btn:hover { border-color: var(--muted); }
+.picker-btn svg { width: 14px; height: 14px; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.picker-menu { position: absolute; left: 0; top: calc(100% + 6px); z-index: 15; min-width: 16rem; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.18); padding: .4rem; }
+.picker-menu label { display: flex; align-items: center; gap: .55rem; padding: .4rem .6rem; border-radius: 8px; cursor: pointer; }
+.picker-menu label:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.picker-menu label.all { border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; margin-bottom: .2rem; }
+.picker-foot { border-top: 1px solid var(--line); margin-top: .3rem; padding-top: .3rem; text-align: right; }
+.small-btn { font-size: .8rem; padding: .3rem .6rem; }
+/* Manual picks under the estimate */
+.estimate-detail .sec-list { list-style: none; margin: .1rem 0 0; padding: 0; }
+.estimate-detail .sec-list li { display: flex; align-items: center; gap: .4rem; font-size: .85rem; padding: .1rem 0; }
+.estimate-detail .sec-list .tok { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.estimate-detail .sec-list .forced { color: var(--accent); font-size: .75rem; }
+.outline-filter { width: 100%; max-width: 28rem; margin: .2rem 0 .4rem; }
+.outline { max-height: 18rem; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: .4rem .7rem; background: var(--card); }
+.outline .note { margin: .3rem 0; }
+.outline .note-title { font-weight: 600; font-size: .88rem; }
+.outline label { display: flex; align-items: center; gap: .4rem; font-size: .85rem; padding: .1rem 0 .1rem 1rem; }
+.outline label .tok { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
 .select-wrap { position: relative; display: inline-block; width: 100%; max-width: 34rem; margin: .1rem 0 .9rem; }
 .select-wrap.compact { max-width: 24rem; margin: 0; }
 .select-modern { appearance: none; -webkit-appearance: none; width: 100%; padding: .6rem 2.6rem .6rem .95rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); font: inherit; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }

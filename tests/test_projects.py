@@ -57,6 +57,16 @@ class TestProjectsProperty(unittest.TestCase):
             kept = sorted(n.title for n in knowledge.for_project(notes, "dual dcdc"))
         self.assertEqual(kept, ["Dual DCDC", "Dual DCDC - Maturity Gates", "Shared supplier", "VPDS"])
 
+    def test_several_projects_keep_the_pages_of_each(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = knowledge.load_vault(_vault(Path(tmp)))
+            kept = sorted(n.title for n in knowledge.for_project(notes, ["Dual DCDC", "Sister"]))
+            self.assertEqual(kept, ["Dual DCDC", "Dual DCDC - Maturity Gates", "Shared supplier", "Sister", "Sister - Maturity Gates", "VPDS"])
+            self.assertEqual(sorted(n.title for n in knowledge.for_project(notes, "Dual DCDC, Sister")), kept)
+        self.assertEqual(knowledge.active_projects({"knowledge": {"project": "Dual DCDC; Sister"}}), ["Dual DCDC", "Sister"])
+        self.assertEqual(knowledge.active_projects({"knowledge": {"project": ["A", " B "]}}), ["A", "B"])
+        self.assertEqual(knowledge.active_project({"knowledge": {"project": ["A", "B"]}}), "A, B")
+
     def test_no_active_project_keeps_everything(self):
         with tempfile.TemporaryDirectory() as tmp:
             notes = knowledge.load_vault(_vault(Path(tmp)))
