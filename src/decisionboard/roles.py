@@ -57,6 +57,7 @@ SUPPORT_DIR = Path(__file__).resolve().parents[2] / "roles"
 CONDUCT_NAME = "_Board member conduct.md"
 CONTEXT_NAME = "_Programme context.md"
 TEMPLATE_NAME = "_Template - one member.md"
+KPI_TEMPLATE_NAME = "_Template - KPI note (for the vault).md"
 MIN_MEMBERS = 2
 _MIN_BODY_CHARS = 40   # below this a profile is "not filled yet"
 
@@ -455,7 +456,7 @@ def install_support_files(folder: Path, *, examples: bool = False) -> list[Path]
     (one programme's swim lanes) as well. Nothing is ever overwritten."""
     folder.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    sources = [SUPPORT_DIR / name for name in (CONDUCT_NAME, CONTEXT_NAME, TEMPLATE_NAME)]
+    sources = [SUPPORT_DIR / name for name in (CONDUCT_NAME, CONTEXT_NAME, TEMPLATE_NAME, KPI_TEMPLATE_NAME)]
     if examples and EXAMPLES_DIR.is_dir():
         sources += sorted(EXAMPLES_DIR.glob("*.md"))
     for source in sources:

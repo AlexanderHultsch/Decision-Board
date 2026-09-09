@@ -53,6 +53,8 @@ class Note:
     title: str
     tags: tuple[str, ...]
     body: str               # full file text, front matter included
+    kind: str = ""          # front matter ``kind``: "kpi" marks a member's KPI data note
+    member: tuple[str, ...] = ()   # front matter ``member`` (one or several), for kind: kpi
 
 
 @dataclass
@@ -121,7 +123,14 @@ def _load_note(vault: Path, path: Path) -> Note:
     else:
         tags = tuple(str(tag).lstrip("#") for tag in tags_raw)
     relative = path.relative_to(vault).as_posix()
-    return Note(path=path, relative=relative, title=title, tags=tags, body=body)
+    kind = meta.get("kind") if isinstance(meta.get("kind"), str) else ""
+    member_raw = meta.get("member", ())
+    if isinstance(member_raw, str):
+        members = tuple(m.strip() for m in member_raw.split(",") if m.strip())
+    else:
+        members = tuple(str(m).strip() for m in member_raw if str(m).strip())
+    return Note(path=path, relative=relative, title=title, tags=tags, body=body,
+                kind=str(kind).lower(), member=members)
 
 
 def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ()) -> list[Note]:
@@ -232,10 +241,45 @@ def gather(config: dict, question: str) -> KnowledgeSelection:
     if not vault_path:
         return KnowledgeSelection(vault_path=None)
     vault = Path(str(vault_path)).expanduser()
-    notes = load_vault(vault, skip_subfolders=_roles_inside(config, vault))
+    notes = [n for n in load_vault(vault, skip_subfolders=_roles_inside(config, vault)) if n.kind != "kpi"]
     selection = select_notes(notes, question, int(budget))
     selection.vault_path = vault
     return selection
+
+
+KPI_TOKEN_CAP = 2500   # per member; a KPI note is a table, not a chapter
+
+
+def kpi_notes(config: dict, members: list[str] | tuple[str, ...]) -> dict[str, str]:
+    """The KPI data block for each member (spec 3.4, decided 9 September
+    2026): every note in the vault whose front matter says ``kind: kpi`` and
+    names the member is attached to that member's call, always, whatever
+    the question - the role says which KPI, the network holds the number.
+    Members without a note get no block; the role profile tells them to say
+    the target is not in the network yet. Raises ``KnowledgeUnavailable`` as
+    ``gather`` does."""
+    vault_path = _config_value(config, "knowledge.vault_path")
+    if not vault_path:
+        return {}
+    vault = Path(str(vault_path)).expanduser()
+    notes = [n for n in load_vault(vault, skip_subfolders=_roles_inside(config, vault)) if n.kind == "kpi"]
+    wanted = {m.lower(): m for m in members}
+    blocks: dict[str, list[str]] = {}
+    for note in notes:
+        for named in note.member:
+            member = wanted.get(named.lower())
+            if member is None:
+                continue
+            chunk = f"### {note.relative}\n{note.body.strip()}"
+            blocks.setdefault(member, []).append(chunk)
+    result: dict[str, str] = {}
+    for member, chunks in blocks.items():
+        text = "\n\n".join(chunks)
+        limit = KPI_TOKEN_CAP * _CHARS_PER_TOKEN
+        if len(text) > limit:
+            text = text[:limit] + "\n[... cut to fit the KPI budget]"
+        result[member] = text
+    return result
 
 
 def _roles_inside(config: dict, vault: Path) -> tuple[str, ...]:

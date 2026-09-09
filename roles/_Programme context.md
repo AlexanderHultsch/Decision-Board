@@ -16,6 +16,7 @@ Delete a line rather than leave a placeholder in it: a member told
 
 - Programme: <name, product, customer>
 - Phase now: <where the programme stands today>
+- MG0, Maturity Gate Zero - the KPI baseline: <date it was passed, what was fixed>
 - Start of production: <date>, and what is fixed about it
 - The next gate or milestone that matters: <name, date>
 
@@ -54,3 +55,4 @@ for rather than assume.
 - Budget and actuals: <system>
 - Open issues and risks: <system>
 - Requirements and changes: <system>
+- KPI values (baseline, target, current, EAC): the KPI notes in this vault, one per member (`kind: kpi`)

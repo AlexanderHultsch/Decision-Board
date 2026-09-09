@@ -29,10 +29,14 @@ icon: person
 
 ## Targets I am judged on
 
-The measures this role is actually held to, with numbers where they exist.
-Without them the board can only give opinions.
+Name the measures here; keep the numbers in the knowledge network, in a KPI
+note with `kind: kpi` and `member: <this member>` (see the KPI note
+template). Baseline is MG0.
 
-- <measure>: <target>
+- Resources: within the budget approved at MG0 - budget variance and estimate at completion.
+- Expenses: within the budget approved at MG0 - budget variance and estimate at completion.
+- Milestones: achieved on time - slip against the target date.
+- <any measure specific to this lane, e.g. cBOM cost delta against the MG0 target>
 
 ## What I protect when I cannot have everything
 

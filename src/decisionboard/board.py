@@ -33,6 +33,7 @@ from typing import Any, Callable
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
 from .audit import log_run
+from .knowledge import kpi_notes
 from .roles import Board, RoleProfile, load_board
 
 
@@ -78,7 +79,7 @@ class BoardConversation:
 
 def _member_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str,
-    role: RoleProfile | None = None, conduct: str = "",
+    role: RoleProfile | None = None, conduct: str = "", kpi_data: str = "",
 ) -> str:
     """The prompt for one member's call.
 
@@ -112,6 +113,26 @@ def _member_prompt(
             "against these KPIs, in this vocabulary."
         )
         lines += ["", role.body]
+    if kpi_data:
+        lines += [
+            "",
+            "## KPI data from the knowledge network (section 3.4)",
+            "",
+            "The values behind the targets this member is judged on, as recorded in the "
+            "knowledge network. Baseline MG0 unless the note says otherwise. Judge every "
+            "option against these numbers and name the delta.",
+            "",
+            kpi_data,
+        ]
+    elif role is not None and role.body:
+        lines += [
+            "",
+            "## KPI data from the knowledge network (section 3.4)",
+            "",
+            "No KPI note for this member is in the knowledge network yet. Where a target "
+            "would decide the answer, say that its value is not recorded and state the "
+            "assumption you use instead.",
+        ]
     lines += [
         "",
         "## Input (FR-3.1)",
@@ -214,6 +235,7 @@ def run_board(
     on_member: Callable[[str, str], None] | None = None,
     roles: dict[str, RoleProfile] | None = None,
     board: Board | None = None,
+    member_data: dict[str, str] | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): one isolated call per member, then
     one synthesis call over what they produced. ``roles`` is the board
@@ -248,6 +270,10 @@ def run_board(
         roles = board.profiles
     conduct = board.conduct if board is not None else ""
     members = tuple(roles)
+    if member_data is None:
+        # The KPI data each member is judged against, attached deterministically
+        # (AP-1) whatever the question - never left to the ranked selection.
+        member_data = kpi_notes(config, members)
     audit_folder = _get(config, "runtime.audit_folder")
     pc_name = _get(config, "storage.pc_name", "")
 
@@ -283,7 +309,8 @@ def run_board(
     # calls can see another's response, because none of them has
     # produced one yet when they are submitted.
     prompts = [
-        _member_prompt(topic, context, options, constraints, member, roles[member], conduct)
+        _member_prompt(topic, context, options, constraints, member, roles[member], conduct,
+                       member_data.get(member, ""))
         for member in members
     ]
 

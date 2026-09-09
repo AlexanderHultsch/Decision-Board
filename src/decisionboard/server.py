@@ -300,8 +300,13 @@ class BoardServer:
         except roles_mod.RolesUnavailable as exc:
             session.fail(f"{exc}. Choose the roles folder in Options.")
             return
+        try:
+            kpi = knowledge_mod.kpi_notes(self.config, list(board.profiles))
+        except knowledge_mod.KnowledgeUnavailable:
+            kpi = {}
         with session.lock:
             session.roles = roles_mod.summary(board)
+            session.roles["kpi_members"] = sorted(kpi)
             session.member_meta = roles_mod.member_meta(board.profiles)
             session.members = {member: "pending" for member in board.profiles}
             session.knowledge = {

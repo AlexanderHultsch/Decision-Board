@@ -291,6 +291,8 @@
     const r = session.roles || { members: [], count: 0, source: "", folder: null };
     let rolesLine = `Board of ${r.count}: ${r.members.join(", ")} (profiles from ${r.folder}).`;
     if (r.skipped && r.skipped.length) rolesLine += ` Not on the board: ${r.skipped.map((x) => `${x.member}, ${x.reason}`).join("; ")}.`;
+    const kpi = r.kpi_members || [];
+    rolesLine += kpi.length ? ` KPI notes from the vault attached for: ${kpi.join(", ")}.` : " No KPI notes (kind: kpi) in the vault yet.";
     $("confirm-knowledge").textContent = (k && k.vault_path
       ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
       : "No knowledge source configured. ") + rolesLine + ` ${r.count + 1} model calls follow.`;

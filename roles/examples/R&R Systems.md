@@ -56,10 +56,11 @@ management effectiveness and efficiency.
 
 ## Targets I am judged on
 
-- Product-level deliverables complete at each gate: TDR, DFMEA, test coverage.
-- DV, PV and environmental validation executed to plan; homologation and certification obtained before the milestone that needs them.
-- Product configuration under control: diversity managed, no unapproved variant in the field of play.
-- Validation, homologation and lab budget in eproj against approval.
+The measures are named here; the numbers are not. Baseline is MG0, Maturity Gate Zero. The values - baseline, target, current and estimate at completion - live in the knowledge network, in the KPI note for this member (front matter `kind: kpi`, `member: Systems`), which is attached to every call. If no such note exists yet, say so and state the assumption used.
+
+- Resources: within the budget approved at MG0 - budget variance and estimate at completion.
+- Expenses: within the budget approved at MG0 - budget variance and estimate at completion.
+- Milestones: achieved on time - slip against the target date.
 
 ## What I protect when I cannot have everything
 

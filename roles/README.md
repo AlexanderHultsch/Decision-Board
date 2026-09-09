@@ -15,6 +15,7 @@ your vault, any folder whose name starts with "Roles" (`Roles`,
 | `_Board member conduct.md` | `kind: conduct`. How every member behaves: speaking for all its roles, aligning with its KPIs, checking the knowledge network first, character, how to answer. |
 | `_Programme context.md` | `kind: conduct`. The facts of your programme: dates, what is fixed, how to weigh a trade-off, standing decisions, where the facts live. Fill it in. |
 | `_Template - one member.md` | `kind: template`. The shape of a member note: official description kept verbatim, then the sections the board needs. Never a member itself. |
+| `_Template - KPI note (for the vault).md` | `kind: template`. The shape of the KPI note that holds a member's numbers. It belongs in the vault, not here. |
 | `examples/` | Eight complete member notes: the swim lanes of one programme, official descriptions plus the board sections. The reference for the shape. |
 
 **Every** note marked `kind: conduct` is prepended to every member's
@@ -78,6 +79,11 @@ The whole file is given to that member, and only to that member, on every
 call, behind the conduct note, roles in rank order. At least two filled
 members are needed for a board.
 
-**KPIs belong inside a member's own responsibilities**, not in a member of
-their own: each swim lane is held to its own measures and judges every
-option against them. There is deliberately no "KPI" board member.
+**KPIs: the role names them, the network holds the numbers.** Every member
+is judged on resources, expenses and milestones against what was approved
+at MG0 (Maturity Gate Zero); Hardware and Mechanical also on cBOM cost and
+component usage against the MG0 target. The values - baseline, target,
+current, estimate at completion - live in the vault, in one note per member
+with `kind: kpi` and `member: <name>` in its front matter. Such a note is
+attached to its member on every call, whatever the question, and is never
+part of the ranked selection. There is deliberately no "KPI" board member.

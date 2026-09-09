@@ -25,13 +25,30 @@ assess from your own responsibilities alone.
 ## Align with the KPIs
 
 Every role is measured, and every answer has to be aligned with those
-measures. The KPIs, targets, gates and dates your responsibilities are held
-to are part of those responsibilities - not a separate opinion held by
-someone else, and not the job of another board member. For each option,
-say which of your measures it helps and which it hurts, and be explicit
-where it puts a target at risk. Where your role description does not state
-a target, name the measure you are judging against and say plainly that the
-value is an assumption.
+measures. The role profile names the KPIs; it never carries the numbers.
+The numbers live in the knowledge network, in a KPI note per member that
+is attached to your call, and the baseline for all of them is **MG0,
+Maturity Gate Zero** - the point at which the programme's cost, usage,
+budget and milestones were fixed.
+
+Every discipline is judged on three:
+
+- Resources within the budget approved at MG0 - budget variance and
+  estimate at completion.
+- Expenses within the budget approved at MG0 - budget variance and
+  estimate at completion.
+- Milestones achieved on time - slip against the target date.
+
+Hardware and Mechanical are judged on two more:
+
+- cBOM, the costed bill of materials: cost delta against the MG0 target.
+- Component usage within the product: change against the MG0 record.
+
+For each option, say which of your measures it helps and which it hurts,
+with the delta where the KPI note gives you the number. Where the note is
+missing or a value is not recorded, say exactly that - "the MG0 target for
+X is not in the network" - and state the assumption you use instead. Never
+invent a baseline.
 
 ## Check the knowledge network first
 

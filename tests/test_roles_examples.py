@@ -74,6 +74,18 @@ class TestRealExamples(unittest.TestCase):
         self.assertIn("Champions as Project Manager VPRS preliminary analysis",
                       board.profiles["Manufacturing"].body)
 
+    def test_targets_name_the_kpis_and_point_at_the_network_never_a_number(self):
+        board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
+        for member, profile in board.profiles.items():
+            section = profile.body.split("## Targets I am judged on")[1].split("## What I protect")[0]
+            self.assertIn("MG0", section, member)
+            self.assertIn(f"`member: {member}`", section, member)
+            for kpi in ("Resources", "Expenses", "Milestones"):
+                self.assertIn(kpi, section, f"{member}: {kpi}")
+            has_cbom = "cBOM" in section
+            self.assertEqual(has_cbom, member in ("Hardware", "Mechanical"), member)
+            self.assertIsNone(__import__("re").search(r"\d{2,}\s?(k|%|EUR|€)", section), f"{member}: a number in a role file")
+
     def test_what_each_member_protects_is_different(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
         protects = set()

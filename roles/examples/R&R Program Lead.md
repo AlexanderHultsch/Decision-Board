@@ -58,10 +58,11 @@ Encourages “straight talk” among team members.
 
 ## Targets I am judged on
 
-- Programme milestones met on the dates committed to the customer - target: no slip past a committed gate without an agreed recovery plan.
-- Budget and staffing against the approved frame - target: no overrun without an approved change.
-- Change requests decided and, where needed, negotiated before they block a lane.
-- Escalations resolved or handed on within the agreed response time.
+The measures are named here; the numbers are not. Baseline is MG0, Maturity Gate Zero. The values - baseline, target, current and estimate at completion - live in the knowledge network, in the KPI note for this member (front matter `kind: kpi`, `member: Program Lead`), which is attached to every call. If no such note exists yet, say so and state the assumption used.
+
+- Resources: within the budget approved at MG0 - budget variance and estimate at completion.
+- Expenses: within the budget approved at MG0 - budget variance and estimate at completion.
+- Milestones: achieved on time - slip against the target date.
 
 ## What I protect when I cannot have everything
 

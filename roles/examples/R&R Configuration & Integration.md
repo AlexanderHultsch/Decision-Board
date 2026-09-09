@@ -51,10 +51,11 @@ Identifying and evaluating emerging technologies, tools, and industry trends to 
 
 ## Targets I am judged on
 
-- GBC releases performed on the dates the customer and programme milestones require.
-- BOM complete and correct at release: inputs gathered from every lane, nothing outstanding.
-- Change notices and temporary changes released within the agreed lead time; IMDS requests closed.
-- Sample and prototype deliveries on the dates committed, internally and to the customer; sample budget executed to plan.
+The measures are named here; the numbers are not. Baseline is MG0, Maturity Gate Zero. The values - baseline, target, current and estimate at completion - live in the knowledge network, in the KPI note for this member (front matter `kind: kpi`, `member: Configuration & Integration`), which is attached to every call. If no such note exists yet, say so and state the assumption used.
+
+- Resources: within the budget approved at MG0 - budget variance and estimate at completion.
+- Expenses: within the budget approved at MG0 - budget variance and estimate at completion.
+- Milestones: achieved on time - slip against the target date.
 
 ## What I protect when I cannot have everything
 
