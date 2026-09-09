@@ -176,7 +176,7 @@ class TestRunBoard(unittest.TestCase):
         result = board.run_board(self.config, provider, topic="Dual-source the connector?")
 
         self.assertEqual(len(result.assessments), 1)
-        self.assertIn("skipped", result.synthesis.lower())
+        self.assertIn("nothing to consolidate", result.synthesis.lower())
         self.assertEqual(result.llm_calls, len(MEMBERS))
         self.assertIsNone(result.ai_result)
 
@@ -334,6 +334,140 @@ class TestAskFollowUp(unittest.TestCase):
 
         with self.assertRaises(AiNotConfiguredError):
             board.ask_follow_up(self.config, None, conversation, "a question")
+
+
+class TestMemberChoiceApplicabilityAndRetry(unittest.TestCase):
+    """Decided 9 September 2026: Alex chooses the members asked, a member
+    may say the topic does not touch it, and a call that used tools
+    instead of answering is retried once."""
+
+    def setUp(self):
+        self.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
+
+    def test_only_the_chosen_members_are_asked(self):
+        chosen = MEMBERS[:2]
+        provider = FakeProvider([_member_response()] * 2 + [SYNTHESIS_RESPONSE])
+        result = board.run_board(self.config, provider, topic="T", members=chosen)
+        member_prompts = [p for _t, p in provider.calls if "## Member (FR-3.3a)" in p]
+        self.assertEqual(len(member_prompts), 2)
+        self.assertEqual([a.member for a in result.assessments], list(chosen))
+        self.assertEqual(result.llm_calls, 3)
+
+    def test_choosing_nobody_on_the_board_raises(self):
+        with self.assertRaises(ValueError):
+            board.run_board(self.config, FakeProvider([]), topic="T", members=["Nobody"])
+
+    def test_a_member_may_say_the_topic_does_not_touch_it(self):
+        texts = [json.dumps({"applies": False, "view": "- No hardware part changes.", "risks": [],
+                             "recommendation": "- No position: not affected."})]
+        texts += [_member_response(risks=["r1", "r2"])] * (len(MEMBERS) - 1) + [SYNTHESIS_RESPONSE]
+        provider = FakeProvider(texts)
+        result = board.run_board(self.config, provider, topic="T")
+        first = result.assessments[0]
+        self.assertFalse(first.applies)
+        self.assertTrue(all(a.applies for a in result.assessments[1:]))
+        self.assertEqual(result.assessments[1].risks, "- r1\n- r2")     # one bullet per risk
+        synthesis_prompt = provider.calls[-1][1]
+        self.assertIn('"applies": false', synthesis_prompt)
+
+    def test_a_tool_only_failure_is_retried_once_without_tools(self):
+        class ToolsFirst(FakeProvider):
+            def __init__(self):
+                super().__init__([])
+                self.failed_once = False
+
+            def complete(self, task, prompt):
+                self.calls.append((task, prompt))
+                if "## Member (FR-3.3a)" in prompt and not self.failed_once:
+                    self.failed_once = True
+                    raise RuntimeError("opencode run produced no answer text. It called tool(s) instead of answering: glob.")
+                text = SYNTHESIS_RESPONSE if "## Assessments" in prompt else _member_response()
+                return AiResult(text=text, provider="fake", model="m", input_tokens=1, output_tokens=1, duration_seconds=0)
+
+        provider = ToolsFirst()
+        result = board.run_board(self.config, provider, topic="T")
+        self.assertEqual(result.failed_members, [])
+        self.assertEqual(len(result.assessments), len(MEMBERS))
+        self.assertEqual(result.llm_calls, len(MEMBERS) + 2)          # one retry
+        retried = [p for _t, p in provider.calls if p.startswith("IMPORTANT: your previous attempt")]
+        self.assertEqual(len(retried), 1)
+
+    def test_other_failures_are_not_retried(self):
+        class Broken(FakeProvider):
+            def complete(self, task, prompt):
+                self.calls.append((task, prompt))
+                if "## Member (FR-3.3a)" in prompt:
+                    raise RuntimeError("connection refused")
+                return AiResult(text=SYNTHESIS_RESPONSE, provider="fake", model="m", input_tokens=1, output_tokens=1, duration_seconds=0)
+
+        provider = Broken([])
+        result = board.run_board(self.config, provider, topic="T")
+        self.assertEqual(len(result.failed_members), len(MEMBERS))
+        self.assertEqual(len(provider.calls), len(MEMBERS))
+
+
+class TestFollowUpWithMembers(unittest.TestCase):
+    def setUp(self):
+        self.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
+        roles = board.load_board(self.config).profiles
+        self.conversation = board.BoardConversation(
+            result=board.BoardResult(
+                topic="Source the soft tooling now?",
+                assessments=[board.MemberAssessment(member=m, view=f"- {m} view", risks="- r", recommendation="- wait")
+                             for m in MEMBERS],
+                synthesis="Overall recommendation: wait", failed_members=[], ai_result=None, llm_calls=7),
+            turns=[], roles=roles,
+            inputs={"topic": "Source the soft tooling now?", "context": "SOP fixed", "options": ["now", "later"],
+                    "constraints": []},
+            conduct="Be concrete.", member_data={MEMBERS[0]: "| KPI | MG0 |"}, project="Dual DCDC")
+
+    def test_members_asked_again_get_their_profile_earlier_answer_and_the_question(self):
+        again = MEMBERS[:2]
+        follow_up_json = json.dumps({"answer": "- Then source now.", "reasons": ["Hardware: lead time"],
+                                     "recommendation_now": "Source now.", "disagreements": []})
+        provider = FakeProvider([_member_response(view="- changed my mind")] * 2 + [follow_up_json])
+        turn = board.ask_follow_up_full(self.config, provider, self.conversation, "What if tooling is free?", again)
+        self.assertEqual(turn.llm_calls, 3)
+        self.assertEqual([a.member for a in turn.assessments], list(again))
+        member_prompts = [p for _t, p in provider.calls[:2]]
+        for member, prompt in zip(again, member_prompts):
+            self.assertIn(f"Member: {member}", prompt)
+            self.assertIn("## Role profile", prompt)
+            self.assertIn("## Your earlier assessment", prompt)
+            self.assertIn(f"- {member} view", prompt)
+            self.assertIn("Be concrete.", prompt)
+            self.assertIn("What if tooling is free?", prompt)
+            self.assertIn("Project: Dual DCDC.", prompt)
+        self.assertIn("| KPI | MG0 |", member_prompts[0])
+        synthesis_prompt = provider.calls[2][1]
+        self.assertIn("## Member answers to the new question", synthesis_prompt)
+        self.assertIn("changed my mind", synthesis_prompt)
+        self.assertEqual(turn.data["recommendation_now"], "Source now.")
+        self.assertIn("Then source now.", turn.answer)
+        self.assertEqual(self.conversation.turns[-1][0], "What if tooling is free?")
+
+    def test_no_members_means_one_call_and_plain_text_is_kept_as_is(self):
+        provider = FakeProvider(["Because of the lead time."])
+        turn = board.ask_follow_up_full(self.config, provider, self.conversation, "Why?")
+        self.assertEqual(turn.llm_calls, 1)
+        self.assertIsNone(turn.data)
+        self.assertEqual(turn.answer, "Because of the lead time.")
+        self.assertNotIn("## Member answers", provider.calls[0][1])
+
+    def test_a_member_that_fails_on_the_follow_up_is_named_and_the_rest_answer(self):
+        class OneBroken(FakeProvider):
+            def complete(self, task, prompt):
+                self.calls.append((task, prompt))
+                if f"Member: {MEMBERS[0]}" in prompt:
+                    raise RuntimeError("boom")
+                text = "not json" if "## Assessments" in prompt else _member_response()
+                return AiResult(text=text, provider="fake", model="m", input_tokens=1, output_tokens=1, duration_seconds=0)
+
+        turn = board.ask_follow_up_full(self.config, OneBroken([]), self.conversation, "Why?", MEMBERS[:2])
+        self.assertEqual(len(turn.failed_members), 1)
+        self.assertIn(MEMBERS[0], turn.failed_members[0])
+        self.assertEqual([a.member for a in turn.assessments], [MEMBERS[1]])
+        self.assertEqual(turn.answer, "not json")
 
 
 class TestRender(unittest.TestCase):

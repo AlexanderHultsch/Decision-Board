@@ -169,3 +169,31 @@ button.ghost { background: transparent; }
 .modal { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .modal-card { background: var(--card); color: var(--text); border-radius: 18px; padding: 1.5rem 1.6rem; max-width: 520px; width: 100%; box-shadow: var(--shadow); max-height: 92vh; overflow: auto; }
 .modal-card.wide { max-width: 680px; }
+
+/* Member pick-lists (confirm screen, follow-up) and clarification rounds - 9 September 2026 */
+.member-picks { display: flex; flex-wrap: wrap; gap: .5rem; margin: .2rem 0 .8rem; }
+.member-picks label { display: inline-flex; align-items: center; gap: .5rem; padding: .35rem .8rem .35rem .5rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; font-weight: 500; }
+.member-picks label.off { opacity: .55; }
+.member-picks label .avatar { width: 26px; height: 26px; }
+.member-picks label .avatar svg { width: 14px; height: 14px; }
+.member-picks.compact label { padding: .25rem .65rem .25rem .4rem; font-size: .9rem; }
+.member-picks input { margin: 0; }
+.rounds-done { margin-bottom: .8rem; }
+.rounds-done details { border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem .9rem; background: var(--card); margin-bottom: .5rem; }
+.rounds-done summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.rounds-done dl { margin: .5rem 0 0; }
+.rounds-done dt { font-weight: 600; margin-top: .4rem; }
+.rounds-done dd { margin: 0 0 .2rem; color: var(--muted); }
+.bullets { margin: 0; padding-left: 1.2rem; }
+.bullets li { margin: .15rem 0; }
+.member-chip.na { opacity: .6; }
+.member-chip.na .avatar { filter: grayscale(1); }
+.na-note { color: var(--muted); font-style: italic; }
+.turn .members { color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
+.turn dl { display: grid; grid-template-columns: 11rem 1fr; gap: .4rem 1rem; margin: .4rem 0 0; }
+.turn dt { color: var(--muted); font-size: .85rem; }
+.turn dd { margin: 0; white-space: pre-wrap; }
+@media (max-width: 560px) { .turn dl { grid-template-columns: 1fr; } }
+.turn .turn-members { margin-top: .6rem; }
+.turn .turn-member { border-left: 3px solid var(--line); padding: .3rem .7rem; margin-top: .4rem; }
+.turn .turn-member .who { font-weight: 600; }

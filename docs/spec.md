@@ -275,6 +275,17 @@ Greeting, one text box
   -> close             "write to memory?" -> proposal -> edit -> confirm -> written
 ```
 
+**Decided 9 September 2026, after the first real runs on the company PC.**
+
+| Rule | Reason |
+|---|---|
+| **Alex chooses who is asked.** The confirm screen lists every member with a ticked checkbox; unticked members are not called (`run` takes `members`, `run_board(members=...)`). Every follow-up has the same list, empty by default: ticked members are asked again, each in isolation with its earlier assessment, the recommendation so far and the conversation in front of it, and the synthesis answers over their new answers (`ask_follow_up_full`, one call per member plus one). Nobody ticked: the one-call form over the original assessments, as before | "Some changes are not applicable for all swim lanes." A follow-up that can go back to the members is what makes "what if the tooling is free?" answerable with new reasoning instead of a re-reading of old text. |
+| **Clarification loops until clear**, up to `clarify.MAX_ROUNDS` (3). Round one always asks at least one question; from round two the clarifier sees every question and answer so far and returns an empty list with `clear: true` when nothing important is missing. "Ask the board now" skips further rounds; the round limit sends the question to the board regardless | One round was not enough when the first answers raised new points, and an endless loop is not clarification. Alex keeps the exit in his hand. |
+| **A member may say the topic does not touch it**: `applies: false` in its JSON, with the facts in `view` (which responsibilities and measures it checked), no risks, a one-line recommendation. The synthesis gives such a member no vote and names it under `not_affected`; the interface shows the chip as n/a and the card with its reasons | A short answer is right when the topic is not the member's, but only with an argument - silence would look like agreement. |
+| **Plain English, bullets.** Every prompt asks for short sentences and lines starting with "- " (at most five per field, at most 25 words each); risks come back one bullet per risk. The interface renders "- " lines as lists everywhere, including follow-ups, which now answer in a JSON shape (`answer`, `reasons`, `recommendation_now`, `disagreements`) instead of prose | The first real answers were right but long and hard to read. The reader skims. |
+| **A tool-only answer is retried once.** When a member call returns tool use and no text, the same prompt is sent once more with a prefix saying that no tools exist and only the JSON is wanted; the prompt itself now says so from the start | Seen on the first real run: Manufacturing called `glob` instead of answering. A retry is cheaper than a lost member. |
+| The page scrolls to the top only when the screen changes, not on every poll | Polling redraws the result screen once a second; the reader was pulled back up while the board was thinking. |
+
 ### 9.3 Setup
 
 `scripts/setup.py` (`setup_wizard.py`) is the one entry point for a new

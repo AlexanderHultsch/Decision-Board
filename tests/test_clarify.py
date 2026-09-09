@@ -51,6 +51,29 @@ class TestClarify(unittest.TestCase):
         self.assertEqual(result.questions, [clarify.FALLBACK_QUESTION])
         self.assertIsNotNone(result.parse_error)
 
+    def test_a_later_round_carries_the_earlier_questions_and_answers(self):
+        provider = FakeProvider(json.dumps({"topic": "T", "context": "c", "questions": [], "clear": True}))
+        rounds = [(["What is the budget?", "Who owns it?"], ["200k", ""])]
+        result = clarify.clarify(provider, "Rework?", "", rounds)
+        prompt = provider.prompts[0]
+        self.assertIn("## Clarification so far", prompt)
+        self.assertIn("Q: What is the budget?\nA: 200k", prompt)
+        self.assertIn("Q: Who owns it?\nA: (not answered)", prompt)
+        self.assertIn(f"round 2 of at most {clarify.MAX_ROUNDS}", prompt)
+        self.assertEqual(result.questions, [])          # clear: no fallback question after round one
+
+    def test_the_first_round_still_asks_at_least_one_question(self):
+        self.assertEqual(clarify.parse_clarification(json.dumps({"questions": []}), "q").questions,
+                         [clarify.FALLBACK_QUESTION])
+        self.assertEqual(clarify.parse_clarification(json.dumps({"questions": []}), "q", first_round=False).questions, [])
+        self.assertEqual(clarify.parse_clarification("not json", "q", first_round=False).questions, [])
+
+    def test_every_round_is_folded_into_the_context(self):
+        text = clarify.merge_rounds("SOP fixed", [(["Budget?"], ["200k"]), (["Owner?"], [""])])
+        self.assertTrue(text.startswith("SOP fixed"))
+        self.assertIn("Q: Budget?\nA: 200k", text)
+        self.assertIn("Q: Owner?\nA: (not answered)", text)
+
     def test_answers_are_folded_into_the_context_deterministically(self):
         clarification = clarify.Clarification(topic="T", context="Background.", questions=["Q1?", "Q2?"])
         context = clarify.merge_answers(clarification, ["A1", ""])

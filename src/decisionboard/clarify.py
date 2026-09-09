@@ -39,8 +39,26 @@ class Clarification:
     parse_error: str | None = None
 
 
-def clarifier_prompt(question: str, knowledge_text: str) -> str:
+MAX_ROUNDS = 3       # clarification rounds before the board is asked regardless
+
+
+def clarifier_prompt(question: str, knowledge_text: str, rounds: list[tuple[list[str], list[str]]] | None = None) -> str:
+    """The clarifier's prompt. ``rounds`` is every round so far as
+    ``(questions, answers)`` pairs (decided 9 September 2026: clarification
+    loops until the clarifier finds the question clear, up to
+    ``MAX_ROUNDS``)."""
     lines = [load_prompt("clarifier"), "", "## Question from Alex", "", question.strip()]
+    if rounds:
+        lines += ["", "## Clarification so far", ""]
+        for number, (questions, answers) in enumerate(rounds, start=1):
+            lines.append(f"Round {number}:")
+            for index, asked in enumerate(questions):
+                answer = answers[index].strip() if index < len(answers) and answers[index] else ""
+                lines.append(f"Q: {asked}")
+                lines.append(f"A: {answer if answer else '(not answered)'}")
+            lines.append("")
+        lines.append(f"This is round {len(rounds) + 1} of at most {MAX_ROUNDS}. Ask only what is still "
+                     "missing; return an empty questions list when the question is clear.")
     if knowledge_text:
         lines += ["", knowledge_text]
     return "\n".join(lines)
@@ -54,22 +72,23 @@ def _as_list(value) -> list[str]:
     return []
 
 
-def parse_clarification(text: str, question: str) -> Clarification:
+def parse_clarification(text: str, question: str, *, first_round: bool = True) -> Clarification:
     """The clarifier's JSON, with Python's guarantees applied: the topic is
-    never empty (it falls back to the question itself) and there is always
-    at least one question (``FALLBACK_QUESTION`` when the model returned
-    none - the minimum of one is a rule, not a hope)."""
+    never empty (it falls back to the question itself) and, in the first
+    round, there is always at least one question (``FALLBACK_QUESTION``
+    when the model returned none - the minimum of one is a rule, not a
+    hope). In a later round an empty list means the question is clear."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         data = None
     if not isinstance(data, dict):
         return Clarification(
-            topic=question.strip(), context="", questions=[FALLBACK_QUESTION],
+            topic=question.strip(), context="", questions=[FALLBACK_QUESTION] if first_round else [],
             parse_error="clarifier response did not parse as JSON",
         )
     questions = _as_list(data.get("questions"))
-    if not questions:
+    if not questions and first_round:
         questions = [FALLBACK_QUESTION]
     topic = str(data.get("topic") or "").strip() or question.strip()
     return Clarification(
@@ -81,24 +100,32 @@ def parse_clarification(text: str, question: str) -> Clarification:
     )
 
 
-def clarify(provider: AiProvider, question: str, knowledge_text: str = "") -> Clarification:
-    """One clarifier call. Raises whatever the provider raises."""
-    ai_result = provider.complete(TASK_BOARD, clarifier_prompt(question, knowledge_text))
-    clarification = parse_clarification(ai_result.text, question)
+def clarify(provider: AiProvider, question: str, knowledge_text: str = "",
+            rounds: list[tuple[list[str], list[str]]] | None = None) -> Clarification:
+    """One clarifier call, for the first round or a later one. Raises
+    whatever the provider raises."""
+    ai_result = provider.complete(TASK_BOARD, clarifier_prompt(question, knowledge_text, rounds))
+    clarification = parse_clarification(ai_result.text, question, first_round=not rounds)
     clarification.ai_result = ai_result
     return clarification
 
 
 def merge_answers(clarification: Clarification, answers: list[str]) -> str:
+    """One round: see ``merge_rounds``."""
+    return merge_rounds(clarification.context, [(list(clarification.questions), list(answers))])
+
+
+def merge_rounds(context: str, rounds: list[tuple[list[str], list[str]]]) -> str:
     """The context the board receives: the clarifier's extracted context
-    plus every question/answer pair, verbatim. A skipped question is
-    recorded as skipped, so the members know it was asked and not
-    answered rather than never asked."""
-    lines = [clarification.context.strip()] if clarification.context.strip() else []
+    plus every question/answer pair of every round, verbatim. A skipped
+    question is recorded as skipped, so the members know it was asked and
+    not answered rather than never asked."""
+    lines = [context.strip()] if context.strip() else []
     pairs = []
-    for index, question in enumerate(clarification.questions):
-        answer = answers[index].strip() if index < len(answers) and answers[index] else ""
-        pairs.append(f"Q: {question}\nA: {answer if answer else '(not answered)'}")
+    for questions, answers in rounds:
+        for index, question in enumerate(questions):
+            answer = answers[index].strip() if index < len(answers) and answers[index] else ""
+            pairs.append(f"Q: {question}\nA: {answer if answer else '(not answered)'}")
     if pairs:
         lines.append("Clarification with Alex before the board was asked:")
         lines.extend(pairs)

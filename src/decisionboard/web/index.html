@@ -49,24 +49,31 @@
   <!-- Questions -->
   <section id="screen-questions" class="screen" hidden>
     <h2>Before the board answers</h2>
-    <p class="muted">A few things would change the recommendation. Answer what you can; leave the rest blank.</p>
+    <p id="questions-intro" class="muted">A few things would change the recommendation. Answer what you can; leave the rest blank.</p>
+    <div id="rounds-done" class="rounds-done"></div>
     <form id="questions-form" class="stack"></form>
-    <div class="row end">
+    <div class="row between">
       <button id="btn-back-home" type="button" class="ghost">Start over</button>
-      <button id="btn-answers" type="button" class="primary">Continue</button>
+      <div class="row">
+        <button id="btn-answers-final" type="button" class="ghost">Ask the board now</button>
+        <button id="btn-answers" type="button" class="primary">Continue</button>
+      </div>
     </div>
+    <p id="questions-hint" class="muted small"></p>
   </section>
 
   <!-- Confirm -->
   <section id="screen-confirm" class="screen" hidden>
     <h2>This is what the board will be asked</h2>
-    <p class="muted">Edit anything that is wrong. The six members answer this, and only this.</p>
+    <p class="muted">Edit anything that is wrong. The members you tick answer this, and only this.</p>
     <form id="confirm-form" class="stack">
       <label>Topic<input id="in-topic" type="text"></label>
       <label>Context<textarea id="in-context" rows="8"></textarea></label>
       <label>Options under consideration <span class="muted small">one per line</span><textarea id="in-options" rows="4"></textarea></label>
       <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
     </form>
+    <p class="eyebrow">Who is asked <span class="muted small">untick a swim lane the topic does not concern</span></p>
+    <div id="confirm-members" class="member-picks"></div>
     <p id="confirm-knowledge" class="muted small"></p>
     <div class="row end">
       <button id="btn-back-questions" type="button" class="ghost">Back</button>
@@ -77,7 +84,7 @@
   <!-- Running -->
   <section id="screen-running" class="screen" hidden>
     <h2 id="running-title">The board is in session</h2>
-    <p id="running-detail" class="muted">Six members, each answering without seeing the others.</p>
+    <p id="running-detail" class="muted">The members, each answering without seeing the others.</p>
     <div id="member-grid" class="member-grid"></div>
   </section>
 
@@ -89,7 +96,7 @@
     <div id="synthesis-card" class="card synthesis">
       <div class="card-head">
         <span class="avatar avatar-synthesis" aria-hidden="true"></span>
-        <div><div class="card-title">Board recommendation</div><div class="muted small">Synthesis of six independent assessments</div></div>
+        <div><div class="card-title">Board recommendation</div><div class="muted small">Synthesis of the independent assessments</div></div>
       </div>
       <div id="synthesis-body"></div>
     </div>
@@ -103,6 +110,8 @@
     <div id="turns" class="stack"></div>
     <form id="followup-form" class="ask compact">
       <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
+      <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
+      <div id="followup-members" class="member-picks compact"></div>
       <div class="row between">
         <span id="result-hint" class="muted small"></span>
         <div class="row">

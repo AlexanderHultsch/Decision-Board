@@ -30,6 +30,10 @@ CLARIFIER = json.dumps({"topic": "Rework or switch", "context": "SOP is fixed.",
 SYNTHESIS = json.dumps({"overall_recommendation": "Rework", "decisive_criterion": "Time", "counter_arguments": ["Cost"],
                         "what_would_change_it": "A quote", "disagreements": ["Finance vs Manufacturing"]})
 PROPOSAL = json.dumps({"path": "Decisions/Rework.md", "title": "Rework decision", "tags": ["tooling"], "body": "Decided: rework."})
+CLEAR = json.dumps({"topic": "Rework or switch", "context": "SOP is fixed. Budget 200k.", "options": ["Rework", "Switch"],
+                    "constraints": ["SOP cannot move"], "questions": [], "clear": True})
+FOLLOW_UP = json.dumps({"answer": "- Because time is the decisive criterion.", "reasons": ["Hardware: DV date"],
+                        "recommendation_now": "Rework, unchanged.", "disagreements": []})
 
 
 class RoutingFakeProvider(AiProvider):
@@ -44,11 +48,15 @@ class RoutingFakeProvider(AiProvider):
         with self.lock:
             self.prompts.append(prompt)
         if "## Question from Alex" in prompt:
-            text = CLARIFIER
+            text = CLEAR if "## Clarification so far" in prompt else CLARIFIER
         elif "## Vault outline" in prompt:
             text = PROPOSAL
+        elif "## Your earlier assessment" in prompt:
+            member = prompt.split("Member: ", 1)[1].splitlines()[0]
+            text = json.dumps({"applies": member != "Finance", "view": f"- {member} again",
+                               "risks": ["r2"], "recommendation": "- Rework, still"})
         elif "## New question" in prompt:
-            text = "Because time is the decisive criterion."
+            text = FOLLOW_UP
         elif "## Assessments" in prompt:
             text = SYNTHESIS
         elif "Member: " in prompt:
@@ -157,32 +165,58 @@ class TestServerFlow(unittest.TestCase):
 
         status, state = self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["200k"]})
         self.assertEqual(status, 200)
-        self.assertEqual(state["phase"], "confirm")
+        self.assertEqual(state["phase"], "clarifying")           # the clarifier looks again
+        state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.assertEqual(len(state["rounds"]), 1)
+        self.assertEqual(state["llm_calls"], 2)                  # two clarifier calls
         self.assertIn("Q: What is the budget?\nA: 200k", state["inputs"]["context"])
+        self.assertIn("Budget 200k.", state["inputs"]["context"])   # the second round's context won
+        self.assertEqual(sorted(state["roles"]["members"]), sorted(CLASSIC))
 
+        chosen = CLASSIC[:3]
         status, state = self.call("POST", f"/api/sessions/{sid}/run", {
             "topic": "Rework or switch (edited)", "context": state["inputs"]["context"],
-            "options": ["Rework", "Switch"], "constraints": ["SOP cannot move"]})
+            "options": ["Rework", "Switch"], "constraints": ["SOP cannot move"], "members": chosen})
         self.assertEqual(status, 200)
         state = self.wait_for(sid, lambda s: s["phase"] == "result")
         self.assertEqual(state["result"]["topic"], "Rework or switch (edited)")
-        self.assertEqual(len(state["result"]["assessments"]), MEMBER_COUNT)
+        self.assertEqual(sorted(state["selected_members"]), sorted(chosen))
+        self.assertEqual(sorted(a["member"] for a in state["result"]["assessments"]), sorted(chosen))
         self.assertEqual(state["result"]["synthesis_data"]["overall_recommendation"], "Rework")
+        self.assertEqual(sorted(state["members"]), sorted(chosen))
         self.assertTrue(all(v == "done" for v in state["members"].values()))
-        self.assertEqual(state["llm_calls"], MEMBER_COUNT + 2)   # clarifier + members + synthesis
+        self.assertEqual(state["llm_calls"], 2 + len(chosen) + 1)   # clarifier x2 + members + synthesis
 
         # Members received the knowledge and the clarification, never the clarifier's questions as a task.
         member_prompts = [p for p in self.provider.prompts[first_prompt:] if "Member: " in p]
-        self.assertEqual(len(member_prompts), MEMBER_COUNT)
+        self.assertEqual(len(member_prompts), len(chosen))
         self.assertTrue(all("Tooling is late." in p for p in member_prompts))
         self.assertTrue(all("A: 200k" in p for p in member_prompts))
         self.assertFalse(any("## Question from Alex" in p for p in member_prompts))
 
+        calls_before = state["llm_calls"]
         status, state = self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "Why?"})
         self.assertEqual(status, 200)
         state = self.wait_for(sid, lambda s: not s["busy"])
-        self.assertEqual(state["turns"][0]["answer"], "Because time is the decisive criterion.")
-        self.assertEqual(state["llm_calls"], MEMBER_COUNT + 3)
+        self.assertIn("Because time is the decisive criterion.", state["turns"][0]["answer"])
+        self.assertEqual(state["turns"][0]["data"]["recommendation_now"], "Rework, unchanged.")
+        self.assertEqual(state["turns"][0]["assessments"], [])
+        self.assertEqual(state["llm_calls"], calls_before + 1)     # one call: nobody asked again
+
+        asked_again = chosen[:2]
+        status, state = self.call("POST", f"/api/sessions/{sid}/follow-up",
+                                  {"question": "And if tooling is free?", "members": asked_again})
+        self.assertEqual(status, 200)
+        state = self.wait_for(sid, lambda s: not s["busy"])
+        turn = state["turns"][1]
+        self.assertEqual(sorted(a["member"] for a in turn["assessments"]), sorted(asked_again))
+        self.assertEqual(state["llm_calls"], calls_before + 1 + len(asked_again) + 1)
+        again_prompts = [p for p in self.provider.prompts[first_prompt:] if "## Your earlier assessment" in p]
+        self.assertEqual(len(again_prompts), len(asked_again))
+        self.assertTrue(all("## Role profile" in p and "And if tooling is free?" in p for p in again_prompts))
+        finance = [a for a in turn["assessments"] if a["member"] == "Finance"]
+        if finance:
+            self.assertFalse(finance[0]["applies"])
 
         status, state = self.call("POST", f"/api/sessions/{sid}/close", {"remember": True})
         self.assertEqual(status, 200)
@@ -204,7 +238,9 @@ class TestServerFlow(unittest.TestCase):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
         sid = state["id"]
         self.wait_for(sid, lambda s: s["phase"] == "questions")
-        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""]})
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})   # straight to the board
+        state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.assertEqual(state["llm_calls"], 1)
         self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "context": "", "options": [], "constraints": []})
         self.wait_for(sid, lambda s: s["phase"] == "result")
         status, state = self.call("POST", f"/api/sessions/{sid}/close", {"remember": False})
@@ -221,6 +257,36 @@ class TestServerFlow(unittest.TestCase):
             self.assertIn("Options", state["error"])
         finally:
             self.config["knowledge"]["vault_path"] = original
+
+    def test_the_round_limit_sends_the_question_to_the_board(self):
+        keep = self.provider.complete
+        # A clarifier that never finds the question clear.
+        self.provider.complete = lambda task, prompt: (
+            AiResult(text=CLARIFIER, provider="fake", model="m", input_tokens=1, output_tokens=1, duration_seconds=0)
+            if "## Question from Alex" in prompt else keep(task, prompt))
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+            sid = state["id"]
+            for round_number in range(1, 4):
+                state = self.wait_for(sid, lambda s: s["phase"] in ("questions", "confirm"))
+                if state["phase"] == "confirm":
+                    break
+                self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [f"answer {round_number}"]})
+            state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
+            self.assertEqual(len(state["rounds"]), state["max_rounds"])
+            self.assertIn("A: answer 3", state["inputs"]["context"])
+        finally:
+            self.provider.complete = keep
+
+    def test_choosing_no_known_member_is_refused(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        status, body = self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": ["Nobody"]})
+        self.assertEqual(status, 400)
+        self.assertIn("at least one member", body["error"])
 
     def test_actions_out_of_order_are_refused(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})

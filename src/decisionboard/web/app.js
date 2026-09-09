@@ -59,8 +59,12 @@
     return data;
   }
   function show(name) {
+    // Scroll to the top only when the screen actually changes: a poll that
+    // redraws the same screen must not pull the page back up (9 September 2026).
+    const target = $(`screen-${name}`);
+    const changed = !target || target.hidden;
     document.querySelectorAll(".screen").forEach((el) => { el.hidden = el.id !== `screen-${name}`; });
-    window.scrollTo({ top: 0 });
+    if (changed) window.scrollTo({ top: 0 });
   }
   function setError(id, message) {
     const el = $(id);
@@ -77,6 +81,31 @@
     return h < 5 ? "Good evening." : h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.";
   }
   function lines(text) { return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean); }
+  // Text that the model wrote as bullets ("- " lines) becomes a list; anything
+  // else is shown as it is. Arrays are lists too.
+  function fmt(value) {
+    if (Array.isArray(value)) return value.length ? `<ul class="bullets">${value.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<span class='muted'>none stated</span>";
+    const text = String(value == null ? "" : value).trim();
+    if (!text) return "<span class='muted'>none stated</span>";
+    const rows = text.split("\n").map((r) => r.trim()).filter(Boolean);
+    if (rows.length && rows.every((r) => /^[-*•]\s+/.test(r))) {
+      return `<ul class="bullets">${rows.map((r) => `<li>${esc(r.replace(/^[-*•]\s+/, ""))}</li>`).join("")}</ul>`;
+    }
+    return esc(text);
+  }
+  // A pick-list of members: a labelled checkbox per member, all ticked at first.
+  function renderPicks(container, names, ticked) {
+    container.innerHTML = names.map((name) => `
+      <label class="${ticked.has(name) ? "" : "off"}" style="color:${esc(meta(name).color)}">
+        <input type="checkbox" value="${esc(name)}" ${ticked.has(name) ? "checked" : ""}>
+        ${avatar(name)}<span style="color:var(--text)">${esc(name)}</span></label>`).join("");
+    container.querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      box.closest("label").classList.toggle("off", !box.checked);
+    }));
+  }
+  function picked(container) {
+    return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
+  }
 
   // -- config / options --------------------------------------------------
 
@@ -279,18 +308,33 @@
 
   function renderQuestions() {
     if (!$("screen-questions").hidden) return;   // already drawn; keep the typed answers
+    const done = session.rounds || [];
+    const round = done.length + 1;
+    $("questions-intro").textContent = round === 1
+      ? "A few things would change the recommendation. Answer what you can; leave the rest blank."
+      : `Round ${round}: your answers raised a few more points. Answer what you can; leave the rest blank.`;
+    $("rounds-done").innerHTML = done.map((r, n) => `
+      <details><summary>Round ${n + 1}: ${r.questions.length} question(s) answered</summary>
+        <dl>${r.questions.map((q, i) => `<dt>${esc(q)}</dt><dd>${esc(r.answers[i] || "(not answered)")}</dd>`).join("")}</dl>
+      </details>`).join("");
     const form = $("questions-form");
     form.innerHTML = session.clarification.questions.map((q, i) => `
       <label><span class="q-text">${i + 1}. ${esc(q)}</span>
         <textarea rows="2" data-index="${i}" placeholder="Your answer, or leave blank">${esc(session.answers[i] || "")}</textarea></label>`).join("");
+    const last = round >= (session.max_rounds || 3);
+    $("btn-answers").textContent = last ? "Continue to the board" : "Continue";
+    $("btn-answers-final").hidden = last;
+    $("questions-hint").textContent = last
+      ? `This is the last round (${session.max_rounds}). The board is asked next.`
+      : "Continue: the clarifier checks whether anything is still missing and asks again if so, or hands over to the board. Ask the board now: skip further questions.";
     show("questions");
     const first = form.querySelector("textarea");
     if (first) first.focus();
   }
 
-  async function submitAnswers() {
+  async function submitAnswers(final) {
     const answers = Array.from($("questions-form").querySelectorAll("textarea")).map((t) => t.value.trim());
-    try { session = await api("POST", `/api/sessions/${session.id}/answers`, { answers }); render(); }
+    try { session = await api("POST", `/api/sessions/${session.id}/answers`, { answers, final: !!final }); render(); }
     catch (err) { showError(err.message); }
   }
 
@@ -307,16 +351,27 @@
     if (r.skipped && r.skipped.length) rolesLine += ` Not on the board: ${r.skipped.map((x) => `${x.member}, ${x.reason}`).join("; ")}.`;
     const kpi = r.kpi_members || [];
     rolesLine += kpi.length ? ` KPI notes from the vault attached for: ${kpi.join(", ")}.` : " No KPI notes (kind: kpi) in the vault yet.";
-    $("confirm-knowledge").textContent = (k && k.vault_path
-      ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
-      : "No knowledge source configured. ") + rolesLine + ` ${r.count + 1} model calls follow.`;
+    const names = r.members || [];
+    const ticked = new Set(session.selected_members && session.selected_members.length ? session.selected_members : names);
+    renderPicks($("confirm-members"), names, ticked);
+    const countLine = () => {
+      const n = picked($("confirm-members")).length;
+      $("confirm-knowledge").textContent = (k && k.vault_path
+        ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
+        : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${n + 1} model calls follow.`;
+    };
+    $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
+    countLine();
     show("confirm");
   }
 
   async function runBoard() {
+    const members = picked($("confirm-members"));
+    if (!members.length) { showError("Tick at least one member to ask."); return; }
     const body = {
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
+      members,
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
     catch (err) { showError(err.message); }
@@ -343,14 +398,40 @@
     const d = result.synthesis_data;
     if (!d) return `<p class="error">${esc(result.synthesis)}</p>`;
     const list = (items) => (items && items.length) ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<span class='muted'>none stated</span>";
+    const notAffected = d.not_affected && d.not_affected.length ? `<dt>Not affected</dt><dd>${list(d.not_affected)}</dd>` : "";
     return `
       <div class="rec">${esc(d.overall_recommendation)}</div>
       <dl>
-        <dt>Decisive criterion</dt><dd>${esc(d.decisive_criterion)}</dd>
+        <dt>Decisive criterion</dt><dd>${fmt(d.decisive_criterion)}</dd>
         <dt>Counter-arguments</dt><dd>${list(d.counter_arguments)}</dd>
-        <dt>What would change it</dt><dd>${esc(d.what_would_change_it)}</dd>
+        <dt>What would change it</dt><dd>${fmt(d.what_would_change_it)}</dd>
+        ${notAffected}
       </dl>
       <div class="disagree"><dl><dt>Disagreements</dt><dd>${list(d.disagreements)}</dd></dl></div>`;
+  }
+
+  function renderTurn(t) {
+    const who = t.members && t.members.length ? `<div class="members">Asked again: ${t.members.map(esc).join(", ")}</div>` : "";
+    if (t.pending) return `<div class="turn pending"><div class="q">${esc(t.question)}</div>${who}<div class="a">The board is thinking…</div></div>`;
+    if (t.error) return `<div class="turn error"><div class="q">${esc(t.question)}</div>${who}<div class="a">${esc(t.answer)}</div></div>`;
+    const d = t.data;
+    let body;
+    if (d) {
+      body = `<div class="a">${fmt(d.answer)}</div><dl>
+        <dt>Reasons</dt><dd>${fmt(d.reasons)}</dd>
+        <dt>Recommendation now</dt><dd>${esc(d.recommendation_now || "")}</dd>
+        <dt>Disagreements</dt><dd>${fmt(d.disagreements)}</dd></dl>`;
+    } else {
+      body = `<div class="a">${fmt(t.answer)}</div>`;
+    }
+    const answers = (t.assessments || []).map((a) => `
+      <div class="turn-member" style="border-left-color:${esc(meta(a.member).color)}">
+        <div class="who">${esc(a.member)}${a.applies === false ? ' <span class="na-note">· not affected</span>' : ""}</div>
+        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>`}</dl>
+      </div>`).join("");
+    const failed = (t.failed_members || []).length ? `<p class="error small">Failed: ${t.failed_members.map(esc).join(" · ")}</p>` : "";
+    const details = answers ? `<details class="turn-members"><summary class="muted small">What each member said</summary>${answers}</details>` : "";
+    return `<div class="turn"><div class="q">${esc(t.question)}</div>${who}${body}${details}${failed}</div>`;
   }
 
   function renderResult() {
@@ -364,9 +445,11 @@
       const failed = new Map(r.failed_members.map((f) => [f.split(":")[0], f]));
       const names = Object.keys(session.members);
       $("synthesis-card").querySelector(".muted.small").textContent = `Synthesis of ${names.length} independent assessments`;
+      const notAffected = (name) => answered.has(name) && answered.get(name).applies === false;
       $("member-chips").innerHTML = names.map((name) => `
-        <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${failed.has(name) ? "disabled" : ""}>
-          ${avatar(name)}<span style="color:var(--text)">${esc(name)}</span></button>`).join("");
+        <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""} ${notAffected(name) ? "na" : ""}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${failed.has(name) ? "disabled" : ""} title="${notAffected(name) ? "Says the topic does not touch its responsibilities" : ""}">
+          ${avatar(name)}<span style="color:var(--text)">${esc(name)}${notAffected(name) ? " <span class='muted small'>n/a</span>" : ""}</span></button>`).join("");
+      renderPicks($("followup-members"), names.filter((n) => !failed.has(n)), new Set());
       $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.addEventListener("click", () => {
         const name = chip.dataset.member;
         if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
@@ -375,14 +458,15 @@
       renderMemberCards(answered);
       setError("failed-members", r.failed_members.length ? `Failed member(s): ${r.failed_members.join(" · ")}` : "");
     }
-    $("turns").innerHTML = session.turns.map((t) => `
-      <div class="turn ${t.pending ? "pending" : ""} ${t.error ? "error" : ""}">
-        <div class="q">${esc(t.question)}</div>
-        <div class="a">${t.pending ? "The board is thinking…" : esc(t.answer)}</div>
-      </div>`).join("");
+    const turnsKey = JSON.stringify(session.turns);
+    if ($("turns").dataset.key !== turnsKey) {     // redraw only on change: keeps <details> open while polling
+      $("turns").innerHTML = session.turns.map(renderTurn).join("");
+      $("turns").dataset.key = turnsKey;
+    }
     $("btn-followup").disabled = session.busy;
     $("btn-close").disabled = session.busy;
-    $("result-hint").textContent = `${session.llm_calls} model call(s) so far · each follow-up costs one`;
+    const again = picked($("followup-members")).length;
+    $("result-hint").textContent = `${session.llm_calls} model call(s) so far · this follow-up costs ${again ? `${again + 1} (${again} member(s) asked again, plus one)` : "one"}`;
     setError("result-error", session.error || "");
     show("result");
   }
@@ -393,7 +477,9 @@
       const a = answered.get(name);
       return `<div class="card member-card" style="border-left-color:${esc(meta(name).color)}">
         <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${meta(name).level}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${meta(name).roles.length} roles` : ""}</div></div></div>
-        <dl><dt>View</dt><dd>${esc(a.view)}</dd><dt>Risks</dt><dd>${esc(a.risks)}</dd><dt>Recommendation</dt><dd>${esc(a.recommendation)}</dd></dl>
+        ${a.applies === false
+          ? `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`
+          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd><dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd></dl>`}
       </div>`;
     }).join("");
   }
@@ -402,9 +488,11 @@
     event.preventDefault();
     const question = $("followup").value.trim();
     if (!question) return;
+    const members = picked($("followup-members"));
     try {
-      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question });
+      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members });
       $("followup").value = "";
+      $("followup-members").querySelectorAll("input").forEach((box) => { box.checked = false; box.closest("label").classList.add("off"); });
       render();
     } catch (err) { setError("result-error", err.message); }
   }
@@ -473,7 +561,9 @@
   $("greeting").textContent = greeting();
   $("ask-form").addEventListener("submit", ask);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask(e); });
-  $("btn-answers").addEventListener("click", submitAnswers);
+  $("btn-answers").addEventListener("click", () => submitAnswers(false));
+  $("btn-answers-final").addEventListener("click", () => submitAnswers(true));
+  $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("btn-back-home").addEventListener("click", newTopic);
   $("btn-run").addEventListener("click", runBoard);
   $("btn-back-questions").addEventListener("click", () => { session.phase = "questions"; show("home"); renderQuestions(); });

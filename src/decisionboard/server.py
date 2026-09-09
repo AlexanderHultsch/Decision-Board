@@ -38,7 +38,7 @@ from . import knowledge as knowledge_mod
 from . import memory_writer
 from . import roles as roles_mod
 from .agent.provider import AiNotConfiguredError, AiProvider, build_provider
-from .board import BoardConversation, ask_follow_up, run_board
+from .board import BoardConversation, ask_follow_up_full, run_board
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 DEFAULT_PORT = 8765
@@ -94,7 +94,9 @@ class Session:
         self.member_meta: list[dict[str, str]] = []
         self.clarification: clarify_mod.Clarification | None = None
         self.answers: list[str] = []
+        self.rounds: list[dict[str, list[str]]] = []      # every clarification round: questions and answers
         self.inputs: dict[str, Any] = {}
+        self.selected_members: list[str] = []             # the members Alex chose to ask
         self.members: dict[str, str] = {}
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
@@ -137,7 +139,10 @@ class Session:
                 "member_meta": self.member_meta,
                 "clarification": clarification,
                 "answers": self.answers,
+                "rounds": self.rounds,
+                "max_rounds": clarify_mod.MAX_ROUNDS,
                 "inputs": self.inputs,
+                "selected_members": self.selected_members,
                 "members": self.members,
                 "result": self.result,
                 "turns": self.turns,
@@ -338,20 +343,62 @@ class BoardServer:
             session.llm_calls += 1
             session.phase = "questions"
 
-    def answer(self, session: Session, answers: list[str]) -> None:
+    def answer(self, session: Session, answers: list[str], *, final: bool = False) -> None:
+        """Alex's answers to the current round. Unless ``final`` (the "ask
+        the board now" button) or the round limit is reached, the clarifier
+        looks again and either asks more or declares the question clear
+        (decided 9 September 2026: clarification loops until clear)."""
         with session.lock:
             # "confirm" is accepted too: the page's Back button returns to
-            # the questions and re-submits them.
+            # the last round's questions and re-submits them.
             if session.phase not in ("questions", "confirm") or session.clarification is None:
                 raise ApiError(409, "The board is not waiting for answers right now.")
             session.answers = [str(item) for item in answers]
-            session.inputs = {
-                "topic": session.clarification.topic,
-                "context": clarify_mod.merge_answers(session.clarification, session.answers),
-                "options": list(session.clarification.options),
-                "constraints": list(session.clarification.constraints),
-            }
-            session.phase = "confirm"
+            current = {"questions": list(session.clarification.questions), "answers": session.answers}
+            if session.phase == "confirm" and session.rounds:
+                session.rounds[-1] = current
+            else:
+                session.rounds.append(current)
+            if final or len(session.rounds) >= clarify_mod.MAX_ROUNDS or session.phase == "confirm":
+                self._to_confirm(session)
+                return
+            session.phase = "clarifying"
+        self._spawn(session, self._clarify_more, session)
+
+    def _to_confirm(self, session: Session) -> None:
+        """Under the session lock: the FR-3.1 input from every round."""
+        clarification = session.clarification
+        rounds = [(r["questions"], r["answers"]) for r in session.rounds]
+        session.inputs = {
+            "topic": clarification.topic,
+            "context": clarify_mod.merge_rounds(clarification.context, rounds),
+            "options": list(clarification.options),
+            "constraints": list(clarification.constraints),
+        }
+        session.phase = "confirm"
+
+    def _clarify_more(self, session: Session) -> None:
+        rounds = [(r["questions"], r["answers"]) for r in session.rounds]
+        try:
+            clarification = clarify_mod.clarify(self.provider(), session.question, session.knowledge_text, rounds)
+        except Exception as exc:
+            session.fail(str(exc))
+            return
+        with session.lock:
+            session.llm_calls += 1
+            # Keep what the earlier round extracted where the new one is thin.
+            if not clarification.context and session.clarification is not None:
+                clarification.context = session.clarification.context
+            if not clarification.options and session.clarification is not None:
+                clarification.options = list(session.clarification.options)
+            if not clarification.constraints and session.clarification is not None:
+                clarification.constraints = list(session.clarification.constraints)
+            session.clarification = clarification
+            session.answers = []
+            if clarification.questions:
+                session.phase = "questions"
+            else:
+                self._to_confirm(session)
 
     def run(self, session: Session, inputs: dict[str, Any]) -> None:
         with session.lock:
@@ -366,9 +413,25 @@ class BoardServer:
                 "options": [str(o).strip() for o in inputs.get("options") or [] if str(o).strip()],
                 "constraints": [str(c).strip() for c in inputs.get("constraints") or [] if str(c).strip()],
             }
+            session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.phase = "running"
-            session.members = {member: "pending" for member in session.members}
+            session.members = {member: "pending" for member in session.selected_members}
         self._spawn(session, self._run_board, session)
+
+    @staticmethod
+    def _chosen_members(session: Session, wanted: Any) -> list[str]:
+        """The members Alex ticked, in board order; all of them when the
+        request names none. At least one is required."""
+        on_board = list(session.roles.get("members") or [])
+        if not on_board:
+            on_board = list(session.members)
+        if not isinstance(wanted, list) or not wanted:
+            return on_board
+        chosen = {str(m).strip().lower() for m in wanted}
+        selected = [m for m in on_board if m.lower() in chosen]
+        if not selected:
+            raise ApiError(400, "Choose at least one member to ask.")
+        return selected
 
     def _run_board(self, session: Session) -> None:
         def on_member(member: str, state: str) -> None:
@@ -385,22 +448,34 @@ class BoardServer:
             # Section 3.4: read fresh on every run, never cached - an edit in
             # Obsidian is in force on the next question.
             board = roles_mod.load_board(self.config)
-            profiles = board.profiles
+            selected = [m for m in board.profiles if m in session.selected_members] or list(board.profiles)
+            profiles = {m: board.profiles[m] for m in selected}
+            try:
+                member_data = knowledge_mod.kpi_notes(self.config, selected)
+            except knowledge_mod.KnowledgeUnavailable:
+                member_data = {}
             with session.lock:
                 session.roles = roles_mod.summary(board)
-                session.member_meta = roles_mod.member_meta(profiles)
-                session.members = {member: "pending" for member in profiles}
+                session.member_meta = roles_mod.member_meta(board.profiles)
+                session.selected_members = selected
+                session.members = {member: "pending" for member in selected}
             result = run_board(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
-                on_member=on_member, board=board,
+                on_member=on_member, board=board, member_data=member_data, members=selected,
             )
         except Exception as exc:
             session.fail(str(exc))
             return
         with session.lock:
-            session.conversation = BoardConversation(result=result, turns=[], roles=profiles)
+            session.conversation = BoardConversation(
+                result=result, turns=[], roles=profiles,
+                inputs={"topic": inputs["topic"], "context": context,
+                        "options": list(inputs["options"]), "constraints": list(inputs["constraints"])},
+                conduct=board.conduct, member_data=member_data,
+                project=knowledge_mod.active_project(self.config) or "",
+            )
             session.result = {
                 "topic": result.topic,
                 "assessments": [asdict(a) for a in result.assessments],
@@ -412,7 +487,10 @@ class BoardServer:
             session.llm_calls += result.llm_calls
             session.phase = "result"
 
-    def follow_up(self, session: Session, question: str) -> None:
+    def follow_up(self, session: Session, question: str, members: Any = None) -> None:
+        """A follow-up. ``members`` names the members to ask again (decided
+        9 September 2026); empty or missing means the one-call form over
+        the original assessments."""
         question = (question or "").strip()
         with session.lock:
             if session.phase != "result" or session.conversation is None:
@@ -421,21 +499,32 @@ class BoardServer:
                 raise ApiError(409, "The board is still answering the previous question.")
             if not question:
                 raise ApiError(400, "Type a question first.")
+            chosen: list[str] = []
+            if isinstance(members, list) and members:
+                wanted = {str(m).strip().lower() for m in members}
+                chosen = [m for m in session.members if m.lower() in wanted]
             session.busy = True
-            session.turns.append({"question": question, "answer": "", "pending": True})
-        self._spawn(session, self._follow_up, session, question)
+            session.turns.append({"question": question, "answer": "", "pending": True, "members": chosen,
+                                  "data": None, "assessments": [], "failed_members": []})
+        self._spawn(session, self._follow_up, session, question, chosen)
 
-    def _follow_up(self, session: Session, question: str) -> None:
+    def _follow_up(self, session: Session, question: str, chosen: list[str]) -> None:
         try:
-            answer = ask_follow_up(self.config, self.provider(), session.conversation, question)
+            turn = ask_follow_up_full(self.config, self.provider(), session.conversation, question, chosen)
         except Exception as exc:
             with session.lock:
-                session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False, "error": True}
+                session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
+                                     "error": True, "members": chosen, "data": None, "assessments": [],
+                                     "failed_members": []}
                 session.busy = False
             return
         with session.lock:
-            session.turns[-1] = {"question": question, "answer": answer, "pending": False}
-            session.llm_calls += 1
+            session.turns[-1] = {
+                "question": question, "answer": turn.answer, "pending": False, "members": chosen,
+                "data": turn.data, "assessments": [asdict(a) for a in turn.assessments],
+                "failed_members": list(turn.failed_members),
+            }
+            session.llm_calls += turn.llm_calls
             session.busy = False
 
     def close(self, session: Session, remember: bool) -> None:
@@ -624,11 +713,11 @@ def make_handler(server: BoardServer):
                     session = server.get_session(parts[3])
                     action = parts[4] if len(parts) > 4 else ""
                     if action == "answers":
-                        server.answer(session, list(body.get("answers") or []))
+                        server.answer(session, list(body.get("answers") or []), final=bool(body.get("final")))
                     elif action == "run":
                         server.run(session, body)
                     elif action == "follow-up":
-                        server.follow_up(session, str(body.get("question") or ""))
+                        server.follow_up(session, str(body.get("question") or ""), body.get("members"))
                     elif action == "close":
                         server.close(session, bool(body.get("remember")))
                     elif action == "memory":
