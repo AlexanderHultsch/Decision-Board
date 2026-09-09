@@ -61,7 +61,10 @@ class RoutingFakeProvider(AiProvider):
             text = SYNTHESIS
         elif "Member: " in prompt:
             member = prompt.split("Member: ", 1)[1].splitlines()[0]
-            text = json.dumps({"view": f"{member} view", "risks": ["r1"], "recommendation": "Rework"})
+            text = json.dumps({"view": f"{member} view", "risks": ["r1"], "recommendation": "Rework",
+                               "facts_from_network": [{"fact": "Tooling is late", "source": "Tooling.md"},
+                                                      {"fact": "MG3 is in March", "source": "Gates.md"}],
+                               "own_judgement": ["a new supplier needs 10 weeks"]})
         else:
             text = "{}"
         return AiResult(text=text, provider="fake", model="m", input_tokens=1, output_tokens=1, duration_seconds=0)
@@ -183,6 +186,10 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(sorted(state["selected_members"]), sorted(chosen))
         self.assertEqual(sorted(a["member"] for a in state["result"]["assessments"]), sorted(chosen))
         self.assertEqual(state["result"]["synthesis_data"]["overall_recommendation"], "Rework")
+        self.assertEqual(state["result"]["sources"]["network"], ["Tooling.md"])   # the note the board sent
+        self.assertEqual(len(state["result"]["sources"]["unverified"]), len(chosen))   # Gates.md was never sent
+        self.assertEqual(state["result"]["assessments"][0]["sources"][0]["verified"], True)
+        self.assertEqual(state["result"]["assessments"][0]["sources"][1]["verified"], False)
         self.assertEqual(sorted(state["members"]), sorted(chosen))
         self.assertTrue(all(v == "done" for v in state["members"].values()))
         self.assertEqual(state["llm_calls"], 2 + len(chosen) + 1)   # clarifier x2 + members + synthesis

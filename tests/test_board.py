@@ -380,6 +380,47 @@ class TestMemberChoiceApplicabilityAndRetry(unittest.TestCase):
         self.assertEqual(result.assessments[1].impact, "")
         self.assertIn("fixture late -> PV slips", provider.calls[-1][1])
 
+    def test_sources_are_verified_against_the_notes_actually_sent(self):
+        sent = {"Suppliers/Housing tooling.md": "Supplier X tooling is 6 weeks late.",
+                "Budget 2026.md": "Rework budget left: 180k EUR."}
+        facts = [{"fact": "Supplier X tooling is 6 weeks late", "source": "Suppliers/Housing tooling.md"},
+                 {"fact": "180k EUR rework budget left", "source": "Budget 2026"},        # by name, no .md
+                 {"fact": "the connector is single-sourced", "source": "Budget 2026.md"},  # wrong note
+                 {"fact": "MG3 is in March", "source": "Timing plan.md"},                  # never sent
+                 {"fact": "SOP is fixed", "source": ""}]                                   # no note
+        verdicts = board.verify_sources(facts, sent)
+        self.assertEqual([v["verified"] for v in verdicts], [True, True, False, False, False])
+        self.assertEqual(verdicts[1]["source"], "Budget 2026.md")
+        self.assertIn("none of the fact's words", verdicts[2]["note"])
+        self.assertIn("not among the notes", verdicts[3]["note"])
+        self.assertEqual(verdicts[4]["note"], "no note named")
+
+    def test_run_board_checks_citations_including_the_members_kpi_note(self):
+        first = json.dumps({"view": "- v", "risks": ["r"], "recommendation": "- go",
+                            "facts_from_network": [{"fact": "cBOM is 104 against 95", "source": "KPI/KPI Hardware.md"},
+                                                   {"fact": "tooling is late", "source": "Tooling.md"},
+                                                   {"fact": "a made-up figure", "source": "Nowhere.md"}],
+                            "own_judgement": ["a fixture iteration costs 40k"]})
+        texts = [first] + [_member_response()] * (len(MEMBERS) - 1) + [SYNTHESIS_RESPONSE]
+        provider = FakeProvider(texts)
+        result = board.run_board(
+            self.config, provider, topic="T",
+            sent_notes={"Tooling.md": "The tooling is late by six weeks."},
+            member_data={MEMBERS[0]: "### KPI/KPI Hardware.md\nLast updated today.\n| cBOM | 100 | 95 | 104 |"})
+        first_result = result.assessments[0]
+        self.assertEqual([s["verified"] for s in first_result.sources], [True, True, False])
+        self.assertEqual(first_result.judgement, "- a fixture iteration costs 40k")
+        self.assertEqual(result.sources["network"], ["KPI/KPI Hardware.md", "Tooling.md"])
+        self.assertEqual(len(result.sources["unverified"]), 1)
+        self.assertIn("Nowhere.md", result.sources["unverified"][0])
+        self.assertEqual(result.sources["judgement_count"], 1)
+        synthesis_prompt = provider.calls[-1][1]
+        self.assertIn('"verified_by_python": false', synthesis_prompt)
+        self.assertIn("a fixture iteration costs 40k", synthesis_prompt)
+        text = board.render(result)
+        self.assertIn("NOT VERIFIED", text)
+        self.assertIn("Knowledge net notes used (verified): KPI/KPI Hardware.md, Tooling.md", text)
+
     def test_a_tool_only_failure_is_retried_once_without_tools(self):
         class ToolsFirst(FakeProvider):
             def __init__(self):

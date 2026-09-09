@@ -25,6 +25,7 @@ the CLI (``cli.py``) is the only place that prints it.
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -54,6 +55,12 @@ class MemberAssessment:
     recommendation: str
     applies: bool = True      # False: the member said, with reasons, that the topic does not touch it
     impact: str = ""          # the dependency chain into this member's area, one bullet per step
+    # Where the material came from (decided 9 September 2026): facts the member
+    # took from the knowledge net, each with its note and Python's verdict on
+    # whether that note was sent and carries the wording; and the member's own
+    # judgement, one bullet each. Anything not in ``sources`` is the model's.
+    sources: tuple[dict[str, Any], ...] = ()
+    judgement: str = ""
 
 
 @dataclass
@@ -65,6 +72,7 @@ class BoardResult:
     ai_result: AiResult | None    # the synthesis call's AiResult, for AI-2
     llm_calls: int = 0
     synthesis_data: dict[str, Any] | None = None   # the parsed synthesis JSON, for the HMI
+    sources: dict[str, Any] = field(default_factory=dict)   # network notes used, unverified citations, judgement count
 
 
 @dataclass
@@ -84,6 +92,7 @@ class BoardConversation:
     conduct: str = ""
     member_data: dict[str, str] = field(default_factory=dict)
     project: str = ""
+    sent_notes: dict[str, str] = field(default_factory=dict)   # note path -> body, what the members received
 
 
 @dataclass
@@ -211,13 +220,88 @@ def _parse_member_response(text: str) -> dict[str, Any] | None:
     impact = data.get("impact", "")
     if isinstance(impact, list):
         impact = "\n".join(f"- {item}" for item in (str(i).strip() for i in impact) if item)
+    facts: list[dict[str, Any]] = []
+    for item in data.get("facts_from_network") or []:
+        if isinstance(item, dict):
+            fact, source = str(item.get("fact", "")).strip(), str(item.get("source", "")).strip()
+        else:
+            fact, source = str(item).strip(), ""
+        if fact:
+            facts.append({"fact": fact, "source": source})
+    judgement = data.get("own_judgement", "")
+    if isinstance(judgement, list):
+        judgement = "\n".join(f"- {item}" for item in (str(i).strip() for i in judgement) if item)
     return {
         "view": str(data["view"]),
         "risks": str(risks),
         "recommendation": str(data["recommendation"]),
         "applies": bool(applies),
         "impact": str(impact or ""),
+        "sources": tuple(facts),
+        "judgement": str(judgement or ""),
     }
+
+
+_SOURCE_STOPWORDS = {"the", "and", "for", "with", "that", "this", "from", "have", "will", "which", "about",
+                     "their", "there", "than", "then", "were", "been", "into", "also", "only", "when", "what"}
+
+
+def _note_key(path: str) -> str:
+    name = path.replace("\\", "/").strip().strip("[]").lower()
+    return name[:-3] if name.endswith(".md") else name
+
+
+def verify_sources(facts: list[dict[str, Any]] | tuple[dict[str, Any], ...], sent: dict[str, str]) -> list[dict[str, Any]]:
+    """Python's verdict on every fact a member says it took from the
+    knowledge net (AP-1). The cited note must be one the board actually
+    sent - by path, file name or title - and some distinctive word of the
+    fact must appear in that note. A fact that fails is kept and flagged,
+    never dropped: the reader sees what the model claimed and what held."""
+    by_key: dict[str, tuple[str, str]] = {}
+    for path, body in sent.items():
+        key = _note_key(path)
+        by_key[key] = (path, body)
+        by_key[key.rsplit("/", 1)[-1]] = (path, body)
+    verdicts: list[dict[str, Any]] = []
+    for item in facts:
+        fact, source = str(item.get("fact", "")), str(item.get("source", ""))
+        hit = by_key.get(_note_key(source)) or by_key.get(_note_key(source).rsplit("/", 1)[-1])
+        if hit is None:
+            verdicts.append({"fact": fact, "source": source, "verified": False,
+                             "note": "not among the notes sent to this member" if source else "no note named"})
+            continue
+        path, body = hit
+        lowered = body.lower()
+        words = [w for w in re.findall(r"[\w][\w.,%-]{3,}", fact.lower()) if w.strip(".,%-") not in _SOURCE_STOPWORDS]
+        found = [w for w in words if w in lowered]
+        if words and not found:
+            verdicts.append({"fact": fact, "source": path, "verified": False,
+                             "note": "the note was sent, but none of the fact's words appear in it"})
+        else:
+            verdicts.append({"fact": fact, "source": path, "verified": True, "note": ""})
+    return verdicts
+
+
+def _kpi_note_bodies(member_data_text: str) -> dict[str, str]:
+    """The KPI notes inside one member's data block, by the ``### path``
+    headings ``knowledge.kpi_notes`` writes."""
+    paths = re.findall(r"(?m)^### (.+\.md)\s*$", member_data_text or "")
+    return {path: member_data_text for path in paths}
+
+
+def _summarise_sources(assessments: list[MemberAssessment]) -> dict[str, Any]:
+    network: list[str] = []
+    unverified: list[str] = []
+    judgement = 0
+    for a in assessments:
+        for s in a.sources:
+            if s.get("verified"):
+                if s["source"] not in network:
+                    network.append(s["source"])
+            else:
+                unverified.append(f"{a.member}: \"{s.get('fact', '')}\" -> {s.get('source') or '(no note)'}: {s.get('note', '')}")
+        judgement += len([line for line in a.judgement.splitlines() if line.strip()])
+    return {"network": network, "unverified": unverified, "judgement_count": judgement}
 
 
 def _synthesis_prompt(
@@ -231,6 +315,11 @@ def _synthesis_prompt(
             "impact": assessment.impact,
             "risks": assessment.risks,
             "recommendation": assessment.recommendation,
+            "facts_from_network": [
+                {"fact": s["fact"], "source": s["source"], "verified_by_python": bool(s.get("verified"))}
+                for s in assessment.sources
+            ],
+            "own_judgement": assessment.judgement,
         }
         for assessment in assessments
     ]
@@ -254,6 +343,10 @@ def _synthesis_text(data: dict[str, Any]) -> str:
         lines.append("Counter-arguments:")
         lines.extend(f"  - {item}" for item in counter_arguments)
     lines.append(f"What would change it: {data.get('what_would_change_it', '')}")
+    rests = data.get("rests_on_judgement") or []
+    if rests:
+        lines.append("Rests on judgement (not in the knowledge net):")
+        lines.extend(f"  - {item}" for item in rests)
     disagreements = data.get("disagreements") or []
     if disagreements:
         lines.append("Disagreements (FR-3.6):")
@@ -304,6 +397,7 @@ def run_board(
     board: Board | None = None,
     member_data: dict[str, str] | None = None,
     members: tuple[str, ...] | list[str] | None = None,
+    sent_notes: dict[str, str] | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): one isolated call per member, then
     one synthesis call over what they produced. ``roles`` is the board
@@ -439,6 +533,9 @@ def run_board(
                     f"{member}: response did not parse as JSON with view/risks/recommendation"
                 )
             continue
+        sent = dict(sent_notes or {})
+        sent.update(_kpi_note_bodies(member_data.get(member, "")))
+        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
         assessments.append(MemberAssessment(member=member, **parsed))
 
     if len(assessments) < 2:
@@ -453,6 +550,7 @@ def run_board(
             failed_members=failed_members,
             ai_result=None,
             llm_calls=llm_calls,
+            sources=_summarise_sources(assessments),
         ))
 
     ai_result = provider.complete(TASK_BOARD, _synthesis_prompt(assessments, roles))
@@ -477,6 +575,7 @@ def run_board(
         ai_result=ai_result,
         llm_calls=llm_calls,
         synthesis_data=synthesis_data,
+        sources=_summarise_sources(assessments),
     ))
 
 
@@ -496,7 +595,10 @@ def _follow_up_prompt(
         lines += ["", "## Member answers to the new question", ""]
         lines.append(json.dumps([
             {"member": a.member, "applies": a.applies, "view": a.view, "impact": a.impact, "risks": a.risks,
-             "recommendation": a.recommendation}
+             "recommendation": a.recommendation,
+             "facts_from_network": [{"fact": s["fact"], "source": s["source"], "verified_by_python": bool(s.get("verified"))}
+                                    for s in a.sources],
+             "own_judgement": a.judgement}
             for a in member_answers
         ], indent=2))
     lines.append("")
@@ -596,6 +698,9 @@ def ask_follow_up_full(
             if parsed is None:
                 failed.append(f"{member}: response did not parse as JSON with view/risks/recommendation")
                 continue
+            sent = dict(conversation.sent_notes)
+            sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
+            parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
             member_answers.append(MemberAssessment(member=member, **parsed))
 
     prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question,
@@ -643,6 +748,21 @@ def render(result: BoardResult) -> str:
         lines.append(f"{'View':<16}{assessment.view}")
         lines.append(f"{'Risks':<16}{assessment.risks}")
         lines.append(f"{'Recommendation':<16}{assessment.recommendation}")
+        if assessment.sources:
+            lines.append(f"{'From the net':<16}" + "; ".join(
+                f"{s['fact']} [{s['source']}{'' if s.get('verified') else ', NOT VERIFIED: ' + s.get('note', '')}]"
+                for s in assessment.sources))
+        if assessment.judgement:
+            lines.append(f"{'Own judgement':<16}{assessment.judgement}")
+        lines.append("")
+
+    if result.sources:
+        lines.append("Sources")
+        lines.append("-------")
+        lines.append("Knowledge net notes used (verified): " + (", ".join(result.sources.get("network", [])) or "none"))
+        lines.append(f"Statements from the members' own judgement: {result.sources.get('judgement_count', 0)}")
+        for item in result.sources.get("unverified", []):
+            lines.append(f"  NOT VERIFIED: {item}")
         lines.append("")
 
     if result.failed_members:

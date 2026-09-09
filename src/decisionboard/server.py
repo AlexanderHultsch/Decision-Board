@@ -90,6 +90,7 @@ class Session:
         self.knowledge: dict[str, Any] = {"vault_path": None, "selected": 0, "total": 0, "tokens": 0,
                                           "truncated": False, "notes": []}
         self.knowledge_text = ""
+        self.sent_notes: dict[str, str] = {}              # note path -> body, what the members receive
         self.roles: dict[str, Any] = {"members": [], "count": 0, "source": "", "folder": None, "files": []}
         self.member_meta: list[dict[str, str]] = []
         self.clarification: clarify_mod.Clarification | None = None
@@ -332,6 +333,7 @@ class BoardServer:
                 "notes": selection.relative_paths,
             }
             session.knowledge_text = selection.text
+            session.sent_notes = {note.relative: note.body for note in selection.notes}
         try:
             provider = self.provider()
             clarification = clarify_mod.clarify(provider, session.question, session.knowledge_text)
@@ -464,6 +466,7 @@ class BoardServer:
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
                 on_member=on_member, board=board, member_data=member_data, members=selected,
+                sent_notes=session.sent_notes,
             )
         except Exception as exc:
             session.fail(str(exc))
@@ -475,6 +478,7 @@ class BoardServer:
                         "options": list(inputs["options"]), "constraints": list(inputs["constraints"])},
                 conduct=board.conduct, member_data=member_data,
                 project=knowledge_mod.active_project(self.config) or "",
+                sent_notes=session.sent_notes,
             )
             session.result = {
                 "topic": result.topic,
@@ -483,6 +487,7 @@ class BoardServer:
                 "synthesis_data": result.synthesis_data,
                 "failed_members": list(result.failed_members),
                 "llm_calls": result.llm_calls,
+                "sources": result.sources,
             }
             session.llm_calls += result.llm_calls
             session.phase = "result"

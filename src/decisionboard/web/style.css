@@ -197,6 +197,12 @@ button.ghost { background: transparent; }
 .member-chip.na { opacity: .6; }
 .member-chip.na .avatar { filter: grayscale(1); }
 .na-note { color: var(--muted); font-style: italic; }
+/* Source attribution (9 September 2026): what came from the knowledge net, what the model reasoned */
+.sources li .mark { display: inline-block; width: 1.2em; font-weight: 700; }
+.sources li.ok .mark { color: #15803d; }
+.sources li.bad .mark, .sources li.bad .note, dt.bad { color: var(--danger); }
+.sources li .note { color: var(--muted); font-size: .85rem; }
+.sources-block { margin-top: .9rem; padding-top: .8rem; border-top: 1px dashed var(--line); }
 .turn .members { color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
 .turn dl { display: grid; grid-template-columns: 11rem 1fr; gap: .4rem 1rem; margin: .4rem 0 0; }
 .turn dt { color: var(--muted); font-size: .85rem; }

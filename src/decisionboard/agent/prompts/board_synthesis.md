@@ -9,6 +9,15 @@ produce the synthesis that follows them (FR-3.4): the overall
 recommendation, the decisive criterion behind it, the main counter-arguments
 against it, and what new information would change the recommendation.
 
+Each assessment says where its material came from: `facts_from_network`
+(each with its note and `verified_by_python`, the program's check that the
+note was sent and carries the wording) and `own_judgement`. Lean on
+verified facts first. Under `rests_on_judgement`, list the statements from
+the members' own judgement that your recommendation depends on - the
+things nobody has checked against the knowledge net - so the reader knows
+what to verify before acting. A fact marked not verified is a claim, not a
+fact; do not build on it without saying so.
+
 Each assessment carries an `impact` chain: the member's reasoning about
 what the decision does to its area. Weigh those chains against each other -
 where one member's consequence lands in another member's area (a late
@@ -43,7 +52,8 @@ markdown code fences, in this exact shape:
 ```
 {"overall_recommendation": "...", "decisive_criterion": "- ...",
  "counter_arguments": ["..."], "what_would_change_it": "- ...",
- "disagreements": ["..."], "not_affected": ["<member name>: reason"]}
+ "disagreements": ["..."], "not_affected": ["<member name>: reason"],
+ "rests_on_judgement": ["<member>: <statement the recommendation depends on>"]}
 ```
 
 `disagreements` is an empty array when the members genuinely agree - never

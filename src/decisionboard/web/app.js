@@ -103,6 +103,16 @@
       box.closest("label").classList.toggle("off", !box.checked);
     }));
   }
+  // Where a member's material came from: verified facts from the knowledge
+  // net (with the note), flagged citations, and the member's own judgement.
+  function sourcesRows(a) {
+    const facts = a.sources || [];
+    const net = facts.length
+      ? `<ul class="bullets sources">${facts.map((s) => `<li class="${s.verified ? "ok" : "bad"}"><span class="mark">${s.verified ? "✓" : "!"}</span> ${esc(s.fact)} <span class="note">${esc(s.source || "no note named")}${s.verified ? "" : ` · ${esc(s.note)}`}</span></li>`).join("")}</ul>`
+      : "<span class='muted'>nothing taken from the knowledge net</span>";
+    const own = a.judgement ? fmt(a.judgement) : "<span class='muted'>none listed</span>";
+    return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>`;
+  }
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
   }
@@ -402,9 +412,28 @@
     show("running");
   }
 
+  function renderSources(result) {
+    const src = result.sources || {};
+    const d = result.synthesis_data || {};
+    const net = (src.network || []).length
+      ? `<ul class="bullets">${src.network.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`
+      : "<span class='muted'>no note was cited by any member</span>";
+    const rests = (d.rests_on_judgement || []).length
+      ? fmt(d.rests_on_judgement)
+      : `<span class='muted'>${src.judgement_count ? `${src.judgement_count} statement(s) of the members' own judgement, none named as decisive` : "nothing"}</span>`;
+    const bad = (src.unverified || []).length
+      ? `<dt class="bad">Citations that failed the check</dt><dd><ul class="bullets sources">${src.unverified.map((u) => `<li class="bad"><span class="mark">!</span> ${esc(u)}</li>`).join("")}</ul></dd>`
+      : "";
+    return `<div class="sources-block"><dl>
+      <dt>From the knowledge net</dt><dd>${net}</dd>
+      <dt>Rests on judgement</dt><dd>${rests}</dd>
+      ${bad}
+    </dl></div>`;
+  }
+
   function renderSynthesis(result) {
     const d = result.synthesis_data;
-    if (!d) return `<p class="error">${esc(result.synthesis)}</p>`;
+    if (!d) return `<p class="error">${esc(result.synthesis)}</p>${renderSources(result)}`;
     const list = (items) => (items && items.length) ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<span class='muted'>none stated</span>";
     const notAffected = d.not_affected && d.not_affected.length ? `<dt>Not affected</dt><dd>${list(d.not_affected)}</dd>` : "";
     return `
@@ -415,7 +444,8 @@
         <dt>What would change it</dt><dd>${fmt(d.what_would_change_it)}</dd>
         ${notAffected}
       </dl>
-      <div class="disagree"><dl><dt>Disagreements</dt><dd>${list(d.disagreements)}</dd></dl></div>`;
+      <div class="disagree"><dl><dt>Disagreements</dt><dd>${list(d.disagreements)}</dd></dl></div>
+      ${renderSources(result)}`;
   }
 
   function renderTurn(t) {
@@ -435,7 +465,7 @@
     const answers = (t.assessments || []).map((a) => `
       <div class="turn-member" style="border-left-color:${esc(meta(a.member).color)}">
         <div class="who">${esc(a.member)}${a.applies === false ? ' <span class="na-note">· not affected</span>' : ""}</div>
-        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>`}</dl>
+        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}`}</dl>
       </div>`).join("");
     const failed = (t.failed_members || []).length ? `<p class="error small">Failed: ${t.failed_members.map(esc).join(" · ")}</p>` : "";
     const details = answers ? `<details class="turn-members"><summary class="muted small">What each member said</summary>${answers}</details>` : "";
@@ -487,7 +517,7 @@
         <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${meta(name).level}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${meta(name).roles.length} roles` : ""}</div></div></div>
         ${a.applies === false
           ? `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`
-          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd></dl>`}
+          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}</dl>`}
       </div>`;
     }).join("");
   }

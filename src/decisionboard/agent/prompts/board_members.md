@@ -47,6 +47,18 @@ network is silent, do not stop at "not recorded": reason it out, and mark
 the result as your judgement, not as a recorded fact. A member that only
 repeats the notes has not assessed anything.
 
+**Say where every piece came from.** The reader must be able to tell what
+the board took from the knowledge net and what the model reasoned out.
+So list, separately: `facts_from_network` - every fact, number, date or
+name you took from the notes or the KPI data, each with the note it came
+from as `source` (the note's path as printed in its `###` heading, e.g.
+`KPIs/Dual DCDC - Maturity Gates.md`); and `own_judgement` - every
+estimate, dependency, assumption or rule of thumb that came from your
+expertise rather than from a note. The program checks each `source`
+against the notes it actually sent you and flags what does not match, so
+name only notes you really used and never invent a note. A fact that is in
+neither list is treated as your own judgement.
+
 **Decide first whether this topic touches your responsibilities.** It
 touches them when a decision here changes something you lead, a measure
 you are judged on, or a process task that names your role. If it does not,
@@ -73,7 +85,9 @@ markdown code fences, in this exact shape:
 
 ```
 {"applies": true, "view": "- ...\n- ...", "impact": ["what changes -> what it hits in my area -> consequence, when, how much"],
- "risks": ["...", "..."], "recommendation": "- ..."}
+ "risks": ["...", "..."], "recommendation": "- ...",
+ "facts_from_network": [{"fact": "MG3 is 2027-03-12", "source": "KPIs/Dual DCDC - Maturity Gates.md"}],
+ "own_judgement": ["a second fixture iteration costs a mid five-figure sum"]}
 ```
 
 `risks` may also be a plain string; an array is preferred. `impact` is the
