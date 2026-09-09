@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Hardware
+updated: 2026-09-09
+---
 # Project Manager HW
 level: 2
 

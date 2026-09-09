@@ -10,6 +10,10 @@ One file, one member. The official role description goes in verbatim under
 "Official description" and is never rewritten for the board; what the board
 needs beyond it is written below, in this same file.
 
+Front matter: kind: role, lead_swimlane: <the member's name>, updated.
+"board: false" keeps a role page in this folder without a seat on the board
+(a role tasks link to, like Account Management, that is not a member).
+
 The first heading is the member's title. The only key under it is "level":
 1 for the programme lead, 2 for a project manager, 3 and below for roles
 under them. The icon and colour are chosen by the program from the member's
@@ -17,6 +21,11 @@ name; nothing about presentation belongs in this file.
 
 See roles/examples/ for eight complete files.
 -->
+---
+kind: role
+lead_swimlane: <Swim Lane>
+updated: 2026-09-09
+---
 # Project Manager <Swim Lane>
 level: 2
 

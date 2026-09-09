@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Manufacturing
+updated: 2026-09-09
+---
 # Project Manager Manufacturing
 level: 2
 

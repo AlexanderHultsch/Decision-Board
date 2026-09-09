@@ -86,7 +86,8 @@ _ICON_KEYWORDS = (
 _NAME_PREFIXES = ("r&r", "r & r", "r_r", "rr", "roles and responsibilities", "roles & responsibilities", "role", "roles")
 PALETTE = ("#15803d", "#2563eb", "#d97706", "#7c3aed", "#0f766e", "#db2777",
            "#b91c1c", "#4f46e5", "#0891b2", "#65a30d", "#9333ea", "#ea580c")
-_META_KEYS = ("member", "title", "perspective", "icon", "color", "short", "order", "kind", "level")
+_META_KEYS = ("member", "title", "perspective", "icon", "color", "short", "order", "kind", "level",
+              "lead_swimlane", "board")
 DEFAULT_LEVEL = 2
 
 
@@ -255,7 +256,9 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
     text = path.read_text(encoding="utf-8", errors="replace")
     meta = _front_matter(text)
     body = _strip_front_matter(text)
-    member = _meta_str(meta, "member") or _member_from_stem(path.stem)
+    # A role page names its swim lane as lead_swimlane (the vault's key) or
+    # member (older notes); else the file name says which member it is.
+    member = _meta_str(meta, "member") or _meta_str(meta, "lead_swimlane") or _member_from_stem(path.stem)
     sections = _sections(body)
     roles: list[Role] = []
     for index, (heading, section_meta, section_text) in enumerate(sections):
@@ -317,6 +320,17 @@ def _is_member_file(path: Path) -> bool:
     return path.is_file() and not name.startswith("_") and not name.startswith("readme")
 
 
+def _off_board(path: Path) -> bool:
+    """``board: false`` in the front matter: a role page that lives with the
+    others (so tasks can link to it) but does not sit on the board - for
+    example Account Management (decided 9 September 2026)."""
+    try:
+        meta = _front_matter(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+    return _meta_str(meta, "board").lower() in ("false", "no", "0")
+
+
 def _kind(path: Path) -> str:
     try:
         return _meta_str(_front_matter(path.read_text(encoding="utf-8", errors="replace")), "kind").lower()
@@ -336,7 +350,7 @@ def load_folder(folder: Path, source: str) -> tuple[list[RoleProfile], list[tupl
     role description and its addendum can each be short on their own."""
     profiles: list[RoleProfile] = []
     for path in sorted(folder.glob("*.md")):
-        if not _is_member_file(path) or _kind(path) in ("conduct", "template"):
+        if not _is_member_file(path) or _kind(path) in ("conduct", "template") or _off_board(path):
             continue
         try:
             profiles.extend(parse_file(path, source))

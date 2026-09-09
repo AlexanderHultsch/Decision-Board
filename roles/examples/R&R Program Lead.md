@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Program Lead
+updated: 2026-09-09
+---
 # Program Lead
 level: 1
 

@@ -380,3 +380,25 @@ class TestCommonNotesAndAddenda(unittest.TestCase):
         self.assertIn("Obsidian", text)
         for name in ("Software", "Finance", "Systems", "Program Lead"):
             self.assertNotIn(name, text)   # no member's own material in a common note
+
+
+class TestOffBoardAndLeadSwimlane(unittest.TestCase):
+    def test_board_false_keeps_a_role_page_off_the_board(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Hardware", "Finance"))
+            (folder / "R&R Account Management.md").write_text(
+                "---\nkind: role\nlead_swimlane: Account Management\nboard: false\n---\n# Account Manager\n\n"
+                "Receives change requests from the customer and negotiates price and tooling orders.\n", encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(sorted(b.profiles), ["Finance", "Hardware"])
+        self.assertEqual(b.skipped, [])
+
+    def test_lead_swimlane_names_the_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Finance",))
+            (folder / "Whatever.md").write_text(
+                "---\nkind: role\nlead_swimlane: Hardware\nupdated: 2026-09-09\n---\n# Project Manager HW\nlevel: 2\n\n"
+                "Owns the hardware swim lane end to end, from concept to PPAP.\n", encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertIn("Hardware", b.profiles)
+        self.assertEqual(b.profiles["Hardware"].title, "Project Manager HW")

@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Configuration & Integration
+updated: 2026-09-09
+---
 # Project Manager Configuration & Integration
 level: 2
 

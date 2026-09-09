@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Mechanical
+updated: 2026-09-09
+---
 # Mechanical Engineering
 level: 2
 

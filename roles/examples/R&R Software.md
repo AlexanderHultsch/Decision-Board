@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Software
+updated: 2026-09-09
+---
 # Project Manager Software
 level: 2
 

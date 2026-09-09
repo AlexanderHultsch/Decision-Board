@@ -27,6 +27,9 @@ written in the same file below: the targets the role is judged on, what it
 protects when it cannot have everything, and its keywords. A second file
 naming the same member is ignored and reported, never merged.
 
+Front matter on every role page: `kind: role`, `lead_swimlane: <the
+member>`, `updated: YYYY-MM-DD`. `board: false` keeps a role page in the
+folder - so process pages can link to it - without a seat on the board.
 The only key under the heading is `level:` - 1 the programme lead, 2 a
 project manager, 3 and below the roles under them. Nothing about
 presentation belongs in a role file: the icon and colour are derived from

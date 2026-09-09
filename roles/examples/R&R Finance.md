@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Finance
+updated: 2026-09-09
+---
 # Finance
 level: 2
 

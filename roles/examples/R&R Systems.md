@@ -1,3 +1,8 @@
+---
+kind: role
+lead_swimlane: Systems
+updated: 2026-09-09
+---
 # Project Manager Systems
 level: 2
 

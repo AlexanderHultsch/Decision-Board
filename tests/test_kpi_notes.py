@@ -33,6 +33,16 @@ def _vault(tmp: Path) -> Path:
 
 
 class TestKpiNotes(unittest.TestCase):
+    def test_lead_swimlane_receives_the_note_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = _vault(Path(tmp))
+            (vault / "KPI" / "KPI lead.md").write_text(
+                "---\nkind: kpi\nlead_swimlane: Software\naffected_swimlanes: [Hardware]\n---\nRelease slip: 1 week.\n", encoding="utf-8")
+            data = knowledge.kpi_notes({"knowledge": {"vault_path": str(vault)}}, ["Software", "Hardware", "Finance"])
+        self.assertIn("Release slip", data["Software"])
+        self.assertIn("Release slip", data["Hardware"])
+        self.assertNotIn("Release slip", data.get("Finance", ""))
+
     def test_the_old_member_key_is_still_read(self):
         # KPI shared.md in the fixture uses "member:"; both keys attach the note
         with tempfile.TemporaryDirectory() as tmp:

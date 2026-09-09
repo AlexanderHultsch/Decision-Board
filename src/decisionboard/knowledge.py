@@ -129,9 +129,13 @@ def _load_note(vault: Path, path: Path) -> Note:
     # which swim lanes it affects); ``member`` is read as well for old notes.
     member_raw = meta.get("affected_swimlanes", meta.get("member", ()))
     if isinstance(member_raw, str):
-        members = tuple(m.strip() for m in member_raw.split(",") if m.strip())
+        members = [m.strip() for m in member_raw.split(",") if m.strip()]
     else:
-        members = tuple(str(m).strip() for m in member_raw if str(m).strip())
+        members = [str(m).strip() for m in member_raw if str(m).strip()]
+    lead = meta.get("lead_swimlane")
+    if isinstance(lead, str) and lead.strip() and lead.strip() not in members:
+        members.insert(0, lead.strip())     # the lead is affected by definition
+    members = tuple(members)
     return Note(path=path, relative=relative, title=title, tags=tags, body=body,
                 kind=str(kind).lower(), member=members)
 
