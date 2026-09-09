@@ -295,6 +295,60 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("at least one member", body["error"])
 
+    def test_back_returns_to_the_questions_with_the_answers_kept(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["my answer"], "final": True})
+        state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        status, state = self.call("POST", f"/api/sessions/{sid}/back")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "questions")
+        self.assertEqual(state["clarification"]["questions"], ["What is the budget?"])
+        self.assertEqual(state["answers"], ["my answer"])
+        self.assertEqual(state["rounds"], [])
+
+    def test_back_after_a_failed_run_returns_to_confirm_with_the_choice_kept(self):
+        keep = self.provider.complete
+        self.provider.complete = lambda task, prompt: (_ for _ in ()).throw(RuntimeError("gateway down")) \
+            if "## Assessments" in prompt else keep(task, prompt)
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+            sid = state["id"]
+            self.wait_for(sid, lambda s: s["phase"] == "questions")
+            self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["x"], "final": True})
+            self.wait_for(sid, lambda s: s["phase"] == "confirm")
+            chosen = CLASSIC[:2]
+            self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Edited topic", "context": "c", "options": [], "constraints": [], "members": chosen})
+            state = self.wait_for(sid, lambda s: s["phase"] == "error")
+            self.assertIn("gateway down", state["error"])
+        finally:
+            self.provider.complete = keep
+        status, state = self.call("POST", f"/api/sessions/{sid}/back")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "confirm")
+        self.assertIsNone(state["error"])
+        self.assertEqual(state["inputs"]["topic"], "Edited topic")
+        self.assertEqual(sorted(state["selected_members"]), sorted(chosen))
+        self.assertEqual(sorted(state["members"]), sorted(chosen))
+        # and the board can be run again from there
+        status, _ = self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Edited topic", "members": chosen})
+        self.assertEqual(status, 200)
+        self.wait_for(sid, lambda s: s["phase"] == "result")
+
+    def test_back_with_nothing_behind_it_is_refused(self):
+        original = self.config["knowledge"]["vault_path"]
+        self.config["knowledge"]["vault_path"] = str(Path(self.tmp.name) / "missing")
+        try:
+            _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+            sid = state["id"]
+            self.wait_for(sid, lambda s: s["phase"] == "error")
+        finally:
+            self.config["knowledge"]["vault_path"] = original
+        status, body = self.call("POST", f"/api/sessions/{sid}/back")
+        self.assertEqual(status, 409)
+        self.assertIn("your question is kept", body["error"])
+
     def test_actions_out_of_order_are_refused(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
         sid = state["id"]

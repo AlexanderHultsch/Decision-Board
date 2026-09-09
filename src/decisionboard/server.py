@@ -532,6 +532,34 @@ class BoardServer:
             session.llm_calls += turn.llm_calls
             session.busy = False
 
+    def back(self, session: Session) -> None:
+        """After an error (or from the confirm screen): return to the last
+        step Alex can edit, with everything he typed still there (decided
+        9 September 2026: nothing typed is lost to an error). The confirm
+        screen when the input was already assembled, else the last round of
+        questions with its answers; with nothing to go back to, 409 and the
+        page starts over with the question kept."""
+        with session.lock:
+            if session.busy:
+                raise ApiError(409, "The board is still working.")
+            if session.phase in ("result", "proposal", "proposing", "written", "closed"):
+                raise ApiError(409, "This topic has a result; ask back or close it.")
+            if session.phase == "error" and session.inputs and session.clarification is not None:
+                session.phase = "confirm"
+                session.error = None
+                session.members = {member: "pending" for member in session.selected_members}
+                return
+            if session.phase in ("error", "confirm") and session.rounds and session.clarification is not None:
+                last = session.rounds.pop()
+                # The clarifier may have replaced the questions before failing;
+                # the questions Alex answered are the ones to show again.
+                session.clarification.questions = list(last["questions"])
+                session.answers = list(last["answers"])
+                session.phase = "questions"
+                session.error = None
+                return
+            raise ApiError(409, "Nothing to go back to - start over; your question is kept.")
+
     def close(self, session: Session, remember: bool) -> None:
         with session.lock:
             if session.phase != "result":
@@ -723,6 +751,8 @@ def make_handler(server: BoardServer):
                         server.run(session, body)
                     elif action == "follow-up":
                         server.follow_up(session, str(body.get("question") or ""), body.get("members"))
+                    elif action == "back":
+                        server.back(session)
                     elif action == "close":
                         server.close(session, bool(body.get("remember")))
                     elif action == "memory":

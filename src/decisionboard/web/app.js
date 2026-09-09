@@ -37,6 +37,19 @@
   let pollTimer = null;
   const openMembers = new Set();
 
+  // What the browser keeps between reloads (9 September 2026: nothing typed
+  // is lost to an error or a refresh): the current session's id and a draft
+  // of everything typed, per session. localStorage may be unavailable; every
+  // access is guarded and the page works without it.
+  const store = {
+    get(key) { try { const v = localStorage.getItem(`decision-board:${key}`); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+    set(key, value) { try { localStorage.setItem(`decision-board:${key}`, JSON.stringify(value)); } catch (e) { /* no storage */ } },
+    del(key) { try { localStorage.removeItem(`decision-board:${key}`); } catch (e) { /* no storage */ } },
+  };
+  function draft() { return (session && store.get(`draft:${session.id}`)) || {}; }
+  function saveDraft(patch) { if (session) store.set(`draft:${session.id}`, Object.assign(draft(), patch)); }
+  function forgetSession() { if (session) store.del(`draft:${session.id}`); store.del("session"); }
+
   // -- helpers -----------------------------------------------------------
 
   function esc(text) {
@@ -278,6 +291,7 @@
     setError("home-error", "");
     try {
       session = await api("POST", "/api/sessions", { question });
+      store.del("question");
       openMembers.clear();
       $("screen-result").dataset.phase = "";
       $("turns").dataset.key = "";
@@ -287,6 +301,7 @@
 
   function render() {
     if (!session) return show("home");
+    store.set("session", session.id);
     if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
     if (needsPolling(session)) { if (!pollTimer) startPolling(); } else stopPolling();
     switch (session.phase) {
@@ -330,9 +345,12 @@
         <dl>${r.questions.map((q, i) => `<dt>${esc(q)}</dt><dd>${esc(r.answers[i] || "(not answered)")}</dd>`).join("")}</dl>
       </details>`).join("");
     const form = $("questions-form");
+    const kept = draft().answers || {};
+    const key = session.clarification.questions.join("|");
     form.innerHTML = session.clarification.questions.map((q, i) => `
       <label><span class="q-text">${i + 1}. ${esc(q)}</span>
-        <textarea rows="2" data-index="${i}" placeholder="Your answer, or leave blank">${esc(session.answers[i] || "")}</textarea></label>`).join("");
+        <textarea rows="2" data-index="${i}" placeholder="Your answer, or leave blank">${esc(session.answers[i] || (kept.key === key ? kept.values[i] : "") || "")}</textarea></label>`).join("");
+    form.oninput = () => saveDraft({ answers: { key, values: Array.from(form.querySelectorAll("textarea")).map((t) => t.value) } });
     const last = round >= (session.max_rounds || 3);
     $("btn-answers").textContent = last ? "Continue to the board" : "Continue";
     $("btn-answers-final").hidden = last;
@@ -353,10 +371,12 @@
   function renderConfirm() {
     if (!$("screen-confirm").hidden) return;
     const inp = session.inputs;
-    $("in-topic").value = inp.topic || "";
-    $("in-context").value = inp.context || "";
-    $("in-options").value = (inp.options || []).join("\n");
-    $("in-constraints").value = (inp.constraints || []).join("\n");
+    const kept = draft().confirm;
+    $("in-topic").value = (kept && kept.topic) || inp.topic || "";
+    $("in-context").value = kept ? kept.context : (inp.context || "");
+    $("in-options").value = kept ? kept.options : (inp.options || []).join("\n");
+    $("in-constraints").value = kept ? kept.constraints : (inp.constraints || []).join("\n");
+    $("confirm-form").oninput = saveConfirmDraft;
     const k = session.knowledge;
     const r = session.roles || { members: [], count: 0, source: "", folder: null };
     let rolesLine = `Board of ${r.count}: ${r.members.join(", ")} (profiles from ${r.folder}).`;
@@ -364,8 +384,9 @@
     const kpi = r.kpi_members || [];
     rolesLine += kpi.length ? ` KPI notes from the vault attached for: ${kpi.join(", ")}.` : " No KPI notes (kind: kpi) in the vault yet.";
     const names = r.members || [];
-    const ticked = new Set(session.selected_members && session.selected_members.length ? session.selected_members : names);
+    const ticked = new Set(kept && kept.members ? kept.members : (session.selected_members && session.selected_members.length ? session.selected_members : names));
     renderPicks($("confirm-members"), names, ticked);
+    $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
     const countLine = () => {
       const n = picked($("confirm-members")).length;
       $("confirm-knowledge").textContent = (k && k.vault_path
@@ -375,6 +396,25 @@
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
     countLine();
     show("confirm");
+  }
+
+  function saveConfirmDraft() {
+    saveDraft({ confirm: {
+      topic: $("in-topic").value, context: $("in-context").value, options: $("in-options").value,
+      constraints: $("in-constraints").value, members: picked($("confirm-members")),
+    } });
+  }
+
+  async function goBack() {
+    if (!session) return newTopic();
+    try {
+      session = await api("POST", `/api/sessions/${session.id}/back`);
+      render();
+    } catch (err) {
+      // Nothing to return to on the server: start over with the question kept.
+      newTopic(true);
+      setError("home-error", err.message);
+    }
   }
 
   async function runBoard() {
@@ -561,6 +601,7 @@
     try {
       session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members });
       $("followup").value = "";
+      saveDraft({ followup: "" });
       $("followup-members").querySelectorAll("input").forEach((box) => { box.checked = false; box.closest("label").classList.add("off"); });
       render();
     } catch (err) { setError("result-error", err.message); }
@@ -605,6 +646,7 @@
   }
 
   function renderDone() {
+    forgetSession();
     if (session.phase === "written") {
       $("done-title").textContent = "Written to your vault";
       $("done-detail").textContent = session.written_path;
@@ -615,14 +657,35 @@
     show("done");
   }
 
-  function newTopic() {
+  function newTopic(keepQuestion) {
     stopPolling();
+    const question = session ? session.question : (store.get("question") || "");
+    forgetSession();
     session = null;
     openMembers.clear();
-    $("question").value = "";
+    $("question").value = keepQuestion ? question : "";
+    store.set("question", $("question").value);
     $("followup").value = "";
     show("home");
     $("question").focus();
+  }
+
+  async function resumeSession() {
+    // A reload or a closed tab must not lose the topic: the server still
+    // holds the session, the browser remembers which one.
+    const id = store.get("session");
+    if (!id) return false;
+    try {
+      const data = await api("GET", `/api/sessions/${id}`);
+      if (["closed", "written"].includes(data.phase)) { forgetSession(); return false; }
+      session = data;
+      render();
+      if (session.phase === "result") $("followup").value = draft().followup || "";
+      return true;
+    } catch (e) {
+      store.del("session");
+      return false;
+    }
   }
 
   // -- wiring -------------------------------------------------------------
@@ -635,7 +698,7 @@
   $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("btn-back-home").addEventListener("click", newTopic);
   $("btn-run").addEventListener("click", runBoard);
-  $("btn-back-questions").addEventListener("click", () => { session.phase = "questions"; show("home"); renderQuestions(); });
+  $("btn-back-questions").addEventListener("click", goBack);
   $("followup-form").addEventListener("submit", followUp);
   $("followup").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) followUp(e); });
   $("btn-close").addEventListener("click", () => { setError("close-error", ""); $("close-dialog").hidden = false; });
@@ -645,7 +708,10 @@
   $("btn-write").addEventListener("click", writeMemory);
   $("btn-discard").addEventListener("click", discardMemory);
   $("btn-new").addEventListener("click", newTopic);
-  $("btn-error-home").addEventListener("click", newTopic);
+  $("btn-error-home").addEventListener("click", () => newTopic(true));
+  $("btn-error-back").addEventListener("click", goBack);
+  $("question").addEventListener("input", () => store.set("question", $("question").value));
+  $("followup").addEventListener("input", () => saveDraft({ followup: $("followup").value }));
   $("btn-error-options").addEventListener("click", openOptions);
   $("btn-options").addEventListener("click", openOptions);
   $("btn-options-cancel").addEventListener("click", () => { $("options-dialog").hidden = true; });
@@ -656,5 +722,9 @@
   $("btn-browse-roles").addEventListener("click", browseRoles);
   document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
-  loadConfig().then(() => show("home")).catch((err) => { $("home-hint").textContent = err.message; show("home"); });
+  $("question").value = store.get("question") || "";
+  loadConfig()
+    .then(() => resumeSession())
+    .then((resumed) => { if (!resumed) show("home"); })
+    .catch((err) => { $("home-hint").textContent = err.message; show("home"); });
 })();
