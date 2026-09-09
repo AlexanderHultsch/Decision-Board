@@ -166,3 +166,52 @@ class TestNoAnswerDiagnostics(unittest.TestCase):
         with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
             command = provider._build_command("azure/m", "hello")
         self.assertEqual(command[-3:], ["--agent", "plan", opencode_client.PROMPT_HEADER])
+
+
+class TestEmptyAnswerRetry(unittest.TestCase):
+    """OC-11: a run that exits cleanly with reasoning but no text is retried
+    once (9 September 2026: 920 reasoning tokens, 0 output tokens, reason
+    stop, and the session died on it)."""
+
+    EMPTY = (json.dumps({"type": "step_start", "part": {}}) + "\n"
+             + json.dumps({"type": "step_finish", "part": {"reason": "stop", "tokens": {"input": 10481, "output": 0, "reasoning": 920}}}) + "\n")
+    GOOD = json.dumps({"type": "text", "part": {"text": "{\"ok\": true}"}}) + "\n"
+
+    def _provider(self, outputs):
+        provider = OpenCodeProvider({"provider": {"models": {"board": "azure/m"}}})
+        calls = []
+
+        def fake_run(command, **kwargs):
+            if command[1:] == ["run", "--help"]:
+                return mock.Mock(stdout="", stderr="", returncode=0)
+            calls.append(kwargs.get("input"))
+            return mock.Mock(stdout=outputs.pop(0), stderr="", returncode=0)
+        return provider, fake_run, calls
+
+    def test_an_empty_run_is_retried_once_with_a_nudge(self):
+        provider, fake_run, calls = self._provider([self.EMPTY, self.GOOD])
+        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+            result = provider.complete("ai_board", "the prompt")
+        self.assertEqual(result.text, '{"ok": true}')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], "the prompt")
+        self.assertTrue(calls[1].startswith(opencode_client.EMPTY_RETRY_PREFIX))
+        self.assertTrue(calls[1].endswith("the prompt"))
+
+    def test_two_empty_runs_are_reported_with_both_attempts_and_the_token_story(self):
+        provider, fake_run, calls = self._provider([self.EMPTY, self.EMPTY])
+        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+            with self.assertRaises(OpenCodeError) as raised:
+                provider.complete("ai_board", "the prompt")
+        message = str(raised.exception)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("this was the retry", message)
+        self.assertIn("920 reasoning tokens, 0 output tokens", message)
+        self.assertIn("thought and wrote nothing", message)
+
+    def test_other_failures_are_not_retried(self):
+        provider, fake_run, calls = self._provider(["not json at all\n", self.GOOD])
+        with mock.patch.object(opencode_client.subprocess, "run", fake_run):
+            with self.assertRaises(OpenCodeError):
+                provider.complete("ai_board", "the prompt")
+        self.assertEqual(len(calls), 1)

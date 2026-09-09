@@ -41,6 +41,12 @@ _LINE_TRIM = 200
 # board call is longer than that (33,033 on 9 September 2026). The one
 # positional argument tells the model where the instruction is.
 PROMPT_HEADER = "The complete instruction follows on standard input. Follow it exactly."
+# A run that exits cleanly with no text is retried once with this in front
+# of the prompt (9 September 2026: Kimi K2.7 spent 920 reasoning tokens and
+# wrote 0 output tokens, reason "stop" - it thought and said nothing).
+EMPTY_RETRY_PREFIX = ("IMPORTANT: your previous attempt at this call produced reasoning but no answer text. "
+                      "Write the answer now, in the shape the instruction asks for, and nothing else.\n\n")
+_NO_TEXT = "produced no answer text"
 _OPTIONAL_FLAGS = ("--auto", "--dir")
 
 
@@ -205,8 +211,19 @@ class OpenCodeProvider(AiProvider):
             )
 
         command = self._build_command(model_string)
-        stdout, _duration = self._run(command, prompt)
-        text, input_tokens, output_tokens = self._parse_output(stdout)
+        try:
+            stdout, _duration = self._run(command, prompt)
+            text, input_tokens, output_tokens = self._parse_output(stdout)
+        except OpenCodeError as first:
+            if _NO_TEXT not in str(first):
+                raise
+            # One retry, same prompt with a nudge in front (OC-11). A second
+            # empty run is reported with both attempts named.
+            try:
+                stdout, _duration = self._run(command, EMPTY_RETRY_PREFIX + prompt)
+                text, input_tokens, output_tokens = self._parse_output(stdout)
+            except OpenCodeError as second:
+                raise OpenCodeError(f"{second} (this was the retry; the first attempt: {first})") from second
 
         parts = model_string.split("/", 1)
         provider_name, model_name = parts if len(parts) == 2 else ("", parts[0])
@@ -320,6 +337,7 @@ class OpenCodeProvider(AiProvider):
         seen: dict[str, int] = {}
         tool_names: list[str] = []
         errors: list[str] = []
+        finishes: list[str] = []
 
         for line_number, line in enumerate(stdout.splitlines(), start=1):
             if not line.strip():
@@ -353,6 +371,9 @@ class OpenCodeProvider(AiProvider):
                     input_tokens = (input_tokens or 0) + step_input
                 if step_output is not None:
                     output_tokens = (output_tokens or 0) + step_output
+                finish = (f"reason '{part.get('reason', '?')}', {tokens.get('reasoning') or 0} reasoning tokens, "
+                          f"{step_output or 0} output tokens")
+                finishes.append(finish)
             elif "error" in event_type.lower():
                 errors.append(_error_text(event))
             elif event_type == "tool" or part.get("type") == "tool":
@@ -362,12 +383,12 @@ class OpenCodeProvider(AiProvider):
             # every other type is ignored entirely (OC-3)
 
         if not saw_text:
-            raise OpenCodeError(self._no_text_message(stdout, seen, tool_names, errors))
+            raise OpenCodeError(self._no_text_message(stdout, seen, tool_names, errors, finishes))
 
         return "".join(text_parts), input_tokens, output_tokens
 
     def _no_text_message(self, stdout: str, seen: dict[str, int], tool_names: list[str],
-                         errors: list[str] | None = None) -> str:
+                         errors: list[str] | None = None, finishes: list[str] | None = None) -> str:
         """Why a run that exited cleanly has no answer in it (OC-9). Names
         the events the run did produce, the tools it called, and the file the
         raw output was written to - a run that answered nothing is otherwise
@@ -379,6 +400,9 @@ class OpenCodeProvider(AiProvider):
             # A run can report an error and still exit 0; that message is the
             # answer to "why is there nothing here".
             parts.append("It reported: " + " | ".join(dict.fromkeys(reported)) + ".")
+        if finishes and not tool_names:
+            parts.append("The model finished with " + "; ".join(finishes) +
+                         ": it thought and wrote nothing.")
         if tool_names:
             parts.append(
                 f"It called tool(s) instead of answering: {', '.join(dict.fromkeys(tool_names))}. "

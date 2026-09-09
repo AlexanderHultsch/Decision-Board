@@ -82,54 +82,42 @@
   </section>
 
   <!-- Running -->
-  <section id="screen-running" class="screen" hidden>
-    <h2 id="running-title">The board is in session</h2>
-    <p id="running-detail" class="muted">The members, each answering without seeing the others.</p>
-    <div id="member-grid" class="member-grid"></div>
-    <div class="direction-rule"></div>
-    <div id="direction-tile" class="direction-tile pending">
-      <span class="avatar avatar-synthesis" aria-hidden="true"></span>
-      <div>
-        <div class="card-title">Board direction</div>
-        <div id="direction-state" class="muted small">Waits for every member to answer</div>
-      </div>
-      <div id="direction-spinner" class="spinner small" hidden></div>
-    </div>
-  </section>
-
-  <!-- Result -->
   <section id="screen-result" class="screen" hidden>
     <p class="eyebrow">Topic</p>
     <h2 id="result-topic"></h2>
+    <p id="board-state" class="muted"></p>
 
-    <div id="synthesis-card" class="card synthesis">
+    <div id="member-grid" class="member-grid"></div>
+    <div id="member-cards" class="stack"></div>
+    <p id="failed-members" class="error small" hidden></p>
+
+    <div class="direction-rule"></div>
+    <div id="synthesis-card" class="card synthesis direction-tile pending">
       <div class="card-head">
         <span class="avatar avatar-synthesis" aria-hidden="true"></span>
-        <div><div class="card-title">Board recommendation</div><div class="muted small">Synthesis of the independent assessments</div></div>
+        <div><div class="card-title">Board direction</div><div id="direction-state" class="muted small">Waits for every member to answer</div></div>
+        <div id="direction-spinner" class="spinner small" hidden></div>
       </div>
       <div id="synthesis-body"></div>
     </div>
 
-    <p class="eyebrow">Individual assessments <span class="muted small">click a member to read</span></p>
-    <div id="member-chips" class="member-chips"></div>
-    <div id="member-cards" class="stack"></div>
-    <p id="failed-members" class="error small" hidden></p>
-
-    <p class="eyebrow">Ask back</p>
-    <div id="turns" class="stack"></div>
-    <form id="followup-form" class="ask compact">
-      <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
-      <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
-      <div id="followup-members" class="member-picks compact"></div>
-      <div class="row between">
-        <span id="result-hint" class="muted small"></span>
-        <div class="row">
-          <button id="btn-close" type="button" class="ghost">Close topic</button>
-          <button type="submit" class="primary" id="btn-followup">Ask</button>
+    <div id="ask-back" hidden>
+      <p class="eyebrow">Ask back</p>
+      <div id="turns" class="stack"></div>
+      <form id="followup-form" class="ask compact">
+        <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
+        <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
+        <div id="followup-members" class="member-picks compact"></div>
+        <div class="row between">
+          <span id="result-hint" class="muted small"></span>
+          <div class="row">
+            <button id="btn-close" type="button" class="ghost">Close topic</button>
+            <button type="submit" class="primary" id="btn-followup">Ask</button>
+          </div>
         </div>
-      </div>
-    </form>
-    <p id="result-error" class="error" hidden></p>
+      </form>
+      <p id="result-error" class="error" hidden></p>
+    </div>
   </section>
 
   <!-- Proposing -->

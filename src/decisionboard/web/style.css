@@ -211,3 +211,22 @@ button.ghost { background: transparent; }
 .turn .turn-members { margin-top: .6rem; }
 .turn .turn-member { border-left: 3px solid var(--line); padding: .3rem .7rem; margin-top: .4rem; }
 .turn .turn-member .who { font-weight: 600; }
+
+/* One screen from "in session" to the result (9 September 2026): the member tiles stay
+   where they were and become buttons; the direction box becomes the recommendation. */
+button.member-tile { font: inherit; text-align: left; color: inherit; cursor: default; width: 100%; }
+button.member-tile.clickable { cursor: pointer; }
+button.member-tile.clickable:hover { border-color: currentColor; }
+.member-tile.active { border-color: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent); }
+.member-tile.na .avatar { filter: grayscale(1); }
+.member-tile.na, .member-tile.failed { opacity: .7; }
+.member-tile.failed .name { text-decoration: line-through; }
+.member-tile .name { color: var(--text); font-weight: 600; }
+.member-tile .state { margin-left: auto; font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.member-tile.done .state { color: #15803d; }
+.member-tile.failed .state { color: var(--danger); }
+.direction-tile.done { opacity: 1; display: block; }
+.direction-tile.done .card-head { margin-bottom: .8rem; }
+.direction-tile .card-head { display: flex; align-items: center; gap: .8rem; width: 100%; }
+.direction-tile .card-head .spinner.small { margin-left: auto; }
+.direction-tile.pending #synthesis-body, .direction-tile.running #synthesis-body { display: none; }

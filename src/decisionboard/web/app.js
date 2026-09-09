@@ -279,6 +279,8 @@
     try {
       session = await api("POST", "/api/sessions", { question });
       openMembers.clear();
+      $("screen-result").dataset.phase = "";
+      $("turns").dataset.key = "";
       render();
     } catch (err) { setError("home-error", err.message); }
   }
@@ -387,29 +389,62 @@
     catch (err) { showError(err.message); }
   }
 
+  // One screen for "in session", "consolidating" and the result: the member
+  // tiles stay in place and become clickable once their answer is in; the
+  // "Board direction" box below turns into the recommendation.
+  function memberStateLabel(name, state, answered, failed) {
+    if (session.result) {
+      if (failed.has(name)) return "failed";
+      const a = answered.get(name);
+      if (a && a.applies === false) return "not affected";
+      return openMembers.has(name) ? "hide answer" : "read answer";
+    }
+    return state === "pending" ? "waiting" : state === "running" ? "thinking…" : state === "done" ? "answered" : "failed";
+  }
+
+  function renderTiles(answered, failed) {
+    const done = !!session.result;
+    $("member-grid").innerHTML = Object.entries(session.members).map(([name, state]) => {
+      const a = answered.get(name);
+      const classes = ["member-tile", state,
+        done && !failed.has(name) ? "clickable" : "",
+        openMembers.has(name) ? "active" : "",
+        a && a.applies === false ? "na" : ""].filter(Boolean).join(" ");
+      return `<button type="button" class="${classes}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${done && !failed.has(name) ? "" : "disabled"}>
+        ${avatar(name)}<span class="name">${esc(name)}</span><span class="state">${esc(memberStateLabel(name, state, answered, failed))}</span></button>`;
+    }).join("");
+    if (done) {
+      $("member-grid").querySelectorAll("button.clickable").forEach((tile) => tile.addEventListener("click", () => {
+        const name = tile.dataset.member;
+        if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
+        renderTiles(answered, failed);
+        renderMemberCards(answered);
+      }));
+    }
+  }
+
   function renderRunning() {
-    const grid = $("member-grid");
-    grid.innerHTML = Object.entries(session.members).map(([name, state]) => `
-      <div class="member-tile ${state}" style="color:${esc(meta(name).color)}">
-        ${avatar(name)}
-        <div><div style="color:var(--text);font-weight:600">${esc(name)}</div></div>
-        <span class="state">${state === "pending" ? "waiting" : state === "running" ? "thinking…" : state === "done" ? "answered" : "failed"}</span>
-      </div>`).join("");
+    $("screen-result").dataset.phase = session.phase;
     const synthesising = session.phase === "synthesising";
     const n = Object.keys(session.members).length;
-    const answered = Object.values(session.members).filter((s) => s === "done").length;
-    $("running-title").textContent = synthesising ? "Consolidating the answers" : "The board is in session";
-    $("running-detail").textContent = synthesising
-      ? "One more call reads every answer and writes the board direction."
-      : `${n} member(s), each answering without seeing the others.`;
-    const tile = $("direction-tile");
-    tile.className = `direction-tile ${synthesising ? "running" : "pending"}`;
-    tile.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
+    const count = Object.values(session.members).filter((s) => s === "done").length;
+    $("result-topic").textContent = (session.inputs && session.inputs.topic) || session.question || "";
+    $("board-state").textContent = synthesising
+      ? "Every member has answered. One more call reads every answer and writes the board direction."
+      : `The board is in session: ${n} member(s), each answering without seeing the others.`;
+    renderTiles(new Map(), new Map());
+    $("member-cards").innerHTML = "";
+    setError("failed-members", "");
+    const card = $("synthesis-card");
+    card.className = `card synthesis direction-tile ${synthesising ? "running" : "pending"}`;
+    card.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
     $("direction-state").textContent = synthesising
       ? "Thinking: reading all answers, weighing the disagreements, writing the recommendation…"
-      : `Waits for every member to answer (${answered} of ${n} so far)`;
+      : `Waits for every member to answer (${count} of ${n} so far)`;
     $("direction-spinner").hidden = !synthesising;
-    show("running");
+    $("synthesis-body").innerHTML = "";
+    $("ask-back").hidden = true;
+    show("result");
   }
 
   function renderSources(result) {
@@ -474,27 +509,24 @@
 
   function renderResult() {
     const r = session.result;
-    const alreadyShown = !$("screen-result").hidden;
+    const answered = new Map(r.assessments.map((a) => [a.member, a]));
+    const failed = new Map(r.failed_members.map((f) => [f.split(":")[0], f]));
+    const alreadyShown = !$("screen-result").hidden && $("screen-result").dataset.phase === "result";
     if (!alreadyShown) {
+      $("screen-result").dataset.phase = "result";
       $("result-topic").textContent = r.topic;
-      $("synthesis-body").innerHTML = renderSynthesis(r);
-      $("synthesis-card").querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
-      const answered = new Map(r.assessments.map((a) => [a.member, a]));
-      const failed = new Map(r.failed_members.map((f) => [f.split(":")[0], f]));
-      const names = Object.keys(session.members);
-      $("synthesis-card").querySelector(".muted.small").textContent = `Synthesis of ${names.length} independent assessments`;
-      const notAffected = (name) => answered.has(name) && answered.get(name).applies === false;
-      $("member-chips").innerHTML = names.map((name) => `
-        <button type="button" class="member-chip ${failed.has(name) ? "failed" : ""} ${notAffected(name) ? "na" : ""}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${failed.has(name) ? "disabled" : ""} title="${notAffected(name) ? "Says the topic does not touch its responsibilities" : ""}">
-          ${avatar(name)}<span style="color:var(--text)">${esc(name)}${notAffected(name) ? " <span class='muted small'>n/a</span>" : ""}</span></button>`).join("");
-      renderPicks($("followup-members"), names.filter((n) => !failed.has(n)), new Set());
-      $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.addEventListener("click", () => {
-        const name = chip.dataset.member;
-        if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
-        renderMemberCards(answered);
-      }));
+      $("board-state").textContent = `${r.assessments.length} member(s) answered. Click a member to read its answer.`;
+      renderTiles(answered, failed);
       renderMemberCards(answered);
       setError("failed-members", r.failed_members.length ? `Failed member(s): ${r.failed_members.join(" · ")}` : "");
+      const card = $("synthesis-card");
+      card.className = "card synthesis direction-tile done";
+      card.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
+      $("direction-state").textContent = `Synthesis of ${r.assessments.length} independent assessment(s)`;
+      $("direction-spinner").hidden = true;
+      $("synthesis-body").innerHTML = renderSynthesis(r);
+      renderPicks($("followup-members"), Object.keys(session.members).filter((n) => !failed.has(n)), new Set());
+      $("ask-back").hidden = false;
     }
     const turnsKey = JSON.stringify(session.turns);
     if ($("turns").dataset.key !== turnsKey) {     // redraw only on change: keeps <details> open while polling
@@ -510,7 +542,6 @@
   }
 
   function renderMemberCards(answered) {
-    $("member-chips").querySelectorAll(".member-chip").forEach((chip) => chip.classList.toggle("active", openMembers.has(chip.dataset.member)));
     $("member-cards").innerHTML = Object.keys(session.members).filter((n) => openMembers.has(n) && answered.has(n)).map((name) => {
       const a = answered.get(name);
       return `<div class="card member-card" style="border-left-color:${esc(meta(name).color)}">
