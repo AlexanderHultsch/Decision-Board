@@ -124,7 +124,8 @@
       ? `<ul class="bullets sources">${facts.map((s) => `<li class="${s.verified ? "ok" : "bad"}"><span class="mark">${s.verified ? "✓" : "!"}</span> ${esc(s.fact)} <span class="note">${esc(s.source || "no note named")}${s.verified ? "" : ` · ${esc(s.note)}`}</span></li>`).join("")}</ul>`
       : "<span class='muted'>nothing taken from the knowledge net</span>";
     const own = a.judgement ? fmt(a.judgement) : "<span class='muted'>none listed</span>";
-    return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>`;
+    const flags = (a.flags || []).length ? `<dt class="bad">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
+    return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
@@ -388,13 +389,16 @@
     const ticked = new Set(kept && kept.members ? kept.members : (session.selected_members && session.selected_members.length ? session.selected_members : names));
     renderPicks($("confirm-members"), names, ticked);
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
+    $("run-mode").value = (kept && kept.mode) || session.mode || "individual";
     const countLine = () => {
       const n = picked($("confirm-members")).length;
+      const combined = $("run-mode").value === "combined";
       $("confirm-knowledge").textContent = (k && k.vault_path
         ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
-        : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${n + 1} model calls follow.`;
+        : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${combined ? "1 model call follows (combined)" : `${n + 1} model calls follow`}.`;
     };
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
+    $("run-mode").onchange = () => { countLine(); saveConfirmDraft(); };
     countLine();
     show("confirm");
   }
@@ -402,7 +406,7 @@
   function saveConfirmDraft() {
     saveDraft({ confirm: {
       topic: $("in-topic").value, context: $("in-context").value, options: $("in-options").value,
-      constraints: $("in-constraints").value, members: picked($("confirm-members")),
+      constraints: $("in-constraints").value, members: picked($("confirm-members")), mode: $("run-mode").value,
     } });
   }
 
@@ -424,7 +428,7 @@
     const body = {
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
-      members,
+      members, mode: $("run-mode").value,
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
     catch (err) { showError(err.message); }
@@ -531,7 +535,7 @@
   }
 
   function renderTurn(t) {
-    const who = t.members && t.members.length ? `<div class="members">Asked again: ${t.members.map(esc).join(", ")}</div>` : "";
+    const who = t.members && t.members.length ? `<div class="members">Asked again${t.mode === "combined" ? " (combined, one call)" : ""}: ${t.members.map(esc).join(", ")}</div>` : "";
     if (t.pending) return `<div class="turn pending"><div class="q">${esc(t.question)}</div>${who}<div class="a">The board is thinking…</div></div>`;
     if (t.error) return `<div class="turn error"><div class="q">${esc(t.question)}</div>${who}<div class="a">${esc(t.answer)}</div></div>`;
     const d = t.data;
@@ -570,7 +574,11 @@
       const card = $("synthesis-card");
       card.className = "card synthesis direction-tile done";
       card.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
-      $("direction-state").textContent = `Synthesis of ${r.assessments.length} independent assessment(s)`;
+      $("direction-state").textContent = r.mode === "combined"
+        ? `Combined answer: ${r.assessments.length} member entries and the direction from one call`
+        : `Synthesis of ${r.assessments.length} independent assessment(s)`;
+      $("board-state").innerHTML = `${r.assessments.length} member(s) answered. Click a member to read its answer.` +
+        (r.mode === "combined" ? ` <span class="mode-mark" title="One call wrote every entry; the entries can lean towards each other.">combined</span>` : "");
       $("direction-spinner").hidden = true;
       $("synthesis-body").innerHTML = renderSynthesis(r);
       renderPicks($("followup-members"), Object.keys(session.members).filter((n) => !failed.has(n)), new Set());
@@ -584,7 +592,9 @@
     $("btn-followup").disabled = session.busy;
     $("btn-close").disabled = session.busy;
     const again = picked($("followup-members")).length;
-    $("result-hint").textContent = `${session.llm_calls} model call(s) so far · this follow-up costs ${again ? `${again + 1} (${again} member(s) asked again, plus one)` : "one"}`;
+    $("followup-mode-row").hidden = again === 0;
+    const combinedFollow = $("followup-mode").value === "combined";
+    $("result-hint").textContent = `${session.llm_calls} model call(s) so far · this follow-up costs ${again ? (combinedFollow ? "one (combined)" : `${again + 1} (${again} member(s) asked again, plus one)`) : "one"}`;
     setError("result-error", session.error || "");
     show("result");
   }
@@ -607,7 +617,7 @@
     if (!question) return;
     const members = picked($("followup-members"));
     try {
-      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members });
+      session = await api("POST", `/api/sessions/${session.id}/follow-up`, { question, members, mode: $("followup-mode").value });
       $("followup").value = "";
       saveDraft({ followup: "" });
       $("followup-members").querySelectorAll("input").forEach((box) => { box.checked = false; box.closest("label").classList.add("off"); });
@@ -704,6 +714,9 @@
   $("btn-answers").addEventListener("click", () => submitAnswers(false));
   $("btn-answers-final").addEventListener("click", () => submitAnswers(true));
   $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
+  $("followup-mode").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
+  $("btn-mode-info").addEventListener("click", () => { $("mode-info").hidden = !$("mode-info").hidden; });
+  $("btn-followup-mode-info").addEventListener("click", () => { alert($("mode-info").textContent); });
   $("btn-back-home").addEventListener("click", newTopic);
   $("btn-run").addEventListener("click", runBoard);
   $("btn-back-questions").addEventListener("click", goBack);

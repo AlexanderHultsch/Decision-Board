@@ -72,6 +72,15 @@
       <label>Options under consideration <span class="muted small">one per line</span><textarea id="in-options" rows="4"></textarea></label>
       <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
     </form>
+    <p class="eyebrow">How the board is asked</p>
+    <div class="row mode-row">
+      <select id="run-mode">
+        <option value="individual">Ask for individual feedback from each board member</option>
+        <option value="combined">Ask for combined feedback from the board members</option>
+      </select>
+      <button type="button" class="icon-btn info-btn" id="btn-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
+    </div>
+    <p id="mode-info" class="muted small info-text" hidden>Individual: one call per ticked member, each answering alone, then one call that consolidates. Members cannot see each other, so disagreements stay visible. Costs one call per member plus one. Combined: one call receives every ticked profile, the KPI notes and the same knowledge, writes every member's entry and the board direction in one pass. About one ninth of the cost with eight members. The trade: one model writes all entries and sees the earlier ones while writing the later, so the entries lean towards each other and fewer disagreements surface. The program checks that every member came back, that each entry names its own measures or tasks, and every citation, in both modes. Use combined for a quick first opinion, follow-ups, or topics that concern few swim lanes; use individual for a decision that matters.</p>
     <p class="eyebrow">Who is asked <span class="muted small">untick a swim lane the topic does not concern</span></p>
     <div id="confirm-members" class="member-picks"></div>
     <p id="confirm-knowledge" class="muted small"></p>
@@ -108,6 +117,13 @@
         <textarea id="followup" rows="2" placeholder="Ask the board about its recommendation…"></textarea>
         <p class="muted small" style="margin:.4rem 0 .2rem">Ask these members again <span class="muted">(none ticked: the board answers from what it already said, one call)</span></p>
         <div id="followup-members" class="member-picks compact"></div>
+        <div class="row mode-row" id="followup-mode-row" hidden>
+          <select id="followup-mode">
+            <option value="individual">Ask them individually (one call each, plus one)</option>
+            <option value="combined">Ask them combined (one call for all)</option>
+          </select>
+          <button type="button" class="icon-btn info-btn" id="btn-followup-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button>
+        </div>
         <div class="row between">
           <span id="result-hint" class="muted small"></span>
           <div class="row">

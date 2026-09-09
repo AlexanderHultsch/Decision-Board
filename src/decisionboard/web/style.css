@@ -204,6 +204,13 @@ button.ghost { background: transparent; }
 .sources li.bad .mark, .sources li.bad .note, dt.bad { color: var(--danger); }
 .sources li .note { color: var(--muted); font-size: .85rem; }
 .sources-block { margin-top: .9rem; padding-top: .8rem; border-top: 1px dashed var(--line); }
+/* Individual or combined (9 September 2026) */
+.mode-row { align-items: center; gap: .6rem; margin: .2rem 0 .8rem; }
+.mode-row select { flex: 1; max-width: 32rem; }
+.info-btn { width: 30px; height: 30px; font-weight: 700; font-family: Georgia, serif; font-style: italic; }
+.info-text { max-width: 70ch; padding: .6rem .9rem; border-left: 3px solid var(--line); margin: 0 0 1rem; }
+.mode-mark { display: inline-block; font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: .4rem; vertical-align: middle; }
+.flag { color: #b45309; font-size: .85rem; }
 .turn .members { color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
 .turn dl { display: grid; grid-template-columns: 11rem 1fr; gap: .4rem 1rem; margin: .4rem 0 0; }
 .turn dt { color: var(--muted); font-size: .85rem; }

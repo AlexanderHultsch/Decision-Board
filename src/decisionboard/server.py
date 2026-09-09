@@ -38,7 +38,7 @@ from . import knowledge as knowledge_mod
 from . import memory_writer
 from . import roles as roles_mod
 from .agent.provider import AiNotConfiguredError, AiProvider, build_provider
-from .board import BoardConversation, ask_follow_up_full, run_board
+from .board import BoardConversation, ask_follow_up_full, run_board, run_board_combined
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 DEFAULT_PORT = 8765
@@ -100,6 +100,7 @@ class Session:
         self.selected_members: list[str] = []             # the members Alex chose to ask
         self.members: dict[str, str] = {}
         self.partial: dict[str, dict[str, Any]] = {}      # answers already in while the others think
+        self.mode = "individual"                          # "individual" or "combined" (decided 9 September 2026)
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
         self.turns: list[dict[str, str]] = []
@@ -147,6 +148,7 @@ class Session:
                 "selected_members": self.selected_members,
                 "members": self.members,
                 "partial": self.partial,
+                "mode": self.mode,
                 "result": self.result,
                 "turns": self.turns,
                 "llm_calls": self.llm_calls,
@@ -418,6 +420,7 @@ class BoardServer:
                 "constraints": [str(c).strip() for c in inputs.get("constraints") or [] if str(c).strip()],
             }
             session.selected_members = self._chosen_members(session, inputs.get("members"))
+            session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
             session.phase = "running"
             session.members = {member: "pending" for member in session.selected_members}
         self._spawn(session, self._run_board, session)
@@ -468,7 +471,8 @@ class BoardServer:
                 session.selected_members = selected
                 session.members = {member: "pending" for member in selected}
                 session.partial = {}
-            result = run_board(
+            runner = run_board_combined if session.mode == "combined" else run_board
+            result = runner(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
@@ -495,11 +499,12 @@ class BoardServer:
                 "failed_members": list(result.failed_members),
                 "llm_calls": result.llm_calls,
                 "sources": result.sources,
+                "mode": result.mode,
             }
             session.llm_calls += result.llm_calls
             session.phase = "result"
 
-    def follow_up(self, session: Session, question: str, members: Any = None) -> None:
+    def follow_up(self, session: Session, question: str, members: Any = None, mode: Any = None) -> None:
         """A follow-up. ``members`` names the members to ask again (decided
         9 September 2026); empty or missing means the one-call form over
         the original assessments."""
@@ -515,24 +520,25 @@ class BoardServer:
             if isinstance(members, list) and members:
                 wanted = {str(m).strip().lower() for m in members}
                 chosen = [m for m in session.members if m.lower() in wanted]
+            follow_mode = "combined" if str(mode or "").lower() == "combined" else "individual"
             session.busy = True
             session.turns.append({"question": question, "answer": "", "pending": True, "members": chosen,
-                                  "data": None, "assessments": [], "failed_members": []})
-        self._spawn(session, self._follow_up, session, question, chosen)
+                                  "mode": follow_mode, "data": None, "assessments": [], "failed_members": []})
+        self._spawn(session, self._follow_up, session, question, chosen, follow_mode)
 
-    def _follow_up(self, session: Session, question: str, chosen: list[str]) -> None:
+    def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual") -> None:
         try:
-            turn = ask_follow_up_full(self.config, self.provider(), session.conversation, question, chosen)
+            turn = ask_follow_up_full(self.config, self.provider(), session.conversation, question, chosen, follow_mode)
         except Exception as exc:
             with session.lock:
                 session.turns[-1] = {"question": question, "answer": f"Could not answer: {exc}", "pending": False,
-                                     "error": True, "members": chosen, "data": None, "assessments": [],
-                                     "failed_members": []}
+                                     "error": True, "members": chosen, "mode": follow_mode, "data": None,
+                                     "assessments": [], "failed_members": []}
                 session.busy = False
             return
         with session.lock:
             session.turns[-1] = {
-                "question": question, "answer": turn.answer, "pending": False, "members": chosen,
+                "question": question, "answer": turn.answer, "pending": False, "members": chosen, "mode": follow_mode,
                 "data": turn.data, "assessments": [asdict(a) for a in turn.assessments],
                 "failed_members": list(turn.failed_members),
             }
@@ -757,7 +763,7 @@ def make_handler(server: BoardServer):
                     elif action == "run":
                         server.run(session, body)
                     elif action == "follow-up":
-                        server.follow_up(session, str(body.get("question") or ""), body.get("members"))
+                        server.follow_up(session, str(body.get("question") or ""), body.get("members"), body.get("mode"))
                     elif action == "back":
                         server.back(session)
                     elif action == "close":

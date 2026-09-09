@@ -62,6 +62,7 @@ class MemberAssessment:
     # judgement, one bullet each. Anything not in ``sources`` is the model's.
     sources: tuple[dict[str, Any], ...] = ()
     judgement: str = ""
+    flags: tuple[str, ...] = ()   # Python's warnings on this entry, e.g. "generic" in the combined mode
 
 
 @dataclass
@@ -74,6 +75,7 @@ class BoardResult:
     llm_calls: int = 0
     synthesis_data: dict[str, Any] | None = None   # the parsed synthesis JSON, for the HMI
     sources: dict[str, Any] = field(default_factory=dict)   # network notes used, unverified citations, judgement count
+    mode: str = "individual"      # "individual": one call per member; "combined": one call for all
 
 
 @dataclass
@@ -603,6 +605,243 @@ def run_board(
     ))
 
 
+def _input_block(topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...]) -> list[str]:
+    lines = ["## Input (FR-3.1)", "", f"Topic: {topic}"]
+    if context:
+        lines.append(f"Context: {context}")
+    if options:
+        lines.append("Options under consideration:")
+        lines.extend(f"- {option}" for option in options)
+    if constraints:
+        lines.append("Hard constraints:")
+        lines.extend(f"- {constraint}" for constraint in constraints)
+    return lines
+
+
+def _member_section(member: str, role: RoleProfile | None, kpi_data: str) -> list[str]:
+    """One member's material inside the combined prompt: the same profile
+    and KPI block the single call gets, under the member's heading."""
+    lines = [f"### Member: {member}", ""]
+    if role is not None and role.roles:
+        lines.append(f"This member is the {role.member} swim lane. It speaks as {role.title} (level {role.level}) "
+                     "and answers for every role in the swim lane. Roles by rank:")
+        lines.extend(f"- level {r.level}: {r.name}" for r in role.roles)
+        lines.append("")
+    if role is not None and role.body:
+        lines += [role.body, ""]
+    if kpi_data:
+        lines += ["#### KPI data from the knowledge network", "", kpi_data, ""]
+    else:
+        lines += ["#### KPI data from the knowledge network", "",
+                  "No KPI note for this member is in the knowledge network yet.", ""]
+    return lines
+
+
+def _combined_prompt(
+    topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...],
+    roles: dict[str, RoleProfile], conduct: str, member_data: dict[str, str], project: str,
+) -> str:
+    lines = [load_prompt("board_combined"), ""]
+    if project:
+        lines += [f"Project: {project}. This question belongs to this project.", ""]
+    if conduct:
+        lines += ["## Board member conduct (the same for every member)", "", conduct, ""]
+    lines += ["## Members to assess, in this order", ""]
+    lines.append(", ".join(roles))
+    lines.append("")
+    for member, role in roles.items():
+        lines += _member_section(member, role, member_data.get(member, ""))
+    lines += _input_block(topic, context, options, constraints)
+    return "\n".join(lines)
+
+
+_GENERIC_MIN_TERMS = 1
+
+
+def _role_terms(role: RoleProfile | None) -> set[str]:
+    """Distinctive words from the sections that make a role its own: the
+    targets it is judged on, the process tasks that name it, its title."""
+    if role is None:
+        return set()
+    text = role.title + " "
+    body = role.body
+    for heading in ("## Targets I am judged on", "## Process", "## What I protect when I cannot have everything"):
+        start = body.find(heading)
+        if start == -1:
+            continue
+        end = body.find("\n## ", start + len(heading))
+        text += body[start:end if end != -1 else None] + " "
+    words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z&-]{4,}", text)}
+    return words - _SOURCE_STOPWORDS - {"targets", "judged", "process", "protect", "cannot", "everything",
+                                        "member", "network", "knowledge", "values", "baseline", "record",
+                                        "tasks", "official", "owner", "process", "writes", "before", "answering",
+                                        "question", "touches", "defines", "points", "there", "every", "phase",
+                                        "itself", "pages", "affected", "swimlanes", "section", "level"}
+
+
+def _entry_flags(entry: dict[str, Any], role: RoleProfile | None) -> tuple[str, ...]:
+    """Python's check that a combined entry was written from the member's
+    own profile: it must name at least one of the role's own terms."""
+    terms = _role_terms(role)
+    if not terms:
+        return ()
+    text = " ".join(str(entry.get(k, "")) for k in ("view", "impact", "risks", "recommendation", "own_judgement")).lower()
+    hits = [t for t in terms if t in text]
+    return () if len(hits) >= _GENERIC_MIN_TERMS else ("generic: names none of this role's measures or tasks",)
+
+
+def _parse_combined(text: str, members: tuple[str, ...]) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None, dict[str, Any] | None]:
+    """The combined answer: entries by member (raw, parsed like a single
+    answer), the synthesis object and the follow-up object, if present."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}, None, None
+    if not isinstance(data, dict):
+        return {}, None, None
+    wanted = {m.lower(): m for m in members}
+    entries: dict[str, dict[str, Any]] = {}
+    for item in data.get("members") or []:
+        if not isinstance(item, dict):
+            continue
+        name = wanted.get(str(item.get("member", "")).strip().lower())
+        if name is None or name in entries:
+            continue
+        parsed = _parse_member_response(json.dumps(item))
+        if parsed is not None:
+            entries[name] = parsed
+    synthesis = data.get("synthesis") if isinstance(data.get("synthesis"), dict) else None
+    follow_up = data.get("follow_up") if isinstance(data.get("follow_up"), dict) else None
+    return entries, synthesis, follow_up
+
+
+def run_board_combined(
+    config: dict,
+    provider: AiProvider | None,
+    *,
+    topic: str,
+    context: str = "",
+    options: tuple[str, ...] = (),
+    constraints: tuple[str, ...] = (),
+    on_member: Callable[[str, str], None] | None = None,
+    board: Board | None = None,
+    member_data: dict[str, str] | None = None,
+    members: tuple[str, ...] | list[str] | None = None,
+    sent_notes: dict[str, str] | None = None,
+    on_assessment: Callable[[MemberAssessment], None] | None = None,
+) -> BoardResult:
+    """The combined form (decided 9 September 2026): one call writes every
+    chosen member's assessment and the synthesis. Everything the single
+    calls receive is in this one prompt; Python checks that every member
+    came back, that each entry names its own role's terms, and every
+    citation, as in ``run_board``. Cheaper by a factor of the member count;
+    the entries influence each other, which the interface says."""
+    start = time.monotonic()
+    if provider is None or not is_configured(config, TASK_BOARD):
+        raise AiNotConfiguredError("AI Board has no model configured - set provider.models.board")
+    if board is None:
+        board = load_board(config)
+    roles = board.profiles
+    if members:
+        chosen = {str(m).strip().lower() for m in members}
+        roles = {name: role for name, role in roles.items() if name.lower() in chosen}
+        if not roles:
+            raise ValueError("none of the chosen members is on the board")
+    names = tuple(roles)
+    if member_data is None:
+        member_data = kpi_notes(config, names)
+    project = active_project(config) or ""
+    prompt = _combined_prompt(topic, context, options, constraints, roles, board.conduct, member_data, project)
+
+    def _notify(state: str) -> None:
+        if on_member is not None:
+            for member in names:
+                try:
+                    on_member(member, state)
+                except Exception:
+                    pass
+
+    _notify("running")
+    try:
+        ai_result, calls = _complete_with_retry(provider, prompt)
+    except Exception:
+        _notify("failed")
+        raise
+    entries, synthesis_data, _follow = _parse_combined(ai_result.text, names)
+    assessments: list[MemberAssessment] = []
+    failed: list[str] = []
+    for member in names:
+        parsed = entries.get(member)
+        if parsed is None:
+            failed.append(f"{member}: no entry in the combined answer")
+            if on_member is not None:
+                on_member(member, "failed")
+            continue
+        sent = dict(sent_notes or {})
+        sent.update(_kpi_note_bodies(member_data.get(member, "")))
+        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+        parsed["flags"] = _entry_flags(parsed, roles.get(member))
+        assessment = MemberAssessment(member=member, **parsed)
+        assessments.append(assessment)
+        if on_assessment is not None:
+            try:
+                on_assessment(assessment)
+            except Exception:
+                pass
+        if on_member is not None:
+            on_member(member, "done")
+    if not entries and not synthesis_data:
+        failed = [f"{m}: the combined answer did not parse as JSON with members and synthesis" for m in names]
+    if synthesis_data is not None:
+        synthesis = _synthesis_text(synthesis_data)
+    elif assessments:
+        synthesis = "The combined answer carried no synthesis object; the member entries stand on their own."
+    else:
+        synthesis = "No member produced an assessment, so there is nothing to consolidate."
+    result = BoardResult(
+        topic=topic, assessments=assessments, synthesis=synthesis, failed_members=failed,
+        ai_result=ai_result, llm_calls=calls, synthesis_data=synthesis_data,
+        sources=_summarise_sources(assessments), mode="combined",
+    )
+    log_run(
+        "board", audit_folder=_get(config, "runtime.audit_folder"), pc_name=_get(config, "storage.pc_name", ""),
+        duration_seconds=time.monotonic() - start,
+        counts={"assessments": len(assessments), "failed_members": len(failed), "llm_calls": calls,
+                "over_token_limit": 1 if ai_result.over_token_limit else 0, "combined": 1},
+        provider=ai_result.provider, model=ai_result.model, tokens=ai_result.total_tokens,
+    )
+    return result
+
+
+def _combined_follow_up_prompt(conversation: BoardConversation, chosen: list[str], question: str) -> str:
+    inputs = conversation.inputs
+    roles = {m: (conversation.roles or {}).get(m) for m in chosen}
+    lines = [load_prompt("board_combined"), ""]
+    if conversation.project:
+        lines += [f"Project: {conversation.project}.", ""]
+    if conversation.conduct:
+        lines += ["## Board member conduct (the same for every member)", "", conversation.conduct, ""]
+    lines += ["## Members to ask again, in this order", "", ", ".join(chosen), ""]
+    for member, role in roles.items():
+        lines += _member_section(member, role, conversation.member_data.get(member, ""))
+        earlier = next((a for a in conversation.result.assessments if a.member == member), None)
+        lines += ["#### Earlier assessment of this member", ""]
+        lines.append(json.dumps({"applies": earlier.applies, "view": earlier.view, "impact": earlier.impact,
+                                 "risks": earlier.risks, "recommendation": earlier.recommendation}, indent=2)
+                     if earlier else "(none in the first round)")
+        lines.append("")
+    lines += _input_block(str(inputs.get("topic", conversation.result.topic)), str(inputs.get("context", "")),
+                          tuple(inputs.get("options", ())), tuple(inputs.get("constraints", ())))
+    lines += ["", "## Board recommendation so far", "", conversation.result.synthesis, "", "## Conversation so far"]
+    if conversation.turns:
+        for q, a in conversation.turns:
+            lines += [f"Q: {q}", f"A: {a}"]
+    else:
+        lines.append("(none yet)")
+    lines += ["", "## New question", "", question]
+    return "\n".join(lines)
+
+
 def _follow_up_prompt(
     assessments: list[MemberAssessment], turns: list[tuple[str, str]], question: str,
     roles: dict[str, RoleProfile] | None = None,
@@ -677,7 +916,7 @@ def _follow_up_text(data: dict[str, Any]) -> str:
 
 def ask_follow_up_full(
     config: dict, provider: AiProvider | None, conversation: BoardConversation, question: str,
-    members: tuple[str, ...] | list[str] = (),
+    members: tuple[str, ...] | list[str] = (), mode: str = "individual",
 ) -> FollowUp:
     """One follow-up turn on a completed board run.
 
@@ -700,6 +939,29 @@ def ask_follow_up_full(
     member_answers: list[MemberAssessment] = []
     failed: list[str] = []
     calls = 0
+    if chosen and mode == "combined":
+        # One call: every chosen member's answer and the board's answer together.
+        ai_result, calls = _complete_with_retry(provider, _combined_follow_up_prompt(conversation, chosen, question))
+        entries, _synthesis, data = _parse_combined(ai_result.text, tuple(chosen))
+        for member in chosen:
+            parsed = entries.get(member)
+            if parsed is None:
+                failed.append(f"{member}: no entry in the combined answer")
+                continue
+            sent = dict(conversation.sent_notes)
+            sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
+            parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+            parsed["flags"] = _entry_flags(parsed, (conversation.roles or {}).get(member))
+            member_answers.append(MemberAssessment(member=member, **parsed))
+        if isinstance(data, dict) and "answer" in data:
+            answer = _follow_up_text(data)
+        else:
+            data = None
+            answer = ai_result.text
+        conversation.turns.append((question, answer))
+        conversation.llm_calls += calls
+        return FollowUp(question=question, answer=answer, data=data, assessments=member_answers,
+                        failed_members=failed, llm_calls=calls)
     if chosen:
         prompts = {member: _member_follow_up_prompt(conversation, member, question) for member in chosen}
         results: dict[str, AiResult | BaseException] = {}
@@ -778,6 +1040,8 @@ def render(result: BoardResult) -> str:
                 for s in assessment.sources))
         if assessment.judgement:
             lines.append(f"{'Own judgement':<16}{assessment.judgement}")
+        for flag in assessment.flags:
+            lines.append(f"{'Check':<16}{flag}")
         lines.append("")
 
     if result.sources:

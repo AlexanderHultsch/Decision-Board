@@ -534,6 +534,84 @@ class TestFollowUpWithMembers(unittest.TestCase):
         self.assertEqual(turn.answer, "not json")
 
 
+class TestCombinedMode(unittest.TestCase):
+    """Decided 9 September 2026: one call writes every member's entry and
+    the synthesis. Python checks that every member came back, that each
+    entry is written from its own profile, and every citation."""
+
+    def setUp(self):
+        self.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
+        self.roles = board.load_board(self.config).profiles
+
+    def _combined(self, names, generic=None):
+        entries = []
+        for name in names:
+            role = self.roles[name]
+            own = "- nothing specific" if name == generic else f"- {role.title}: judged on {' '.join(list(board._role_terms(role))[:3])}"
+            entries.append({"member": name, "applies": True, "view": own, "impact": ["a -> b"], "risks": ["r"],
+                            "recommendation": "- go", "facts_from_network": [{"fact": "tooling is late", "source": "Tooling.md"}],
+                            "own_judgement": ["a guess"]})
+        return json.dumps({"members": entries, "synthesis": json.loads(SYNTHESIS_RESPONSE)})
+
+    def test_one_call_carries_every_profile_once_and_the_conduct_once(self):
+        provider = FakeProvider([self._combined(MEMBERS)])
+        result = board.run_board_combined(self.config, provider, topic="T", sent_notes={"Tooling.md": "The tooling is late."})
+        self.assertEqual(len(provider.calls), 1)
+        prompt = provider.calls[0][1]
+        for name in MEMBERS:
+            self.assertEqual(prompt.count(f"### Member: {name}"), 1)
+        self.assertIn("## Input (FR-3.1)", prompt)
+        self.assertEqual(result.mode, "combined")
+        self.assertEqual(result.llm_calls, 1)
+        self.assertEqual([a.member for a in result.assessments], list(MEMBERS))
+        self.assertTrue(all(a.sources[0]["verified"] for a in result.assessments))
+        self.assertTrue(all(a.flags == () for a in result.assessments))
+        self.assertEqual(result.synthesis_data["overall_recommendation"], "Go with option B")
+
+    def test_a_missing_member_is_failed_and_a_generic_entry_is_flagged(self):
+        names = MEMBERS[:3]
+        provider = FakeProvider([self._combined(names[:2], generic=names[1])])
+        result = board.run_board_combined(self.config, provider, topic="T", members=names)
+        self.assertEqual([a.member for a in result.assessments], list(names[:2]))
+        self.assertEqual(len(result.failed_members), 1)
+        self.assertIn(names[2], result.failed_members[0])
+        self.assertIn("no entry", result.failed_members[0])
+        self.assertEqual(result.assessments[0].flags, ())
+        self.assertTrue(result.assessments[1].flags and result.assessments[1].flags[0].startswith("generic"))
+
+    def test_progress_is_reported_and_early_answers_handed_out(self):
+        states, seen = [], []
+        provider = FakeProvider([self._combined(MEMBERS)])
+        board.run_board_combined(self.config, provider, topic="T",
+                                 on_member=lambda m, s: states.append((m, s)), on_assessment=lambda a: seen.append(a.member))
+        self.assertEqual(sorted(seen), sorted(MEMBERS))
+        self.assertEqual({s for _m, s in states}, {"running", "done"})
+
+    def test_unparsable_combined_answer_fails_every_member(self):
+        result = board.run_board_combined(self.config, FakeProvider(["nonsense"]), topic="T")
+        self.assertEqual(len(result.failed_members), len(MEMBERS))
+        self.assertEqual(result.assessments, [])
+
+    def test_combined_follow_up_is_one_call_with_every_chosen_member(self):
+        conversation = board.BoardConversation(
+            result=board.BoardResult(topic="T", assessments=[board.MemberAssessment(member=m, view="- v", risks="- r", recommendation="- go") for m in MEMBERS],
+                                     synthesis="wait", failed_members=[], ai_result=None, llm_calls=1, mode="combined"),
+            turns=[], roles=self.roles, inputs={"topic": "T", "context": "c", "options": [], "constraints": []},
+            conduct="Be concrete.", member_data={}, project="")
+        chosen = MEMBERS[:2]
+        entries = [{"member": m, "applies": True, "view": f"- {self.roles[m].title} again", "risks": [], "recommendation": "- still"} for m in chosen]
+        answer = json.dumps({"members": entries, "follow_up": {"answer": "- Then go.", "reasons": ["x"], "recommendation_now": "Go.", "disagreements": []}})
+        provider = FakeProvider([answer])
+        turn = board.ask_follow_up_full(self.config, provider, conversation, "What if?", chosen, "combined")
+        self.assertEqual(turn.llm_calls, 1)
+        self.assertEqual([a.member for a in turn.assessments], list(chosen))
+        self.assertEqual(turn.data["recommendation_now"], "Go.")
+        prompt = provider.calls[0][1]
+        self.assertIn("#### Earlier assessment of this member", prompt)
+        self.assertIn("What if?", prompt)
+        self.assertEqual(conversation.turns[-1][0], "What if?")
+
+
 class TestRender(unittest.TestCase):
     def test_render_produces_one_table_section_per_assessment_and_the_synthesis(self):
         result = board.BoardResult(

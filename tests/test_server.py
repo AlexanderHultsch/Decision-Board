@@ -49,6 +49,12 @@ class RoutingFakeProvider(AiProvider):
             self.prompts.append(prompt)
         if "## Question from Alex" in prompt:
             text = CLEAR if "## Clarification so far" in prompt else CLARIFIER
+        elif "## Members to assess" in prompt or "## Members to ask again" in prompt:
+            names = [line.split("### Member: ", 1)[1].strip() for line in prompt.splitlines() if line.startswith("### Member: ")]
+            entries = [{"member": n, "applies": True, "view": f"- {n} combined view", "risks": ["r"], "recommendation": "- Rework",
+                        "facts_from_network": [{"fact": "Tooling is late", "source": "Tooling.md"}]} for n in names]
+            text = json.dumps({"members": entries, "synthesis": json.loads(SYNTHESIS),
+                               "follow_up": {"answer": "- Combined follow-up.", "reasons": [], "recommendation_now": "Rework.", "disagreements": []}})
         elif "## Vault outline" in prompt:
             text = PROPOSAL
         elif "## Your earlier assessment" in prompt:
@@ -296,6 +302,28 @@ class TestServerFlow(unittest.TestCase):
         status, body = self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": ["Nobody"]})
         self.assertEqual(status, 400)
         self.assertIn("at least one member", body["error"])
+
+    def test_combined_mode_is_one_call_for_the_board_and_one_for_a_follow_up(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        before = state["llm_calls"]
+        chosen = CLASSIC[:3]
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Anything", "members": chosen, "mode": "combined"})
+        state = self.wait_for(sid, lambda s: s["phase"] == "result")
+        self.assertEqual(state["mode"], "combined")
+        self.assertEqual(state["result"]["mode"], "combined")
+        self.assertEqual(state["llm_calls"], before + 1)
+        self.assertEqual(sorted(a["member"] for a in state["result"]["assessments"]), sorted(chosen))
+        self.assertEqual(state["result"]["sources"]["network"], ["Tooling.md"])
+        self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "Why?", "members": chosen[:2], "mode": "combined"})
+        state = self.wait_for(sid, lambda s: not s["busy"])
+        self.assertEqual(state["llm_calls"], before + 2)
+        self.assertEqual(state["turns"][0]["mode"], "combined")
+        self.assertEqual(sorted(a["member"] for a in state["turns"][0]["assessments"]), sorted(chosen[:2]))
+        self.assertIn("Combined follow-up.", state["turns"][0]["answer"])
 
     def test_back_returns_to_the_questions_with_the_answers_kept(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
