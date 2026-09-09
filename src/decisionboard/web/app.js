@@ -434,34 +434,34 @@
   // tiles stay in place and become clickable once their answer is in; the
   // "Board direction" box below turns into the recommendation.
   function memberStateLabel(name, state, answered, failed) {
-    if (session.result) {
-      if (failed.has(name)) return "failed";
-      const a = answered.get(name);
-      if (a && a.applies === false) return "not affected";
+    if (failed.has(name) || state === "failed") return "failed";
+    const a = answered.get(name);
+    if (a) {
+      if (a.applies === false) return "not affected";
       return openMembers.has(name) ? "hide answer" : "read answer";
     }
     return state === "pending" ? "waiting" : state === "running" ? "thinking…" : state === "done" ? "answered" : "failed";
   }
 
+  // A tile is clickable as soon as that member's answer is in (9 September
+  // 2026: read the early answers while the others still think).
   function renderTiles(answered, failed) {
-    const done = !!session.result;
     $("member-grid").innerHTML = Object.entries(session.members).map(([name, state]) => {
       const a = answered.get(name);
+      const clickable = !!a && !failed.has(name);
       const classes = ["member-tile", state,
-        done && !failed.has(name) ? "clickable" : "",
+        clickable ? "clickable" : "",
         openMembers.has(name) ? "active" : "",
         a && a.applies === false ? "na" : ""].filter(Boolean).join(" ");
-      return `<button type="button" class="${classes}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${done && !failed.has(name) ? "" : "disabled"}>
+      return `<button type="button" class="${classes}" data-member="${esc(name)}" style="color:${esc(meta(name).color)}" ${clickable ? "" : "disabled"}>
         ${avatar(name)}<span class="name">${esc(name)}</span><span class="state">${esc(memberStateLabel(name, state, answered, failed))}</span></button>`;
     }).join("");
-    if (done) {
-      $("member-grid").querySelectorAll("button.clickable").forEach((tile) => tile.addEventListener("click", () => {
-        const name = tile.dataset.member;
-        if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
-        renderTiles(answered, failed);
-        renderMemberCards(answered);
-      }));
-    }
+    $("member-grid").querySelectorAll("button.clickable").forEach((tile) => tile.addEventListener("click", () => {
+      const name = tile.dataset.member;
+      if (openMembers.has(name)) openMembers.delete(name); else openMembers.add(name);
+      renderTiles(answered, failed);
+      renderMemberCards(answered);
+    }));
   }
 
   function renderRunning() {
@@ -470,11 +470,17 @@
     const n = Object.keys(session.members).length;
     const count = Object.values(session.members).filter((s) => s === "done").length;
     $("result-topic").textContent = (session.inputs && session.inputs.topic) || session.question || "";
+    const early = new Map(Object.entries(session.partial || {}));
     $("board-state").textContent = synthesising
       ? "Every member has answered. One more call reads every answer and writes the board direction."
-      : `The board is in session: ${n} member(s), each answering without seeing the others.`;
-    renderTiles(new Map(), new Map());
-    $("member-cards").innerHTML = "";
+      : `The board is in session: ${n} member(s), each answering without seeing the others.${early.size ? " Answers already in can be read now." : ""}`;
+    const failedNow = new Map(Object.entries(session.members).filter(([, s]) => s === "failed").map(([m]) => [m, m]));
+    const key = `${session.phase}:${Object.values(session.members).join(",")}:${early.size}:${Array.from(openMembers).join(",")}`;
+    if ($("member-grid").dataset.key !== key) {     // redraw only on change: keeps the open cards steady
+      $("member-grid").dataset.key = key;
+      renderTiles(early, failedNow);
+      renderMemberCards(early);
+    }
     setError("failed-members", "");
     const card = $("synthesis-card");
     card.className = `card synthesis direction-tile ${synthesising ? "running" : "pending"}`;
@@ -555,6 +561,7 @@
     const alreadyShown = !$("screen-result").hidden && $("screen-result").dataset.phase === "result";
     if (!alreadyShown) {
       $("screen-result").dataset.phase = "result";
+      $("member-grid").dataset.key = "";
       $("result-topic").textContent = r.topic;
       $("board-state").textContent = `${r.assessments.length} member(s) answered. Click a member to read its answer.`;
       renderTiles(answered, failed);

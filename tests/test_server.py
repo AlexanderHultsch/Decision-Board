@@ -192,6 +192,8 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(state["result"]["assessments"][0]["sources"][1]["verified"], False)
         self.assertEqual(sorted(state["members"]), sorted(chosen))
         self.assertTrue(all(v == "done" for v in state["members"].values()))
+        self.assertEqual(sorted(state["partial"]), sorted(chosen))     # the early answers, one per member
+        self.assertEqual(state["partial"][chosen[0]]["view"], f"{chosen[0]} view")
         self.assertEqual(state["llm_calls"], 2 + len(chosen) + 1)   # clarifier x2 + members + synthesis
 
         # Members received the knowledge and the clarification, never the clarifier's questions as a task.

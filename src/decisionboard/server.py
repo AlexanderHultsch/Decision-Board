@@ -99,6 +99,7 @@ class Session:
         self.inputs: dict[str, Any] = {}
         self.selected_members: list[str] = []             # the members Alex chose to ask
         self.members: dict[str, str] = {}
+        self.partial: dict[str, dict[str, Any]] = {}      # answers already in while the others think
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
         self.turns: list[dict[str, str]] = []
@@ -145,6 +146,7 @@ class Session:
                 "inputs": self.inputs,
                 "selected_members": self.selected_members,
                 "members": self.members,
+                "partial": self.partial,
                 "result": self.result,
                 "turns": self.turns,
                 "llm_calls": self.llm_calls,
@@ -442,6 +444,10 @@ class BoardServer:
                 if all(s in ("done", "failed") for s in session.members.values()):
                     session.phase = "synthesising"
 
+        def on_assessment(assessment) -> None:
+            with session.lock:
+                session.partial[assessment.member] = asdict(assessment)
+
         inputs = session.inputs
         context = inputs["context"]
         if session.knowledge_text:
@@ -461,12 +467,13 @@ class BoardServer:
                 session.member_meta = roles_mod.member_meta(board.profiles)
                 session.selected_members = selected
                 session.members = {member: "pending" for member in selected}
+                session.partial = {}
             result = run_board(
                 self.config, self.provider(),
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
                 on_member=on_member, board=board, member_data=member_data, members=selected,
-                sent_notes=session.sent_notes,
+                sent_notes=session.sent_notes, on_assessment=on_assessment,
             )
         except Exception as exc:
             session.fail(str(exc))

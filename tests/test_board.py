@@ -421,6 +421,19 @@ class TestMemberChoiceApplicabilityAndRetry(unittest.TestCase):
         self.assertIn("NOT VERIFIED", text)
         self.assertIn("Knowledge net notes used (verified): KPI/KPI Hardware.md, Tooling.md", text)
 
+    def test_each_answer_is_handed_out_as_it_arrives_verified(self):
+        seen = []
+        first = json.dumps({"view": "- v", "risks": ["r"], "recommendation": "- go",
+                            "facts_from_network": [{"fact": "tooling is late", "source": "Tooling.md"}]})
+        texts = [first] + [_member_response()] * (len(MEMBERS) - 1) + [SYNTHESIS_RESPONSE]
+        result = board.run_board(self.config, FakeProvider(texts), topic="T",
+                                 sent_notes={"Tooling.md": "The tooling is late."},
+                                 on_assessment=lambda a: seen.append(a))
+        self.assertEqual(sorted(a.member for a in seen), sorted(MEMBERS))
+        early_first = next(a for a in seen if a.member == MEMBERS[0])
+        self.assertTrue(early_first.sources[0]["verified"])
+        self.assertEqual(result.assessments[0], early_first)      # the final list reuses it
+
     def test_a_tool_only_failure_is_retried_once_without_tools(self):
         class ToolsFirst(FakeProvider):
             def __init__(self):

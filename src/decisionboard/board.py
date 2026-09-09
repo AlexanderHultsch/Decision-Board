@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -394,6 +395,7 @@ def run_board(
     constraints: tuple[str, ...] = (),
     on_member: Callable[[str, str], None] | None = None,
     roles: dict[str, RoleProfile] | None = None,
+    on_assessment: Callable[[MemberAssessment], None] | None = None,
     board: Board | None = None,
     member_data: dict[str, str] | None = None,
     members: tuple[str, ...] | list[str] | None = None,
@@ -492,6 +494,14 @@ def run_board(
                 pass
 
     retries = [0]
+    early: dict[str, MemberAssessment] = {}
+    early_lock = threading.Lock()
+
+    def _assessment(member: str, parsed: dict[str, Any]) -> MemberAssessment:
+        sent = dict(sent_notes or {})
+        sent.update(_kpi_note_bodies(member_data.get(member, "")))
+        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
+        return MemberAssessment(member=member, **parsed)
 
     def _call(member: str, prompt: str) -> AiResult:
         _notify(member, "running")
@@ -501,7 +511,21 @@ def run_board(
             _notify(member, "failed")
             raise
         retries[0] += calls - 1
-        _notify(member, "done" if _parse_member_response(result.text) is not None else "failed")
+        parsed = _parse_member_response(result.text)
+        if parsed is not None:
+            # Decided 9 September 2026: an answer can be read as soon as it
+            # is in, while the others still think. It is verified here, once,
+            # and handed out; the final list below reuses it. Isolation
+            # (FR-3.3a) is untouched - it goes to Alex, never to a member.
+            assessment = _assessment(member, parsed)
+            with early_lock:
+                early[member] = assessment
+            if on_assessment is not None:
+                try:
+                    on_assessment(assessment)
+                except Exception:   # a progress display must never take a run down
+                    pass
+        _notify(member, "done" if parsed is not None else "failed")
         return result
 
     results: list[AiResult | None] = [None] * len(members)
@@ -522,6 +546,9 @@ def run_board(
         if error is not None:
             failed_members.append(f"{member}: {error}")
             continue
+        if member in early:
+            assessments.append(early[member])
+            continue
         parsed = _parse_member_response(result.text)
         if parsed is None:
             questions = _member_questions(result.text)
@@ -533,10 +560,7 @@ def run_board(
                     f"{member}: response did not parse as JSON with view/risks/recommendation"
                 )
             continue
-        sent = dict(sent_notes or {})
-        sent.update(_kpi_note_bodies(member_data.get(member, "")))
-        parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
-        assessments.append(MemberAssessment(member=member, **parsed))
+        assessments.append(_assessment(member, parsed))
 
     if len(assessments) < 2:
         return _log(BoardResult(
