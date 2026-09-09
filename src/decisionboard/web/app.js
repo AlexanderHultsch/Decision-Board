@@ -137,9 +137,10 @@
     const status = config.knowledge_status;
     chip.className = "chip";
     if (!status.configured) { chip.classList.add("none"); chip.textContent = "No knowledge source"; }
-    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes · ${config.vault_path}${config.project ? ` · ${config.project}` : ""}`; }
+    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes${config.project ? ` · ${config.project}` : ""}`; }
     else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
-    chip.title = status.error || config.vault_path || "Set a vault folder in Options";
+    // The path is a tooltip, not a label (9 September 2026): hover to see it.
+    chip.title = status.error || (config.vault_path ? `Knowledge source: ${config.vault_path}` : "Set a vault folder in Options");
     const hint = $("home-hint");
     if (!config.model) hint.innerHTML = '<span class="error">No model configured. Open Options.</span>';
     else if (!status.configured) hint.textContent = "No knowledge source set. The board answers from your question alone.";
