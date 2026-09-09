@@ -369,3 +369,51 @@ class TestFirstListedModel(unittest.TestCase):
 
     def test_nothing_listed_gives_nothing(self):
         self.assertEqual(setup_wizard._first_listed_model(""), "")
+
+
+class TestMovedFolders(unittest.TestCase):
+    """A moved folder tree leaves every saved absolute path pointing at
+    nothing; the wizard must forget those, not propose them."""
+
+    def test_stale_paths_are_dropped_and_live_ones_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            live_vault = Path(tmp) / "AI" / "Obsidian"
+            live_vault.mkdir(parents=True)
+            live_file = Path(tmp) / "AI" / "OpenCode" / "opencode.json"
+            live_file.parent.mkdir(parents=True)
+            live_file.write_text("{}", encoding="utf-8")
+            config = {
+                "knowledge": {"vault_path": str(live_vault), "roles_folder": str(Path(tmp) / "old" / "Roles")},
+                "provider": {"opencode": {"config_file": str(live_file)}},
+            }
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault=None, model=None, run_test=False, out=out)
+            wizard.drop_stale_paths(config)
+        self.assertEqual(config["knowledge"]["vault_path"], str(live_vault))
+        self.assertEqual(config["provider"]["opencode"]["config_file"], str(live_file))
+        self.assertEqual(config["knowledge"]["roles_folder"], "")
+        self.assertIn("roles folder no longer at", out.getvalue())
+
+    def test_a_stale_audit_folder_moves_back_into_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / "config.local.json"
+            local.write_text(json.dumps({"runtime": {"audit_folder": "/gone/old/path/audit"},
+                                         "provider": {"models": {"board": "x/y"}}}), encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(setup_wizard, "LOCAL_CONFIG", local), \
+                 mock.patch.object(setup_wizard.shutil, "which", lambda name: None):
+                wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=False,
+                                             out=out, profile="private")
+                wizard.run()
+            config = json.loads(local.read_text(encoding="utf-8"))
+        self.assertEqual(config["runtime"]["audit_folder"], str(setup_wizard.REPO_ROOT / "audit"))
+
+    def test_a_stale_company_file_is_not_offered_as_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault="", model=None, run_test=False,
+                                         out=out, profile="company")
+            with mock.patch.object(wizard, "find_opencode_config", lambda: ""):
+                result = wizard.step_opencode_config(str(Path(tmp) / "gone" / "opencode.json"))
+        self.assertEqual(result, "")
+        self.assertTrue(any("without an opencode.json" in f for f in wizard.failures))

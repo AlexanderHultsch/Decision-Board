@@ -276,9 +276,13 @@ class Wizard:
         else:
             config = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
             self.ok(f"created from {EXAMPLE_CONFIG.name}.")
+        self.drop_stale_paths(config)
         config.setdefault("storage", {})["pc_name"] = os.environ.get("COMPUTERNAME") or platform.node()
         runtime = config.setdefault("runtime", {})
-        if not runtime.get("audit_folder") or "<you>" in str(runtime.get("audit_folder")):
+        audit = str(runtime.get("audit_folder") or "")
+        # A folder that is gone, or whose parent is gone, was written on a
+        # machine or in a place that no longer exists (folders get moved).
+        if not audit or "<you>" in audit or not Path(audit).parent.is_dir():
             runtime["audit_folder"] = str(REPO_ROOT / "audit")
         knowledge = config.setdefault("knowledge", {})
         knowledge.setdefault("token_budget", 6000)
@@ -374,6 +378,29 @@ class Wizard:
                 return answer
             self.say(f"        '{answer}' is not a model string (needs the form provider/model) - try again.")
 
+    def drop_stale_paths(self, config: dict) -> None:
+        """Configured paths that no longer exist are forgotten, not offered.
+
+        Folders move (8 September 2026: the whole tree moved under an ``AI``
+        folder), and a saved absolute path then points at nothing. Keeping it
+        would make the wizard propose a dead path as the default and fail on
+        it; dropping it makes the wizard ask again, which is what a moved
+        folder needs."""
+        checks = (
+            ("knowledge.vault_path", "knowledge source", False),
+            ("knowledge.roles_folder", "roles folder", False),
+            ("provider.opencode.config_file", "OpenCode configuration", True),
+        )
+        for dotted, label, is_file in checks:
+            value = _get(config, dotted)
+            if not isinstance(value, str) or not value or "<you" in value:
+                continue
+            path = Path(value).expanduser()
+            if path.is_file() if is_file else path.is_dir():
+                continue
+            self.say(f"        {label} no longer at {value} - forgetting it, you will be asked again.")
+            _set(config, dotted, "")
+
     def step_opencode_config(self, current: str) -> str:
         """Where the company-provided ``opencode.json`` lives, so OpenCode
         finds its provider definition from any working directory. In a
@@ -381,7 +408,7 @@ class Wizard:
         if self.opencode_config_arg is not None:
             candidate = self.opencode_config_arg
         else:
-            if "<you>" in current:
+            if "<you>" in current or (current and not Path(current).expanduser().is_file()):
                 current = ""
             found = current or self.find_opencode_config()
             if not self.interactive:
@@ -770,6 +797,25 @@ class Wizard:
             from decisionboard.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
         return 1 if self.failures else 0
+
+
+def _get(config: dict, dotted: str):
+    node = config
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _set(config: dict, dotted: str, value) -> None:
+    parts = dotted.split(".")
+    node = config
+    for part in parts[:-1]:
+        if not isinstance(node.get(part), dict):
+            node[part] = {}
+        node = node[part]
+    node[parts[-1]] = value
 
 
 def _read_json(path: Path) -> dict:
