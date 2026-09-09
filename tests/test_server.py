@@ -112,6 +112,18 @@ class TestServerFlow(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(request, timeout=10)
 
+    def test_project_round_trips_and_the_vault_projects_are_listed(self):
+        (self.vault / "Dual DCDC.md").write_text("---\nkind: project\n---\nThe project.\n", encoding="utf-8")
+        try:
+            status, view = self.call("POST", "/api/config", {"project": "Dual DCDC"})
+            self.assertEqual(status, 200)
+            self.assertEqual(view["project"], "Dual DCDC")
+            self.assertIn("Dual DCDC", view["projects"])
+            self.assertEqual(self.config["knowledge"]["project"], "Dual DCDC")
+        finally:
+            self.call("POST", "/api/config", {"project": ""})
+            (self.vault / "Dual DCDC.md").unlink()
+
     def test_config_is_read_and_written(self):
         status, view = self.call("GET", "/api/config")
         self.assertEqual(status, 200)

@@ -96,3 +96,9 @@ whatever the question, and is never part of the ranked selection. The
 program states the note's age above it and marks it when it is stale
 (`knowledge.kpi_stale_days`, default 30), so a member can quote the date
 with the number. There is deliberately no "KPI" board member.
+
+One vault can serve several projects: a KPI note (or any note) that belongs
+to one project says so with `projects: [<project>]`, and `knowledge.project`
+in the configuration, chosen in Options, names the project every question
+is about. Only that project's notes and the notes without a `projects`
+property reach the board.

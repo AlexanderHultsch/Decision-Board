@@ -188,6 +188,8 @@ class BoardServer:
         return {
             "config_path": str(self.config_path) if self.config_path else None,
             "vault_path": vault_path or "",
+            "project": knowledge_mod.active_project(self.config) or "",
+            "projects": knowledge_mod.list_projects(self.config),
             "token_budget": _get(self.config, "knowledge.token_budget", knowledge_mod.DEFAULT_TOKEN_BUDGET),
             "model": _get(self.config, "provider.models.board", "") or "",
             "token_limit": _get(self.config, "provider.token_limits.board"),
@@ -236,6 +238,7 @@ class BoardServer:
     def update_config(self, changes: dict[str, Any]) -> dict[str, Any]:
         mapping = {
             "vault_path": ("knowledge.vault_path", str),
+            "project": ("knowledge.project", str),
             "token_budget": ("knowledge.token_budget", int),
             "model": ("provider.models.board", str),
             "token_limit": ("provider.token_limits.board", lambda v: None if v in ("", None) else int(v)),
@@ -311,6 +314,7 @@ class BoardServer:
             session.members = {member: "pending" for member in board.profiles}
             session.knowledge = {
                 "vault_path": str(selection.vault_path) if selection.vault_path else None,
+                "project": selection.project or "",
                 "selected": len(selection.notes),
                 "total": selection.total_notes,
                 "tokens": selection.tokens,

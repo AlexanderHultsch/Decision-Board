@@ -56,11 +56,13 @@ class Note:
     body: str               # full file text, front matter included
     kind: str = ""          # front matter ``kind``: "kpi" marks a KPI data note
     member: tuple[str, ...] = ()   # front matter ``affected_swimlanes`` (``member`` still accepted): who the note is attached to
+    projects: tuple[str, ...] = ()  # front matter ``projects``: which projects the note belongs to; empty means all
 
 
 @dataclass
 class KnowledgeSelection:
     vault_path: Path | None
+    project: str | None = None                            # the project the notes were filtered to
     notes: list[Note] = field(default_factory=list)      # selected, in rank order
     total_notes: int = 0
     tokens: int = 0                                       # estimate for ``text``
@@ -136,8 +138,17 @@ def _load_note(vault: Path, path: Path) -> Note:
     if isinstance(lead, str) and lead.strip() and lead.strip() not in members:
         members.insert(0, lead.strip())     # the lead is affected by definition
     members = tuple(members)
+    # ``projects`` (decided 9 September 2026): a page that belongs to one or
+    # more projects lists them; a page without the property is common to
+    # every project (the process, the roles, the guide). ``project`` is read
+    # as well for a page written with the singular.
+    projects_raw = meta.get("projects", meta.get("project", ()))
+    if isinstance(projects_raw, str):
+        projects = tuple(p.strip() for p in projects_raw.split(",") if p.strip())
+    else:
+        projects = tuple(str(p).strip() for p in projects_raw if str(p).strip())
     return Note(path=path, relative=relative, title=title, tags=tags, body=body,
-                kind=str(kind).lower(), member=members)
+                kind=str(kind).lower(), member=members, projects=projects)
 
 
 def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ()) -> list[Note]:
@@ -167,6 +178,51 @@ def load_vault(vault_path: Path | str, *, skip_subfolders: tuple[str, ...] = ())
     except OSError as exc:
         raise KnowledgeUnavailable(f"knowledge source could not be read: {vault} ({exc})") from exc
     return notes
+
+
+def for_project(notes: list[Note], project: str | None) -> list[Note]:
+    """The notes that apply to ``project``: every note without a
+    ``projects`` property (common to all projects) plus those that name it.
+    No active project: every note. Names match case-insensitively."""
+    if not project or not str(project).strip():
+        return list(notes)
+    wanted = str(project).strip().lower()
+    return [n for n in notes if not n.projects or any(p.lower() == wanted for p in n.projects)]
+
+
+def project_names(notes: list[Note]) -> list[str]:
+    """Every project the vault knows, for a project picker: the title of
+    each ``kind: project`` page plus every name a ``projects`` property
+    uses, sorted, deduplicated case-insensitively (first spelling wins)."""
+    seen: dict[str, str] = {}
+    for note in notes:
+        names = [note.title] if note.kind == "project" else []
+        names.extend(note.projects)
+        for name in names:
+            key = name.strip().lower()
+            if key and key not in seen:
+                seen[key] = name.strip()
+    return sorted(seen.values(), key=str.lower)
+
+
+def active_project(config: dict) -> str | None:
+    """``knowledge.project`` when set; the project every question is about."""
+    value = _config_value(config, "knowledge.project")
+    return str(value).strip() if value is not None and str(value).strip() else None
+
+
+def list_projects(config: dict) -> list[str]:
+    """``project_names`` for the configured vault; empty when no vault is
+    configured or it cannot be read (a picker, not a gate)."""
+    vault_path = _config_value(config, "knowledge.vault_path")
+    if not vault_path:
+        return []
+    vault = Path(str(vault_path)).expanduser()
+    try:
+        notes = load_vault(vault, skip_subfolders=_roles_inside(config, vault))
+    except KnowledgeUnavailable:
+        return []
+    return project_names(notes)
 
 
 def query_terms(question: str) -> list[str]:
@@ -248,9 +304,12 @@ def gather(config: dict, question: str) -> KnowledgeSelection:
     if not vault_path:
         return KnowledgeSelection(vault_path=None)
     vault = Path(str(vault_path)).expanduser()
-    notes = [n for n in load_vault(vault, skip_subfolders=_roles_inside(config, vault)) if n.kind != "kpi"]
+    project = active_project(config)
+    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), project)
+             if n.kind != "kpi"]
     selection = select_notes(notes, question, int(budget))
     selection.vault_path = vault
+    selection.project = project
     return selection
 
 
@@ -291,7 +350,9 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
     2026): every note in the vault whose front matter says ``kind: kpi`` and
     lists the member under ``affected_swimlanes`` is attached to that
     member's call, always, whatever the question - the role says which KPI,
-    the network holds the number.
+    the network holds the number. With ``knowledge.project`` set, only the
+    notes of that project (and notes without a ``projects`` property) count,
+    so a second project's gates never reach this project's board.
     Members without a note get no block; the role profile tells them to say
     the target is not in the network yet. Raises ``KnowledgeUnavailable`` as
     ``gather`` does."""
@@ -299,7 +360,8 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
     if not vault_path:
         return {}
     vault = Path(str(vault_path)).expanduser()
-    notes = [n for n in load_vault(vault, skip_subfolders=_roles_inside(config, vault)) if n.kind == "kpi"]
+    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)),
+                                    active_project(config)) if n.kind == "kpi"]
     wanted = {m.lower(): m for m in members}
     stale_days = int(_config_value(config, "knowledge.kpi_stale_days") or KPI_STALE_DAYS)
     day = today or date.today()

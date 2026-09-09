@@ -85,7 +85,7 @@
     const status = config.knowledge_status;
     chip.className = "chip";
     if (!status.configured) { chip.classList.add("none"); chip.textContent = "No knowledge source"; }
-    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes · ${config.vault_path}`; }
+    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes · ${config.vault_path}${config.project ? ` · ${config.project}` : ""}`; }
     else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
     chip.title = status.error || config.vault_path || "Set a vault folder in Options";
     const hint = $("home-hint");
@@ -101,8 +101,20 @@
     renderKnowledgeChip();
   }
 
+  function renderProjectOptions() {
+    const select = $("opt-project");
+    const current = config.project || "";
+    const names = (config.projects || []).slice();
+    if (current && !names.some((n) => n.toLowerCase() === current.toLowerCase())) names.push(current);
+    select.innerHTML = `<option value="">All projects</option>` +
+      names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    select.value = current;
+    if (select.value !== current) select.value = "";
+  }
+
   function openOptions() {
     $("opt-vault").value = config.vault_path || "";
+    renderProjectOptions();
     $("opt-roles").value = config.roles_folder || "";
     $("opt-budget").value = config.token_budget || 6000;
     $("opt-model").value = config.model || "";
@@ -124,6 +136,7 @@
     try {
       config = await api("POST", "/api/config", {
         vault_path: $("opt-vault").value,
+        project: $("opt-project").value,
         roles_folder: $("opt-roles").value,
         token_budget: Number($("opt-budget").value) || 6000,
         model: $("opt-model").value,
@@ -184,6 +197,7 @@
       // Save the folder typed above first, so the examples land where the user said.
       if ($("opt-roles").value !== (config.roles_folder || "") || $("opt-vault").value !== (config.vault_path || "")) {
         config = await api("POST", "/api/config", { roles_folder: $("opt-roles").value, vault_path: $("opt-vault").value });
+        renderProjectOptions();
       }
       const r = await api("POST", "/api/roles/install");
       config.roles_status = r;
@@ -294,7 +308,7 @@
     const kpi = r.kpi_members || [];
     rolesLine += kpi.length ? ` KPI notes from the vault attached for: ${kpi.join(", ")}.` : " No KPI notes (kind: kpi) in the vault yet.";
     $("confirm-knowledge").textContent = (k && k.vault_path
-      ? `${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
+      ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
       : "No knowledge source configured. ") + rolesLine + ` ${r.count + 1} model calls follow.`;
     show("confirm");
   }

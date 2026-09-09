@@ -33,7 +33,7 @@ from typing import Any, Callable
 from .agent.prompts import load_prompt
 from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
 from .audit import log_run
-from .knowledge import kpi_notes
+from .knowledge import active_project, kpi_notes
 from .roles import Board, RoleProfile, load_board
 
 
@@ -79,7 +79,7 @@ class BoardConversation:
 
 def _member_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str,
-    role: RoleProfile | None = None, conduct: str = "", kpi_data: str = "",
+    role: RoleProfile | None = None, conduct: str = "", kpi_data: str = "", project: str = "",
 ) -> str:
     """The prompt for one member's call.
 
@@ -95,6 +95,11 @@ def _member_prompt(
         "",
         f"Member: {member}",
     ]
+    if project:
+        lines += [
+            f"Project: {project}. This question belongs to this project. The knowledge and KPI "
+            "data below were selected for it; pages of other projects were left out.",
+        ]
     if conduct:
         lines += ["", "## Board member conduct (section 3.4, the same for every member)", "", conduct]
     if role is not None and role.body:
@@ -275,6 +280,7 @@ def run_board(
         # The KPI data each member is judged against, attached deterministically
         # (AP-1) whatever the question - never left to the ranked selection.
         member_data = kpi_notes(config, members)
+    project = active_project(config) or ""
     audit_folder = _get(config, "runtime.audit_folder")
     pc_name = _get(config, "storage.pc_name", "")
 
@@ -311,7 +317,7 @@ def run_board(
     # produced one yet when they are submitted.
     prompts = [
         _member_prompt(topic, context, options, constraints, member, roles[member], conduct,
-                       member_data.get(member, ""))
+                       member_data.get(member, ""), project)
         for member in members
     ]
 

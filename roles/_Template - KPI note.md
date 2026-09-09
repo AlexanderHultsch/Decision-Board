@@ -13,9 +13,14 @@ table: numbers and dates, no prose.
 "updated" is read by the program: it tells each member how old the note is
 and marks it when it is stale, so an answer can never quote a number
 without its age.
+
+"projects" names the project(s) the numbers belong to. With a project
+chosen in Options (knowledge.project), only the notes of that project
+reach the board; a note without "projects" is common to every project.
 -->
 ---
 kind: kpi
+projects: [Dual DCDC]
 affected_swimlanes: [Hardware]
 baseline: MG0
 updated: 2026-09-09
