@@ -12,9 +12,21 @@ your vault, any folder whose name starts with "Roles" (`Roles`,
 
 | File | What it is |
 |---|---|
-| `_Board member conduct.md` | `kind: conduct`. What is the same for every member: character, how to answer, how to speak for all the roles and responsibilities under one's wing. Prepended to every member's profile on every call. |
+| `_Board member conduct.md` | `kind: conduct`. How every member behaves: speaking for all its roles, aligning with its KPIs, checking the knowledge network first, character, how to answer. |
+| `_Programme context.md` | `kind: conduct`. The facts of your programme: dates, what is fixed, how to weigh a trade-off, standing decisions, where the facts live. Fill it in. |
 | `_Template - one member.md` | `kind: template`. The shape of a member note, with the optional keys. Never a member itself. |
+| `_Template - member addendum.md` | `kind: template`. The shape of an addendum: a second file for a member whose official description must not be edited. |
 | `examples/` | Real, complete member notes: the eight swim lanes of one programme, as examples of the shape. Not read by the board unless you point the roles folder at them. |
+
+**Every** note marked `kind: conduct` is prepended to every member's
+profile, in file-name order, so common ground can be split across as many
+files as you like.
+
+**A member may be defined by more than one file.** Files naming the same
+member are merged in file-name order, the first one keeping identity, title,
+icon and order. That is how an official role description stays untouched
+while an addendum adds what the board needs: see
+`_Template - member addendum.md`.
 
 Notes whose name starts with `_`, or whose front matter says `kind:
 conduct` or `kind: template`, are never members. A member note that has a

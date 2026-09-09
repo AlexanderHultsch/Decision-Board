@@ -587,9 +587,9 @@ class Wizard:
         else:
             self.say(f"        {folder} defines {len(members)} member(s) with content; a board needs at least {roles_mod.MIN_MEMBERS}.")
             question = "Add the generic conduct note and a profile template (nothing is overwritten)?"
-        self.say("        A profile is one member's roles and responsibilities - one note per member, or one")
-        self.say("        note with several members - edited in Obsidian, read on every run. The conduct note")
-        self.say("        holds what is the same for every member: character, how to answer.")
+        self.say("        A profile is one member's roles and responsibilities - one note per member -")
+        self.say("        edited in Obsidian and read on every run. The common notes hold what applies to")
+        self.say("        every member: how to behave, and the programme context to answer against.")
         if self.confirm(question, True):
             with_examples = self.confirm(
                 "Also copy the example board in (nine swim-lane profiles of a programme, to edit or delete)?", True)

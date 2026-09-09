@@ -160,9 +160,10 @@
     }
     let text = `Board of ${r.count}: ${r.members.join(", ")} - from ${r.folder}.`;
     if (r.skipped && r.skipped.length) text += ` Not on the board: ${r.skipped.map((x) => `${x.member} (${x.reason})`).join("; ")}.`;
-    text += r.conduct ? ` Conduct note: ${r.conduct}.` : " No conduct note (kind: conduct) in the folder.";
+    const conduct = r.conduct || [];
+    text += conduct.length ? ` Common note(s): ${conduct.join(", ")}.` : " No common note (kind: conduct) in the folder.";
     el.textContent = text;
-    $("btn-install-roles").hidden = !!r.conduct;
+    $("btn-install-roles").hidden = conduct.length > 0;
   }
 
   async function browseRoles() {

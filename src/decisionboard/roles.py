@@ -14,9 +14,19 @@ repository ships no member profiles, only the generic conduct note and a
 template (``roles/``), which the wizard installs into the folder.
 
 **What is the same for every member** - character, how to answer, how to
-treat the roles under one's responsibility - is one note in the same
-folder, ``kind: conduct`` in its front matter (installed as
-``_Board member conduct.md``). It is prepended to every member's profile.
+treat the roles under one's responsibility - is in the notes marked
+``kind: conduct`` in their front matter (installed as
+``_Board member conduct.md`` and ``_Programme context.md``). Every such
+note is prepended to every member's profile, in file-name order, so common
+ground can be split across several files.
+
+**A member may be defined by more than one file.** Files naming the same
+member are merged: an official role description can stay exactly as the
+organisation wrote it, and a second note - an addendum - adds what the board
+needs and the official document does not carry. Identity (title, icon,
+colour, order) comes from the file that carries the role headings, or from
+the one not marked ``kind: addendum``, never from whichever file happens to
+sort first.
 Notes whose name starts with ``_`` or whose front matter says
 ``kind: template`` are never members. A member whose profile has a heading
 and nothing else is *not filled yet*: it is left off the board and reported,
@@ -47,7 +57,9 @@ from .knowledge import _front_matter
 DEFAULT_SUBFOLDER = "Roles"
 SUPPORT_DIR = Path(__file__).resolve().parents[2] / "roles"
 CONDUCT_NAME = "_Board member conduct.md"
+CONTEXT_NAME = "_Programme context.md"
 TEMPLATE_NAME = "_Template - one member.md"
+ADDENDUM_TEMPLATE_NAME = "_Template - member addendum.md"
 MIN_MEMBERS = 2
 _MIN_BODY_CHARS = 40   # below this a profile is "not filled yet"
 
@@ -85,7 +97,7 @@ class RolesUnavailable(RuntimeError):
 class Board:
     profiles: dict[str, "RoleProfile"]
     conduct: str                       # generic text prepended to every profile ("" if none)
-    conduct_path: Path | None
+    conduct_paths: list[Path]          # the notes it came from, in order
     skipped: list[tuple[str, str]]     # (member, reason) - e.g. not filled yet
     folder: Path
     source: str
@@ -112,6 +124,7 @@ class RoleProfile:
     order: int = 999
     level: int = DEFAULT_LEVEL           # of the highest-ranked role
     roles: tuple[Role, ...] = ()         # every role in the swim lane, by rank
+    addendum: bool = False               # a companion file, never the identity
 
 
 def _strip_front_matter(text: str) -> str:
@@ -244,12 +257,14 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
         merged["title"] = roles[0].name if roles else member
     if not _meta_str(merged, "perspective") and roles:
         merged["perspective"] = _first_paragraph_line(roles[0].body)
+    is_addendum = _meta_str(meta, "kind").lower() == "addendum"
     # what the member reads: metadata lines stripped, roles in rank order
     if roles:
         clean_body = "\n\n".join(f"# {role.name}\n\n{role.body}".strip() for role in roles)
     else:
         clean_body = body.strip()
-    return [_make_profile(member, merged, clean_body, source, path, tuple(roles))]
+    profile = _make_profile(member, merged, clean_body, source, path, tuple(roles))
+    return [RoleProfile(**{**profile.__dict__, "addendum": is_addendum})]
 
 
 def detect_folder(vault: Path) -> Path | None:
@@ -302,32 +317,32 @@ def _filled(profile: RoleProfile) -> bool:
 
 
 def load_folder(folder: Path, source: str) -> tuple[list[RoleProfile], list[tuple[str, str]]]:
+    """Every profile the folder defines, unmerged and unfiltered. Whether a
+    member is filled is decided after merging (``load_board``): an official
+    role description and its addendum can each be short on their own."""
     profiles: list[RoleProfile] = []
-    skipped: list[tuple[str, str]] = []
     for path in sorted(folder.glob("*.md")):
         if not _is_member_file(path) or _kind(path) in ("conduct", "template"):
             continue
         try:
-            for profile in parse_file(path, source):
-                if _filled(profile):
-                    profiles.append(profile)
-                else:
-                    skipped.append((profile.member, f"not filled yet ({path.name})"))
+            profiles.extend(parse_file(path, source))
         except OSError as exc:
             raise RolesUnavailable(f"role profile could not be read: {path} ({exc})") from exc
-    return profiles, skipped
+    return profiles, []
 
 
-def load_conduct(folder: Path) -> tuple[str, Path | None]:
-    """The generic conduct note: front matter ``kind: conduct``, else the
-    file named ``CONDUCT_NAME``. Its body, front matter stripped."""
+def load_conduct(folder: Path) -> tuple[str, list[Path]]:
+    """Every conduct note - front matter ``kind: conduct``, else the file
+    named ``CONDUCT_NAME`` - concatenated in file-name order, front matter
+    stripped. Several notes are allowed so that behaviour and programme
+    context can live in separate files."""
     candidates = [p for p in sorted(folder.glob("*.md")) if p.is_file() and _kind(p) == "conduct"]
     if not candidates and (folder / CONDUCT_NAME).is_file():
         candidates = [folder / CONDUCT_NAME]
     if not candidates:
-        return "", None
-    path = candidates[0]
-    return _strip_front_matter(path.read_text(encoding="utf-8", errors="replace")).strip(), path
+        return "", []
+    texts = [_strip_front_matter(path.read_text(encoding="utf-8", errors="replace")).strip() for path in candidates]
+    return "\n\n".join(text for text in texts if text), candidates
 
 
 def load_board(config: dict) -> Board:
@@ -340,29 +355,64 @@ def load_board(config: dict) -> Board:
         raise RolesUnavailable("no roles folder chosen - the board has no members")
     if not folder.is_dir():
         raise RolesUnavailable(f"roles folder not found: {folder}")
-    parsed, skipped = load_folder(folder, source)
-    ordered = sorted(enumerate(parsed), key=lambda item: (item[1].order, item[0]))
+    parsed, _ = load_folder(folder, source)
+    # A companion file must never take a member's identity just because its
+    # name sorts first: files marked as an addendum, and files with no role
+    # heading of their own, are merged after the ones that have both.
+    def rank(item: tuple[int, RoleProfile]) -> tuple[int, int, int]:
+        index, profile = item
+        secondary = 1 if (profile.addendum or not profile.roles) else 0
+        return (secondary, profile.order, index)
+
+    ordered = sorted(enumerate(parsed), key=rank)
     profiles: dict[str, RoleProfile] = {}
+    skipped: list[tuple[str, str]] = []
     for index, (_, profile) in enumerate(ordered):
         if profile.member in profiles:
-            continue   # first definition wins; a duplicate name is one member
+            # An addendum: a second file for a member the folder already
+            # defines. Its text is appended, so an official role description
+            # can stay untouched while a companion note adds what the board
+            # needs (decided 9 September 2026).
+            profiles[profile.member] = _merge(profiles[profile.member], profile)
+            continue
         color = profile.color or PALETTE[index % len(PALETTE)]
         short = profile.short or _short_name(profile.title)
         profiles[profile.member] = RoleProfile(**{**profile.__dict__, "color": color, "short": short})
+
+    # A member is on the board once its files together say something. A
+    # heading with nothing under it is not an opinion.
+    for member in [m for m, profile in profiles.items() if not _filled(profile)]:
+        files = ", ".join(sorted({p.name for p in [profiles[member].path] if p})) or "no file"
+        skipped.append((member, f"not filled yet ({files})"))
+        del profiles[member]
+
     if len(profiles) < MIN_MEMBERS:
         detail = f"; not filled yet: {', '.join(m for m, _ in skipped)}" if skipped else ""
         raise RolesUnavailable(
             f"roles folder defines {len(profiles)} filled member profile(s), at least {MIN_MEMBERS} "
             f"are needed: {folder}{detail}"
         )
-    conduct, conduct_path = load_conduct(folder)
-    return Board(profiles=profiles, conduct=conduct, conduct_path=conduct_path,
+    conduct, conduct_paths = load_conduct(folder)
+    return Board(profiles=profiles, conduct=conduct, conduct_paths=conduct_paths,
                  skipped=skipped, folder=folder, source=source)
 
 
 def load_roles(config: dict) -> dict[str, RoleProfile]:
     """The members only - see ``load_board``."""
     return load_board(config).profiles
+
+
+def _merge(first: RoleProfile, extra: RoleProfile) -> RoleProfile:
+    """The first file keeps identity and metadata; the later one adds text
+    and any roles it declares."""
+    roles = tuple(sorted(first.roles + extra.roles, key=lambda role: role.level))
+    return RoleProfile(**{
+        **first.__dict__,
+        "body": f"{first.body}\n\n{extra.body}".strip(),
+        "roles": roles,
+        "perspective": first.perspective or extra.perspective,
+        "short": first.short or extra.short,
+    })
 
 
 def _short_name(title: str) -> str:
@@ -388,7 +438,7 @@ def summary(board: Board) -> dict[str, object]:
         "source": board.source,
         "folder": str(board.folder),
         "files": sorted({p.path.name for p in profiles.values() if p.path is not None}),
-        "conduct": board.conduct_path.name if board.conduct_path else None,
+        "conduct": [path.name for path in board.conduct_paths],
         "skipped": [{"member": member, "reason": reason} for member, reason in board.skipped],
     }
 
@@ -404,10 +454,19 @@ def member_meta(profiles: dict[str, RoleProfile]) -> list[dict[str, object]]:
 
 
 def members_in(folder: Path) -> list[str]:
-    """Filled members the folder defines (nothing about the conduct note)."""
+    """Filled members the folder defines (nothing about the common notes)."""
     if not folder.is_dir():
         return []
-    return [profile.member for profile in load_folder(folder, "configured")[0]]
+    try:
+        return list(load_board({"knowledge": {"roles_folder": str(folder)}}).profiles)
+    except RolesUnavailable:
+        # Below the minimum is not a board, but the caller still wants to
+        # know what is there.
+        parsed, _ = load_folder(folder, "configured")
+        merged: dict[str, RoleProfile] = {}
+        for profile in parsed:
+            merged[profile.member] = _merge(merged[profile.member], profile) if profile.member in merged else profile
+        return [member for member, profile in merged.items() if _filled(profile)]
 
 
 EXAMPLES_DIR = SUPPORT_DIR / "examples"
@@ -419,7 +478,7 @@ def install_support_files(folder: Path, *, examples: bool = False) -> list[Path]
     (one programme's swim lanes) as well. Nothing is ever overwritten."""
     folder.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    sources = [SUPPORT_DIR / CONDUCT_NAME, SUPPORT_DIR / TEMPLATE_NAME]
+    sources = [SUPPORT_DIR / name for name in (CONDUCT_NAME, CONTEXT_NAME, TEMPLATE_NAME, ADDENDUM_TEMPLATE_NAME)]
     if examples and EXAMPLES_DIR.is_dir():
         sources += sorted(EXAMPLES_DIR.glob("*.md"))
     for source in sources:

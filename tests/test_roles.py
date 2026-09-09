@@ -34,7 +34,8 @@ def _single(folder: Path, member: str, body: str = "", **meta) -> Path:
 class TestNothingShipped(unittest.TestCase):
     def test_the_repository_ships_no_members_only_support_files(self):
         names = sorted(p.name for p in roles.SUPPORT_DIR.glob("*.md"))
-        self.assertEqual(names, sorted(["README.md", roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
+        self.assertEqual(names, sorted(["README.md", roles.CONDUCT_NAME, roles.CONTEXT_NAME,
+                                        roles.TEMPLATE_NAME, roles.ADDENDUM_TEMPLATE_NAME]))
         self.assertEqual(roles.members_in(roles.SUPPORT_DIR), [])
 
     def test_no_folder_means_no_board(self):
@@ -55,7 +56,7 @@ class TestNothingShipped(unittest.TestCase):
             b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
         self.assertEqual(tuple(b.profiles), CLASSIC)
         self.assertIn("Speak for every role", b.conduct)
-        self.assertEqual(b.conduct_path.name, roles.CONDUCT_NAME)
+        self.assertEqual([p.name for p in b.conduct_paths], [roles.CONDUCT_NAME])
         self.assertEqual(b.skipped, [])
 
 
@@ -153,7 +154,8 @@ class TestLoadRoles(unittest.TestCase):
             again = roles.install_support_files(folder)
             kept = (folder / roles.CONDUCT_NAME).read_text(encoding="utf-8")
             members = roles.members_in(folder)
-        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.TEMPLATE_NAME]))
+        self.assertEqual(names, sorted([roles.CONDUCT_NAME, roles.CONTEXT_NAME,
+                                        roles.TEMPLATE_NAME, roles.ADDENDUM_TEMPLATE_NAME]))
         self.assertEqual(again, [])
         self.assertEqual(kept, "mine")
         self.assertEqual(members, [])
@@ -331,3 +333,66 @@ class TestWizardRoles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCommonNotesAndAddenda(unittest.TestCase):
+    """Common ground may be split across several notes, and an official role
+    description may be extended without being edited (9 September 2026)."""
+
+    def test_every_conduct_note_is_prepended_in_name_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = make_roles(Path(tmp) / "r", ("Legal", "Customer"))
+            (folder / "_Programme context.md").write_text(
+                "---\nkind: conduct\n---\n# Context\n\nStart of production is March.\n", encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual([p.name for p in b.conduct_paths],
+                         ["_Board member conduct.md", "_Programme context.md"])
+        self.assertIn("Sceptical by default", b.conduct)
+        self.assertIn("Start of production is March.", b.conduct)
+        self.assertEqual(roles.summary(b)["conduct"], ["_Board member conduct.md", "_Programme context.md"])
+
+    def test_an_addendum_extends_a_member_without_touching_the_official_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "r"
+            official = folder / "R&R Hardware.md"
+            folder.mkdir(parents=True)
+            official.write_text("# Project Manager HW\nlevel: 2\nicon: chip\n\n"
+                                "Owns the hardware swim lane end to end, from concept to PPAP.\n", encoding="utf-8")
+            (folder / "Hardware addendum.md").write_text(
+                "---\nmember: Hardware\nkind: addendum\n---\n## What I protect\n\nThe SOP date, before cost.\n", encoding="utf-8")
+            _single(folder, "Legal")
+            before = official.read_text(encoding="utf-8")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+            after = official.read_text(encoding="utf-8")
+        self.assertEqual(before, after)                       # official file untouched
+        self.assertEqual(sorted(b.profiles), ["Hardware", "Legal"])
+        hardware = b.profiles["Hardware"]
+        self.assertEqual(hardware.title, "Project Manager HW")   # identity from the official file
+        self.assertEqual(hardware.icon, "chip")
+        self.assertIn("Owns the hardware swim lane", hardware.body)
+        self.assertIn("The SOP date, before cost.", hardware.body)
+        self.assertLess(hardware.body.index("Owns the hardware"), hardware.body.index("The SOP date"))
+
+    def test_an_addendum_named_before_the_official_file_still_does_not_take_over(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "r"
+            folder.mkdir(parents=True)
+            # "A addendum.md" sorts first; identity must still come from the
+            # official file, which carries the role heading.
+            (folder / "A addendum.md").write_text(
+                "---\nmember: Hardware\n---\nThe SOP date is protected before cost, always.\n", encoding="utf-8")
+            (folder / "Z R&R Hardware.md").write_text(
+                "---\nmember: Hardware\n---\n# Project Manager HW\nicon: chip\n\n"
+                "Owns the hardware swim lane end to end, from concept to PPAP.\n", encoding="utf-8")
+            _single(folder, "Legal")
+            b = roles.load_board({"knowledge": {"roles_folder": str(folder)}})
+        self.assertEqual(b.profiles["Hardware"].title, "Project Manager HW")
+        self.assertEqual(b.profiles["Hardware"].icon, "chip")
+
+    def test_the_shipped_conduct_note_covers_kpis_and_the_knowledge_network(self):
+        text = (roles.SUPPORT_DIR / roles.CONDUCT_NAME).read_text(encoding="utf-8")
+        self.assertIn("Align with the KPIs", text)
+        self.assertIn("Check the knowledge network first", text)
+        self.assertIn("Obsidian", text)
+        for name in ("Hardware", "Software", "Finance"):
+            self.assertNotIn(name, text)   # nothing member-specific in a common note
