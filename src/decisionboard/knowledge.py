@@ -59,11 +59,27 @@ class Note:
     projects: tuple[str, ...] = ()  # front matter ``projects``: which projects the note belongs to; empty means all
 
 
+@dataclass(frozen=True)
+class Section:
+    """One part of a note, split at its headings (decided 9 September 2026:
+    the budget buys the sections that match the question, not whole
+    pages). A short note is one section."""
+    note: Note
+    heading: str          # the heading line without its hashes; "" for the opening part or a whole note
+    body: str             # the section's text, heading line included
+
+    @property
+    def relative(self) -> str:
+        return self.note.relative
+
+
 @dataclass
 class KnowledgeSelection:
     vault_path: Path | None
     project: str | None = None                            # the project the notes were filtered to
     notes: list[Note] = field(default_factory=list)      # selected, in rank order
+    sections: list[Section] = field(default_factory=list)   # the sections sent, in rank order
+    sent: dict[str, str] = field(default_factory=dict)   # note path -> the text of it that was sent
     total_notes: int = 0
     tokens: int = 0                                       # estimate for ``text``
     truncated: bool = False                               # a note was cut to fit
@@ -75,7 +91,11 @@ class KnowledgeSelection:
 
 
 def estimate_tokens(text: str) -> int:
-    return (len(text) + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
+    return estimate_tokens_for(len(text))
+
+
+def estimate_tokens_for(chars: int) -> int:
+    return (chars + _CHARS_PER_TOKEN - 1) // _CHARS_PER_TOKEN
 
 
 def _front_matter(text: str) -> dict[str, str | list[str]]:
@@ -227,6 +247,134 @@ def list_projects(config: dict) -> list[str]:
     return project_names(notes)
 
 
+_SECTION_MIN_CHARS = 1200     # a note shorter than this is one section
+_SECTION_HEADING = re.compile(r"^(#{1,3})\s+(.*)$")
+
+
+def split_sections(note: Note) -> list[Section]:
+    """The note split at its level-one to level-three headings. The front
+    matter stays with the opening part. Each section starts with a line
+    naming the note and the heading, so a section read alone still says
+    where it belongs."""
+    text = note.body.strip()
+    if len(text) < _SECTION_MIN_CHARS:
+        return [Section(note=note, heading="", body=text)]
+    lines = text.splitlines()
+    sections: list[Section] = []
+    current: list[str] = []
+    heading = ""
+    content_seen = False          # anything beyond the front matter in ``current``
+    in_front_matter = lines[:1] == ["---"]
+    for index, line in enumerate(lines):
+        if in_front_matter:
+            current.append(line)
+            if index > 0 and line.strip() == "---":
+                in_front_matter = False
+            continue
+        match = _SECTION_HEADING.match(line)
+        if match and content_seen:
+            sections.append(Section(note=note, heading=heading, body="\n".join(current).strip()))
+            current, heading, content_seen = [], match.group(2).strip(), False
+        elif match:
+            heading = match.group(2).strip()
+        current.append(line)
+        if line.strip():
+            content_seen = True
+    if any(l.strip() for l in current):
+        sections.append(Section(note=note, heading=heading, body="\n".join(current).strip()))
+    return sections or [Section(note=note, heading="", body=text)]
+
+
+def score_section(section: Section, terms: list[str]) -> int:
+    if not terms:
+        return 0
+    note = section.note
+    title = note.title.lower()
+    name = note.path.stem.lower()
+    heading = section.heading.lower()
+    tags = " ".join(note.tags).lower()
+    body = section.body.lower()
+    score = 0
+    for term in terms:
+        if term in title or term in name:
+            score += 5
+        if heading and term in heading:
+            score += 4
+        if term in tags:
+            score += 5
+        score += min(body.count(term), 5)
+    return score
+
+
+def select_sections(
+    notes: list[Note], question: str, token_budget: int = DEFAULT_TOKEN_BUDGET,
+    *, extra_terms: list[str] | tuple[str, ...] = (), pinned: list[Note] | None = None,
+) -> KnowledgeSelection:
+    """Rank every section of every note against the question - and, for a
+    member's own block, against ``extra_terms`` (the member's targets,
+    process tasks and title) - and pack the best into ``token_budget``.
+    ``pinned`` notes (the project page) go first whatever their score,
+    within a share of the budget. Everything fits: everything is sent. A
+    section too big for what is left is cut to fit, once."""
+    terms = query_terms(question)
+    extra = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
+    all_sections = [section for note in notes for section in split_sections(note)]
+    pinned_paths = {n.relative for n in (pinned or [])}
+
+    def rank(section: Section) -> tuple:
+        pin = 0 if section.relative in pinned_paths else 1
+        score = score_section(section, terms) * 2 + score_section(section, extra)
+        mtime = -section.note.path.stat().st_mtime if section.note.path.exists() else 0
+        return (pin, -score, mtime, section.relative)
+
+    ranked = sorted(all_sections, key=rank)
+    selection = KnowledgeSelection(vault_path=None, total_notes=len(notes))
+    if not notes:
+        return selection
+    remaining = token_budget - estimate_tokens("## Knowledge from the vault\n\n")
+    pinned_share = token_budget // 4
+    chosen: list[tuple[Section, str]] = []
+    pinned_used = 0
+    for section in ranked:
+        label = f"### {section.relative}" + (f" - {section.heading}" if section.heading else "")
+        chunk = f"{label}\n{section.body}\n\n"
+        cost = estimate_tokens(chunk)
+        if section.relative in pinned_paths and pinned_used + cost > pinned_share and chosen:
+            continue          # the project page may not eat the whole budget
+        if cost <= remaining:
+            chosen.append((section, chunk))
+            remaining -= cost
+            if section.relative in pinned_paths:
+                pinned_used += cost
+            continue
+        room_chars = max(remaining, 0) * _CHARS_PER_TOKEN - len(label) - 40
+        if room_chars > 200:
+            cut = section.body[:room_chars]
+            chosen.append((section, f"{label}\n{cut}\n[... cut to fit the token budget]\n\n"))
+            selection.truncated = True
+        break
+    # Sections of one note stay together, in the note's own order, under the
+    # note's first appearance in the ranking.
+    order: list[str] = []
+    by_note: dict[str, list[tuple[Section, str]]] = {}
+    for section, chunk in chosen:
+        if section.relative not in by_note:
+            order.append(section.relative)
+            by_note[section.relative] = []
+        by_note[section.relative].append((section, chunk))
+    parts: list[str] = []
+    for relative in order:
+        items = sorted(by_note[relative], key=lambda item: item[0].note.body.find(item[0].body[:60]))
+        note_text = "".join(chunk for _s, chunk in items)
+        parts.append(note_text)
+        selection.notes.append(items[0][0].note)
+        selection.sections.extend(section for section, _c in items)
+        selection.sent[relative] = "".join(section.body + "\n" for section, _c in items)
+    selection.text = ("## Knowledge from the vault\n\n" + "".join(parts)).rstrip() if parts else ""
+    selection.tokens = estimate_tokens(selection.text)
+    return selection
+
+
 def query_terms(question: str) -> list[str]:
     words = re.findall(r"[\w][\w'-]{2,}", question.lower())
     seen: list[str] = []
@@ -257,62 +405,65 @@ def score_note(note: Note, terms: list[str]) -> int:
 def select_notes(
     notes: list[Note], question: str, token_budget: int = DEFAULT_TOKEN_BUDGET
 ) -> KnowledgeSelection:
-    """Rank ``notes`` against ``question`` and pack them into
-    ``token_budget``. Everything fits: everything is sent. Otherwise the
-    best-ranked notes are sent, and the last one is cut to fit if that is
-    the only way to use the remaining budget."""
-    terms = query_terms(question)
-    ranked = sorted(
-        notes,
-        key=lambda note: (-score_note(note, terms), -note.path.stat().st_mtime if note.path.exists() else 0, note.relative),
-    )
-    selection = KnowledgeSelection(vault_path=None, total_notes=len(notes))
-    if not notes:
-        return selection
-
-    header = "## Knowledge from the vault\n\n"
-    parts: list[str] = []
-    remaining = token_budget - estimate_tokens(header)
-    for note in ranked:
-        chunk = f"### {note.relative}\n{note.body.strip()}\n\n"
-        cost = estimate_tokens(chunk)
-        if cost <= remaining:
-            parts.append(chunk)
-            selection.notes.append(note)
-            remaining -= cost
-            continue
-        # Cut this note to what is left, but only if that leaves room for
-        # more than a heading - otherwise stop here.
-        room_chars = max(remaining, 0) * _CHARS_PER_TOKEN - len(f"### {note.relative}\n") - 40
-        if room_chars > 200:
-            cut = note.body.strip()[:room_chars]
-            parts.append(f"### {note.relative}\n{cut}\n[... cut to fit the token budget]\n\n")
-            selection.notes.append(note)
-            selection.truncated = True
-        break
-
-    selection.text = (header + "".join(parts)).rstrip() if parts else ""
-    selection.tokens = estimate_tokens(selection.text)
-    return selection
+    """The selection for one question with no member in view: see
+    ``select_sections``."""
+    return select_sections(notes, question, token_budget)
 
 
-def gather(config: dict, question: str) -> KnowledgeSelection:
-    """The knowledge block for ``question`` under the configured source.
-
-    No source configured: an empty selection, the board runs on the
-    question alone. A source configured but unreadable: ``KnowledgeUnavailable``."""
+def _knowledge_notes(config: dict) -> tuple[Path | None, str | None, list[Note]]:
     vault_path = _config_value(config, "knowledge.vault_path")
-    budget = _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET
     if not vault_path:
-        return KnowledgeSelection(vault_path=None)
+        return None, None, []
     vault = Path(str(vault_path)).expanduser()
     project = active_project(config)
     notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), project)
              if n.kind != "kpi"]
-    selection = select_notes(notes, question, int(budget))
+    return vault, project, notes
+
+
+def _pinned(notes: list[Note], project: str | None) -> list[Note]:
+    """The project page(s): the common core every member receives."""
+    if not project:
+        return []
+    return [n for n in notes if n.kind == "project" and any(p.lower() == project.lower() for p in n.projects)]
+
+
+def gather(config: dict, question: str, *, token_budget: int | None = None) -> KnowledgeSelection:
+    """The knowledge block for ``question`` under the configured source.
+
+    No source configured: an empty selection, the board runs on the
+    question alone. A source configured but unreadable: ``KnowledgeUnavailable``."""
+    vault, project, notes = _knowledge_notes(config)
+    if vault is None:
+        return KnowledgeSelection(vault_path=None)
+    budget = token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET
+    selection = select_sections(notes, question, int(budget), pinned=_pinned(notes, project))
     selection.vault_path = vault
     selection.project = project
     return selection
+
+
+def gather_for_members(
+    config: dict, question: str, member_terms: dict[str, list[str] | tuple[str, ...] | set[str]],
+    *, token_budget: int | None = None,
+) -> dict[str, KnowledgeSelection]:
+    """One knowledge block per member (decided 9 September 2026): the
+    sections ranked by the question and by the member's own terms, so each
+    member receives what concerns it, the project page first for all.
+    The vault is read once. No source configured: empty selections."""
+    vault, project, notes = _knowledge_notes(config)
+    budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
+    result: dict[str, KnowledgeSelection] = {}
+    pinned = _pinned(notes, project)
+    for member, terms in member_terms.items():
+        if vault is None:
+            result[member] = KnowledgeSelection(vault_path=None)
+            continue
+        selection = select_sections(notes, question, budget, extra_terms=tuple(terms), pinned=pinned)
+        selection.vault_path = vault
+        selection.project = project
+        result[member] = selection
+    return result
 
 
 KPI_TOKEN_CAP = 2500       # per member; a KPI note is a table, not a chapter

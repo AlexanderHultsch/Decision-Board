@@ -396,6 +396,7 @@
     const kept = draft().confirm;
     $("in-topic").value = (kept && kept.topic) || inp.topic || "";
     $("in-context").value = kept ? kept.context : (inp.context || "");
+    ["in-topic", "in-context", "in-options", "in-constraints"].forEach((id) => { $(id).addEventListener("input", requestEstimate); });
     $("in-options").value = kept ? kept.options : (inp.options || []).join("\n");
     $("in-constraints").value = kept ? kept.constraints : (inp.constraints || []).join("\n");
     $("confirm-form").oninput = saveConfirmDraft;
@@ -410,15 +411,16 @@
     renderPicks($("confirm-members"), names, ticked);
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
     setMode("run-mode", (kept && kept.mode) || session.mode || "individual");
+    $("budget").value = (kept && kept.budget != null) ? kept.budget : (session.budget != null ? session.budget : (config.token_budget || 6000));
+    $("budget").disabled = !(k && k.vault_path);
     const countLine = () => {
-      const n = picked($("confirm-members")).length;
-      const combined = modeOf("run-mode") === "combined";
-      $("confirm-knowledge").textContent = (k && k.vault_path
-        ? `${k.project ? `Project ${k.project}: ` : ""}${k.selected} note(s) from the vault are appended to the context for every member: ${k.notes.slice(0, 6).join(", ")}${k.notes.length > 6 ? ", …" : ""}. `
-        : "No knowledge source configured. ") + rolesLine + ` ${n} member(s) asked, ${combined ? "1 model call follows (combined)" : `${n + 1} model calls follow`}.`;
+      $("budget-value").textContent = `${fmtNum(Number($("budget").value))} tokens`;
+      $("confirm-knowledge").textContent = (k && k.vault_path ? "" : "No knowledge source configured. ") + rolesLine;
+      requestEstimate();
     };
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", countLine));
     $("run-mode").onchange = () => { countLine(); saveConfirmDraft(); };
+    $("budget").oninput = () => { countLine(); saveConfirmDraft(); };
     countLine();
     show("confirm");
   }
@@ -427,7 +429,35 @@
     saveDraft({ confirm: {
       topic: $("in-topic").value, context: $("in-context").value, options: $("in-options").value,
       constraints: $("in-constraints").value, members: picked($("confirm-members")), mode: modeOf("run-mode"),
+      budget: Number($("budget").value),
     } });
+  }
+
+  // The live estimate: exact calls, "about" tokens, from the server's own
+  // prompt builders. Debounced, and a stale answer never overwrites a newer one.
+  let estimateTimer = null;
+  let estimateSeq = 0;
+  function requestEstimate() {
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(async () => {
+      if (!session || $("screen-confirm").hidden) return;
+      const seq = ++estimateSeq;
+      const members = picked($("confirm-members"));
+      if (!members.length) { $("estimate").textContent = "Tick at least one member."; return; }
+      try {
+        const e = await api("POST", `/api/sessions/${session.id}/estimate`, {
+          members, mode: modeOf("run-mode"), budget: Number($("budget").value),
+          topic: $("in-topic").value, context: $("in-context").value,
+          options: lines($("in-options").value), constraints: lines($("in-constraints").value),
+        });
+        if (seq !== estimateSeq) return;
+        const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} per call learned from ${e.overhead_learned_from} real call(s) of this topic` : `overhead of ${fmtNum(e.overhead_per_call)} per call assumed until the first real call`;
+        $("estimate").innerHTML = `<strong>${e.calls} model call(s)</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong> · ${esc(learned)} · tokens are an estimate, calls are exact`;
+        $("estimate-notes").innerHTML = `<dl>${Object.entries(e.members).map(([m, paths]) => `<dt>${esc(m)}</dt><dd>${paths.length ? paths.map(esc).join(", ") : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
+      } catch (err) {
+        if (seq === estimateSeq) $("estimate").textContent = `No estimate: ${err.message}`;
+      }
+    }, 250);
   }
 
   async function goBack() {
@@ -457,7 +487,7 @@
     const body = {
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
-      members, mode: modeOf("run-mode"),
+      members, mode: modeOf("run-mode"), budget: Number($("budget").value),
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
     catch (err) { showError(err.message); }

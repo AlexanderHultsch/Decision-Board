@@ -91,6 +91,13 @@
 <br><br>In both modes the program checks that every member came back, that each entry names its own measures or tasks, and every citation.</div>
     <p class="eyebrow">Who is asked <span class="muted small">untick a swim lane the topic does not concern</span></p>
     <div id="confirm-members" class="member-picks"></div>
+    <p class="eyebrow">Knowledge per member <span class="muted small">sections from the vault, ranked for the topic and for each member</span></p>
+    <div class="budget-row">
+      <input id="budget" type="range" min="0" max="12000" step="500" value="6000" aria-label="Knowledge tokens per member">
+      <span id="budget-value" class="budget-value">6,000 tokens</span>
+    </div>
+    <p id="estimate" class="estimate muted small">Estimating…</p>
+    <details id="estimate-detail" class="estimate-detail"><summary class="muted small">What each member would receive</summary><div id="estimate-notes"></div></details>
     <p id="confirm-knowledge" class="muted small"></p>
     <div class="row end">
       <button id="btn-back-questions" type="button" class="ghost">Back</button>

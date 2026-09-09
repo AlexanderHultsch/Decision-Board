@@ -326,6 +326,36 @@ class TestServerFlow(unittest.TestCase):
         self.assertEqual(sorted(a["member"] for a in state["turns"][0]["assessments"]), sorted(chosen[:2]))
         self.assertIn("Combined follow-up.", state["turns"][0]["answer"])
 
+    def test_the_estimate_counts_exact_calls_and_learns_the_overhead_from_real_calls(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework the tooling?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        chosen = CLASSIC[:3]
+        status, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "mode": "individual", "budget": 2000})
+        self.assertEqual(status, 200)
+        self.assertEqual(est["calls"], 4)                                  # three members plus the synthesis
+        self.assertEqual(est["overhead_learned_from"], 1)                   # the clarifier call is the only real one so far
+        self.assertEqual(est["overhead_per_call"], 0)                       # the fake reports 1 token in: overhead floored at 0
+        self.assertEqual(sorted(est["members"]), sorted(chosen))
+        self.assertIn("Tooling.md", est["members"][chosen[0]])
+        self.assertGreater(est["tokens_in"], 4 * 1000)                      # four prompts of a few thousand characters
+        status, combined = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "mode": "combined", "budget": 2000})
+        self.assertEqual(combined["calls"], 1)
+        self.assertLess(combined["tokens_in"], est["tokens_in"])
+        status, none = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "budget": 0})
+        self.assertEqual(none["members"][chosen[0]], [])
+        # after a real run the overhead is learned from the recorded calls (the fake reports 1 token in)
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Rework?", "members": chosen, "budget": 2000})
+        state = self.wait_for(sid, lambda s: s["phase"] == "result")
+        self.assertEqual(state["budget"], 2000)
+        self.assertEqual(sorted(state["member_knowledge_paths"]), sorted(chosen))
+        self.call("POST", f"/api/sessions/{sid}/back")
+        status, est2 = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": chosen, "budget": 2000})
+        self.assertGreater(est2["overhead_learned_from"], 1)               # the members and the synthesis were recorded too
+        self.assertEqual(est2["overhead_per_call"], 0)
+
     def test_back_returns_to_the_questions_with_the_answers_kept(self):
         _, state = self.call("POST", "/api/sessions", {"question": "Anything?"})
         sid = state["id"]

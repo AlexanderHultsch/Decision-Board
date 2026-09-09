@@ -115,3 +115,66 @@ class TestGather(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSections(unittest.TestCase):
+    """Decided 9 September 2026: the budget buys sections, not whole pages."""
+
+    def _long_note(self, tmp: Path) -> Path:
+        (tmp / "VPDS_Tasks.md").write_text(
+            "---\nkind: process\n---\n# VPDS tasks\n\nIntro line about the process.\n\n"
+            "## Change Management\n\n" + ("A change request goes to the CCB. " * 40) + "\n\n"
+            "## Project Timing Plan\n\n" + ("The timing plan lives in Jira. " * 40) + "\n\n"
+            "## Manufacturing readiness\n\n" + ("Fixtures and testers for the housing. " * 40) + "\n",
+            encoding="utf-8")
+        return tmp / "VPDS_Tasks.md"
+
+    def test_a_long_note_is_split_at_its_headings_and_a_short_one_stays_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._long_note(Path(tmp))
+            (Path(tmp) / "Short.md").write_text("# Short\n\nOne line.\n", encoding="utf-8")
+            notes = {n.title: n for n in knowledge.load_vault(Path(tmp))}
+            parts = knowledge.split_sections(notes["VPDS_Tasks"])
+            self.assertEqual([p.heading for p in parts], ["VPDS tasks", "Change Management", "Project Timing Plan", "Manufacturing readiness"])
+            self.assertTrue(parts[0].body.startswith("---"))       # the front matter stays with the opening part
+            self.assertEqual(len(knowledge.split_sections(notes["Short"])), 1)
+
+    def test_the_budget_buys_the_matching_section_not_the_whole_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._long_note(Path(tmp))
+            notes = knowledge.load_vault(Path(tmp))
+            selection = knowledge.select_sections(notes, "Can the timing plan absorb the change?", 400)
+        self.assertEqual(len(selection.notes), 1)
+        headings = [s.heading for s in selection.sections]
+        self.assertIn("Project Timing Plan", headings)
+        self.assertNotIn("Manufacturing readiness", headings)
+        self.assertIn("### VPDS_Tasks.md - Project Timing Plan", selection.text)
+        self.assertLessEqual(selection.tokens, 400)
+        self.assertIn("timing plan lives in Jira", selection.sent["VPDS_Tasks.md"])
+        self.assertNotIn("Fixtures and testers", selection.sent["VPDS_Tasks.md"])
+
+    def test_a_member_block_is_ranked_by_the_members_own_terms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._long_note(Path(tmp))
+            notes = knowledge.load_vault(Path(tmp))
+            question = "Should we source now?"          # matches nothing in particular
+            manufacturing = knowledge.select_sections(notes, question, 400, extra_terms=("fixtures", "testers", "housing"))
+            timing = knowledge.select_sections(notes, question, 400, extra_terms=("timing", "jira"))
+        self.assertIn("Manufacturing readiness", [s.heading for s in manufacturing.sections])
+        self.assertNotIn("Project Timing Plan", [s.heading for s in manufacturing.sections])
+        self.assertIn("Project Timing Plan", [s.heading for s in timing.sections])
+        self.assertNotIn("Manufacturing readiness", [s.heading for s in timing.sections])
+
+    def test_gather_for_members_reads_the_vault_once_per_call_and_pins_the_project_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._long_note(Path(tmp))
+            (Path(tmp) / "Dual DCDC.md").write_text("---\nkind: project\nprojects: [Dual DCDC]\n---\n# Dual DCDC\n\nSOP Aug 2028.\n", encoding="utf-8")
+            config = {"knowledge": {"vault_path": tmp, "token_budget": 400, "project": "Dual DCDC"}}
+            blocks = knowledge.gather_for_members(config, "Should we source now?",
+                                                  {"Manufacturing": ["fixtures", "testers"], "Finance": ["budget", "jira"]})
+        self.assertEqual(sorted(blocks), ["Finance", "Manufacturing"])
+        for block in blocks.values():
+            self.assertEqual(block.notes[0].relative, "Dual DCDC.md")      # the project page comes first for everyone
+        self.assertIn("Fixtures", blocks["Manufacturing"].text)
+        self.assertNotIn("Fixtures", blocks["Finance"].text)
+        self.assertEqual(knowledge.gather_for_members({}, "q", {"A": []})["A"].text, "")

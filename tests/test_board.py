@@ -612,6 +612,55 @@ class TestCombinedMode(unittest.TestCase):
         self.assertEqual(conversation.turns[-1][0], "What if?")
 
 
+class TestPromptOrderAndSizes(unittest.TestCase):
+    """Decided 9 September 2026: the shared parts of a member prompt come
+    first (a gateway that caches a shared prefix serves them from cache),
+    then the member's own knowledge block, then the member."""
+
+    def setUp(self):
+        self.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"roles_folder": str(_ROLES_DIR)}}
+        self.board = board.load_board(self.config)
+
+    def test_shared_parts_first_then_the_members_knowledge_then_the_member(self):
+        role = self.board.profiles[MEMBERS[0]]
+        prompt = board._member_prompt("T", "ctx", ("a",), (), MEMBERS[0], role, "Be concrete.", "| KPI |", "Dual DCDC",
+                                      "## Knowledge from the vault\n\n### Tooling.md\nlate")
+        order = [prompt.index(marker) for marker in ("## Board member conduct", "## Input (FR-3.1)", "## Knowledge from the vault",
+                                                      "## Member (FR-3.3a)", "## Role profile", "## KPI data")]
+        self.assertEqual(order, sorted(order))
+        self.assertTrue(prompt.rstrip().endswith("as the JSON object described above."))
+        # two members share everything up to the knowledge block
+        other = board._member_prompt("T", "ctx", ("a",), (), MEMBERS[1], self.board.profiles[MEMBERS[1]], "Be concrete.", "", "Dual DCDC", "")
+        shared = prompt[:prompt.index("## Knowledge from the vault")]
+        self.assertTrue(other.startswith(shared))
+
+    def test_each_member_gets_its_own_knowledge_block_and_is_verified_against_it(self):
+        blocks = {MEMBERS[0]: "## Knowledge from the vault\n\n### A.md\nalpha facts", MEMBERS[1]: "## Knowledge from the vault\n\n### B.md\nbeta facts"}
+        notes = {MEMBERS[0]: {"A.md": "alpha facts"}, MEMBERS[1]: {"B.md": "beta facts"}}
+        first = json.dumps({"view": "- v", "risks": [], "recommendation": "- go",
+                            "facts_from_network": [{"fact": "alpha facts", "source": "A.md"}, {"fact": "beta facts", "source": "B.md"}]})
+        provider = FakeProvider([first, _member_response(), SYNTHESIS_RESPONSE])
+        result = board.run_board(self.config, provider, topic="T", members=MEMBERS[:2],
+                                 member_knowledge=blocks, member_notes=notes)
+        prompts = [p for _t, p in provider.calls if "## Member (FR-3.3a)" in p]
+        self.assertIn("alpha facts", prompts[0]); self.assertNotIn("beta facts", prompts[0])
+        self.assertIn("beta facts", prompts[1]); self.assertNotIn("alpha facts", prompts[1])
+        verdicts = [s["verified"] for s in result.assessments[0].sources]
+        self.assertEqual(verdicts, [True, False])          # B.md was never sent to the first member
+
+    def test_prompt_sizes_count_what_the_run_would_send(self):
+        roles = {m: self.board.profiles[m] for m in MEMBERS[:3]}
+        kwargs = dict(topic="T", context="c", options=(), constraints=(), roles=roles, conduct="Be concrete.",
+                      member_data={}, project="", member_knowledge={m: "## Knowledge from the vault\n\nx" * 50 for m in roles})
+        individual = board.prompt_sizes(**kwargs)
+        combined = board.prompt_sizes(mode="combined", **kwargs)
+        self.assertEqual([label for label, _ in individual], list(roles) + ["synthesis"])
+        self.assertEqual(len(combined), 1)
+        real = len(board._member_prompt("T", "c", (), (), MEMBERS[0], roles[MEMBERS[0]], "Be concrete.", "", "", kwargs["member_knowledge"][MEMBERS[0]]))
+        self.assertEqual(individual[0][1], real)
+        self.assertLess(combined[0][1], sum(chars for _l, chars in individual))
+
+
 class TestRender(unittest.TestCase):
     def test_render_produces_one_table_section_per_assessment_and_the_synthesis(self):
         result = board.BoardResult(

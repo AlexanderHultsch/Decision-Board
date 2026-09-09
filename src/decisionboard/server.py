@@ -40,7 +40,7 @@ from . import memory_writer
 from . import roles as roles_mod
 from .agent.opencode_client import stop_call
 from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
-from .board import BoardConversation, ask_follow_up_full, run_board, run_board_combined
+from .board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 DEFAULT_PORT = 8765
@@ -115,6 +115,7 @@ class RecordingProvider(AiProvider):
         started = time.monotonic()
         step, member = _call_label(prompt, self._session.phase)
         session = self._session
+        estimated = knowledge_mod.estimate_tokens(prompt)
         if session.cancelled.is_set():
             raise RuntimeError("stopped by Alex")
         tid = threading.get_ident()
@@ -130,8 +131,12 @@ class RecordingProvider(AiProvider):
             with session.lock:
                 session.active_threads.discard(tid)
         duration = result.duration_seconds if result.duration_seconds else time.monotonic() - started
-        session.record_call(step, member, result.input_tokens, result.output_tokens, duration)
+        session.record_call(step, member, result.input_tokens, result.output_tokens, duration, estimated=estimated)
         return result
+
+
+MAX_BUDGET = 12000                # the slider's top: knowledge tokens per member
+DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on the gateway on 9 September 2026
 
 
 class Session:
@@ -164,6 +169,9 @@ class Session:
         self.members: dict[str, str] = {}
         self.partial: dict[str, dict[str, Any]] = {}      # answers already in while the others think
         self.mode = "individual"                          # "individual" or "combined" (decided 9 September 2026)
+        self.budget: int | None = None                    # knowledge tokens per member for this topic (the slider)
+        self.member_knowledge: dict[str, str] = {}        # member -> its knowledge block, as sent
+        self.member_notes: dict[str, dict[str, str]] = {} # member -> note path -> text sent
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
         self.turns: list[dict[str, str]] = []
@@ -212,6 +220,8 @@ class Session:
                 "members": self.members,
                 "partial": self.partial,
                 "mode": self.mode,
+                "budget": self.budget,
+                "member_knowledge_paths": {m: sorted(paths) for m, paths in self.member_notes.items()},
                 "stats": {"calls": self.calls, "marks": self.marks, "started": self.started},
                 "nav": self._nav(),
                 "result": self.result,
@@ -251,13 +261,26 @@ class Session:
         self.marks.append({"phase": phase, "at": time.time()})
 
     def record_call(self, step: str, member: str, input_tokens: int | None, output_tokens: int | None,
-                    seconds: float, error: str | None = None) -> None:
+                    seconds: float, error: str | None = None, estimated: int | None = None) -> None:
         with self.lock:
             self.calls.append({
                 "n": len(self.calls) + 1, "step": step, "member": member, "phase": self.phase,
                 "input_tokens": input_tokens, "output_tokens": output_tokens, "seconds": round(seconds, 1),
-                "error": error, "at": time.time(),
+                "estimated": estimated, "error": error, "at": time.time(),
             })
+
+    def overhead_per_call(self) -> tuple[int, int]:
+        """What a call costs beyond its prompt (OpenCode's own system prompt
+        and tool definitions), learned from this topic's real calls: the
+        median of real input minus estimated prompt tokens. Returns
+        ``(overhead, calls it was learned from)``; the default is what the
+        company gateway reported on 9 September 2026."""
+        with self.lock:
+            deltas = sorted(c["input_tokens"] - c["estimated"] for c in self.calls
+                            if c.get("input_tokens") is not None and c.get("estimated") is not None)
+        if not deltas:
+            return DEFAULT_CALL_OVERHEAD, 0
+        return max(0, deltas[len(deltas) // 2]), len(deltas)
 
 
 class BoardServer:
@@ -522,6 +545,7 @@ class BoardServer:
             }
             session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
+            session.budget = self._budget(inputs.get("budget"))
             session.cancelled.clear()
             session.forward = []
             session.result = None
@@ -530,6 +554,28 @@ class BoardServer:
             session.mark("running")
             session.members = {member: "pending" for member in session.selected_members}
         self._spawn(session, self._run_board, session)
+
+    def _budget(self, value: Any) -> int:
+        """The knowledge budget per member: the slider's value, else the
+        configured default, clamped to what the slider allows."""
+        default = int(_get(self.config, "knowledge.token_budget", knowledge_mod.DEFAULT_TOKEN_BUDGET) or 0)
+        try:
+            budget = int(value) if value not in (None, "") else default
+        except (TypeError, ValueError):
+            budget = default
+        return max(0, min(budget, MAX_BUDGET))
+
+    def _member_blocks(self, session: Session, board, selected: list[str], budget: int) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+        """One knowledge block per chosen member for this topic (decided
+        9 September 2026): the sections ranked by the topic and by the
+        member's own terms, within ``budget`` tokens each."""
+        if budget <= 0:
+            return {m: "" for m in selected}, {m: {} for m in selected}
+        query = f"{session.question}\n{session.inputs.get('topic', '')}"
+        terms = {m: role_terms(board.profiles.get(m)) for m in selected}
+        selections = knowledge_mod.gather_for_members(self.config, query, terms, token_budget=budget)
+        return ({m: sel.text for m, sel in selections.items()},
+                {m: dict(sel.sent) for m, sel in selections.items()})
 
     @staticmethod
     def _chosen_members(session: Session, wanted: Any) -> list[str]:
@@ -564,8 +610,6 @@ class BoardServer:
 
         inputs = session.inputs
         context = inputs["context"]
-        if session.knowledge_text:
-            context = f"{context}\n\n{session.knowledge_text}" if context else session.knowledge_text
         try:
             # Section 3.4: read fresh on every run, never cached - an edit in
             # Obsidian is in force on the next question.
@@ -576,7 +620,10 @@ class BoardServer:
                 member_data = knowledge_mod.kpi_notes(self.config, selected)
             except knowledge_mod.KnowledgeUnavailable:
                 member_data = {}
+            member_knowledge, member_notes = self._member_blocks(session, board, selected, session.budget or 0)
             with session.lock:
+                session.member_knowledge = member_knowledge
+                session.member_notes = member_notes
                 session.roles = roles_mod.summary(board)
                 session.member_meta = roles_mod.member_meta(board.profiles)
                 session.selected_members = selected
@@ -588,7 +635,8 @@ class BoardServer:
                 topic=inputs["topic"], context=context,
                 options=tuple(inputs["options"]), constraints=tuple(inputs["constraints"]),
                 on_member=on_member, board=board, member_data=member_data, members=selected,
-                sent_notes=session.sent_notes, on_assessment=on_assessment,
+                sent_notes={}, on_assessment=on_assessment,
+                member_knowledge=member_knowledge, member_notes=member_notes,
             )
         except Exception as exc:
             session.fail(str(exc))
@@ -602,7 +650,7 @@ class BoardServer:
                         "options": list(inputs["options"]), "constraints": list(inputs["constraints"])},
                 conduct=board.conduct, member_data=member_data,
                 project=knowledge_mod.active_project(self.config) or "",
-                sent_notes=session.sent_notes,
+                sent_notes={}, member_knowledge=member_knowledge, member_notes=member_notes,
             )
             session.result = {
                 "topic": result.topic,
@@ -667,6 +715,48 @@ class BoardServer:
             session.llm_calls += turn.llm_calls
             session.busy = False
             session.mark("follow-up answered")
+
+    def estimate(self, session: Session, body: dict[str, Any]) -> dict[str, Any]:
+        """What a run would cost, before it runs (decided 9 September 2026):
+        the exact call count, the prompts built by the run's own builders
+        and counted with the same character rule, plus the per-call
+        overhead learned from this topic's real calls. Tokens are an
+        estimate and are labelled so; calls are exact."""
+        with session.lock:
+            if session.phase not in ("confirm", "result", "error"):
+                raise ApiError(409, "The estimate is for the confirm screen.")
+            topic = str(body.get("topic") or session.inputs.get("topic") or session.question)
+            context = str(body.get("context") if body.get("context") is not None else session.inputs.get("context", ""))
+            options = tuple(str(o) for o in (body.get("options") or session.inputs.get("options") or []))
+            constraints = tuple(str(c) for c in (body.get("constraints") or session.inputs.get("constraints") or []))
+            mode = "combined" if str(body.get("mode") or "").lower() == "combined" else "individual"
+            budget = self._budget(body.get("budget"))
+        selected = self._chosen_members(session, body.get("members"))
+        try:
+            board = roles_mod.load_board(self.config)
+        except roles_mod.RolesUnavailable as exc:
+            raise ApiError(409, str(exc))
+        roles = {m: board.profiles[m] for m in selected if m in board.profiles}
+        try:
+            member_data = knowledge_mod.kpi_notes(self.config, list(roles))
+        except knowledge_mod.KnowledgeUnavailable:
+            member_data = {}
+        member_knowledge, member_notes = self._member_blocks(session, board, list(roles), budget)
+        sizes = prompt_sizes(topic=topic, context=context, options=options, constraints=constraints,
+                             roles=roles, conduct=board.conduct, member_data=member_data,
+                             project=knowledge_mod.active_project(self.config) or "",
+                             member_knowledge=member_knowledge, mode=mode)
+        overhead, learned_from = session.overhead_per_call()
+        per_call = [{"label": label, "tokens": knowledge_mod.estimate_tokens_for(chars) + overhead} for label, chars in sizes]
+        return {
+            "calls": len(sizes),
+            "tokens_in": sum(item["tokens"] for item in per_call),
+            "per_call": per_call,
+            "overhead_per_call": overhead,
+            "overhead_learned_from": learned_from,
+            "budget": budget,
+            "members": {m: sorted(paths) for m, paths in member_notes.items()},
+        }
 
     def back(self, session: Session) -> None:
         """One step back from wherever the topic is, with everything typed
@@ -954,6 +1044,9 @@ def make_handler(server: BoardServer):
                         server.run(session, body)
                     elif action == "follow-up":
                         server.follow_up(session, str(body.get("question") or ""), body.get("members"), body.get("mode"))
+                    elif action == "estimate":
+                        self._json(200, server.estimate(session, body))
+                        return
                     elif action == "back":
                         server.back(session)
                     elif action == "forward":

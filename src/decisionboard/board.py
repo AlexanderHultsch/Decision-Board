@@ -95,7 +95,9 @@ class BoardConversation:
     conduct: str = ""
     member_data: dict[str, str] = field(default_factory=dict)
     project: str = ""
-    sent_notes: dict[str, str] = field(default_factory=dict)   # note path -> body, what the members received
+    sent_notes: dict[str, str] = field(default_factory=dict)   # note path -> body, what every member received
+    member_knowledge: dict[str, str] = field(default_factory=dict)   # member -> its own knowledge block
+    member_notes: dict[str, dict[str, str]] = field(default_factory=dict)   # member -> note path -> text sent
 
 
 @dataclass
@@ -110,31 +112,44 @@ class FollowUp:
     llm_calls: int = 0
 
 
+def _input_block(topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...]) -> list[str]:
+    lines = ["## Input (FR-3.1)", "", f"Topic: {topic}"]
+    if context:
+        lines.append(f"Context: {context}")
+    if options:
+        lines.append("Options under consideration:")
+        lines.extend(f"- {option}" for option in options)
+    if constraints:
+        lines.append("Hard constraints:")
+        lines.extend(f"- {constraint}" for constraint in constraints)
+    return lines
+
+
 def _member_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...], member: str,
     role: RoleProfile | None = None, conduct: str = "", kpi_data: str = "", project: str = "",
+    knowledge: str = "",
 ) -> str:
     """The prompt for one member's call.
 
-    ``load_prompt("board_members")`` already describes the single-member
-    contract (isolation, response shape) FR-3.3a requires; this appends
-    what that file cannot know in advance - which member this call is for,
-    that member's role profile from the vault (section 3.4: its character,
-    skills, KPIs and vocabulary, and only its own), and the FR-3.1 input."""
-    lines = [
-        load_prompt("board_members"),
-        "",
-        "## Member (FR-3.3a)",
-        "",
-        f"Member: {member}",
-    ]
+    ``load_prompt("board_members")`` describes the single-member contract
+    (isolation, response shape) FR-3.3a requires. The parts every member
+    receives alike come first - the rules, the conduct note, the input -
+    so a gateway that caches a shared prefix serves them from cache
+    (decided 9 September 2026); then this member's knowledge block, then
+    what is only this member's: its name, profile and KPI data."""
+    lines = [load_prompt("board_members")]
+    if conduct:
+        lines += ["", "## Board member conduct (section 3.4, the same for every member)", "", conduct]
+    lines += ["", *_input_block(topic, context, options, constraints)]
+    if knowledge:
+        lines += ["", knowledge]
+    lines += ["", "## Member (FR-3.3a)", "", f"Member: {member}"]
     if project:
         lines += [
             f"Project: {project}. This question belongs to this project. The knowledge and KPI "
-            "data below were selected for it; pages of other projects were left out.",
+            "data were selected for it; pages of other projects were left out.",
         ]
-    if conduct:
-        lines += ["", "## Board member conduct (section 3.4, the same for every member)", "", conduct]
     if role is not None and role.body:
         lines += ["", "## Role profile (section 3.4)", ""]
         if role.roles:
@@ -172,20 +187,7 @@ def _member_prompt(
             "would decide the answer, say that its value is not recorded and state the "
             "assumption you use instead.",
         ]
-    lines += [
-        "",
-        "## Input (FR-3.1)",
-        "",
-        f"Topic: {topic}",
-    ]
-    if context:
-        lines.append(f"Context: {context}")
-    if options:
-        lines.append("Options under consideration:")
-        lines.extend(f"- {option}" for option in options)
-    if constraints:
-        lines.append("Hard constraints:")
-        lines.extend(f"- {constraint}" for constraint in constraints)
+    lines += ["", "Answer now for this member, as the JSON object described above."]
     return "\n".join(lines)
 
 
@@ -402,6 +404,8 @@ def run_board(
     member_data: dict[str, str] | None = None,
     members: tuple[str, ...] | list[str] | None = None,
     sent_notes: dict[str, str] | None = None,
+    member_knowledge: dict[str, str] | None = None,
+    member_notes: dict[str, dict[str, str]] | None = None,
 ) -> BoardResult:
     """One AI Board run (FR-3.1..FR-3.6): one isolated call per member, then
     one synthesis call over what they produced. ``roles`` is the board
@@ -484,7 +488,7 @@ def run_board(
     # produced one yet when they are submitted.
     prompts = [
         _member_prompt(topic, context, options, constraints, member, roles[member], conduct,
-                       member_data.get(member, ""), project)
+                       member_data.get(member, ""), project, (member_knowledge or {}).get(member, ""))
         for member in members
     ]
 
@@ -501,6 +505,7 @@ def run_board(
 
     def _assessment(member: str, parsed: dict[str, Any]) -> MemberAssessment:
         sent = dict(sent_notes or {})
+        sent.update((member_notes or {}).get(member, {}))
         sent.update(_kpi_note_bodies(member_data.get(member, "")))
         parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
         return MemberAssessment(member=member, **parsed)
@@ -605,23 +610,12 @@ def run_board(
     ))
 
 
-def _input_block(topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...]) -> list[str]:
-    lines = ["## Input (FR-3.1)", "", f"Topic: {topic}"]
-    if context:
-        lines.append(f"Context: {context}")
-    if options:
-        lines.append("Options under consideration:")
-        lines.extend(f"- {option}" for option in options)
-    if constraints:
-        lines.append("Hard constraints:")
-        lines.extend(f"- {constraint}" for constraint in constraints)
-    return lines
-
-
-def _member_section(member: str, role: RoleProfile | None, kpi_data: str) -> list[str]:
-    """One member's material inside the combined prompt: the same profile
-    and KPI block the single call gets, under the member's heading."""
+def _member_section(member: str, role: RoleProfile | None, kpi_data: str, knowledge: str = "") -> list[str]:
+    """One member's material inside the combined prompt: the same profile,
+    knowledge and KPI block the single call gets, under the member's heading."""
     lines = [f"### Member: {member}", ""]
+    if knowledge:
+        lines += [knowledge.replace("## Knowledge from the vault", "#### Knowledge selected for this member", 1), ""]
     if role is not None and role.roles:
         lines.append(f"This member is the {role.member} swim lane. It speaks as {role.title} (level {role.level}) "
                      "and answers for every role in the swim lane. Roles by rank:")
@@ -640,18 +634,19 @@ def _member_section(member: str, role: RoleProfile | None, kpi_data: str) -> lis
 def _combined_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...],
     roles: dict[str, RoleProfile], conduct: str, member_data: dict[str, str], project: str,
+    member_knowledge: dict[str, str] | None = None,
 ) -> str:
     lines = [load_prompt("board_combined"), ""]
-    if project:
-        lines += [f"Project: {project}. This question belongs to this project.", ""]
     if conduct:
         lines += ["## Board member conduct (the same for every member)", "", conduct, ""]
+    lines += [*_input_block(topic, context, options, constraints), ""]
+    if project:
+        lines += [f"Project: {project}. This question belongs to this project.", ""]
     lines += ["## Members to assess, in this order", ""]
     lines.append(", ".join(roles))
     lines.append("")
     for member, role in roles.items():
-        lines += _member_section(member, role, member_data.get(member, ""))
-    lines += _input_block(topic, context, options, constraints)
+        lines += _member_section(member, role, member_data.get(member, ""), (member_knowledge or {}).get(member, ""))
     return "\n".join(lines)
 
 
@@ -729,6 +724,8 @@ def run_board_combined(
     members: tuple[str, ...] | list[str] | None = None,
     sent_notes: dict[str, str] | None = None,
     on_assessment: Callable[[MemberAssessment], None] | None = None,
+    member_knowledge: dict[str, str] | None = None,
+    member_notes: dict[str, dict[str, str]] | None = None,
 ) -> BoardResult:
     """The combined form (decided 9 September 2026): one call writes every
     chosen member's assessment and the synthesis. Everything the single
@@ -751,7 +748,8 @@ def run_board_combined(
     if member_data is None:
         member_data = kpi_notes(config, names)
     project = active_project(config) or ""
-    prompt = _combined_prompt(topic, context, options, constraints, roles, board.conduct, member_data, project)
+    prompt = _combined_prompt(topic, context, options, constraints, roles, board.conduct, member_data, project,
+                              member_knowledge)
 
     def _notify(state: str) -> None:
         if on_member is not None:
@@ -778,6 +776,7 @@ def run_board_combined(
                 on_member(member, "failed")
             continue
         sent = dict(sent_notes or {})
+        sent.update((member_notes or {}).get(member, {}))
         sent.update(_kpi_note_bodies(member_data.get(member, "")))
         parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
         parsed["flags"] = _entry_flags(parsed, roles.get(member))
@@ -813,6 +812,33 @@ def run_board_combined(
     return result
 
 
+def prompt_sizes(
+    *, topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...],
+    roles: dict[str, RoleProfile], conduct: str, member_data: dict[str, str], project: str,
+    member_knowledge: dict[str, str], mode: str = "individual",
+) -> list[tuple[str, int]]:
+    """The prompts a run would send, as ``(label, characters)`` - built by
+    the same builders the run uses, so the estimate on the confirm screen
+    counts exactly what the model will read. The synthesis prompt cannot be
+    built before the answers exist; its size is taken as the synthesis
+    rules plus a typical answer per member."""
+    sizes: list[tuple[str, int]] = []
+    if mode == "combined":
+        sizes.append(("board, combined", len(_combined_prompt(topic, context, options, constraints, roles, conduct,
+                                                              member_data, project, member_knowledge))))
+        return sizes
+    for member, role in roles.items():
+        sizes.append((member, len(_member_prompt(topic, context, options, constraints, member, role, conduct,
+                                                 member_data.get(member, ""), project, member_knowledge.get(member, "")))))
+    sizes.append(("synthesis", len(load_prompt("board_synthesis")) + 2400 * len(roles)))
+    return sizes
+
+
+def role_terms(role: RoleProfile | None) -> set[str]:
+    """The words that make a role its own, for ranking its knowledge block."""
+    return _role_terms(role)
+
+
 def _combined_follow_up_prompt(conversation: BoardConversation, chosen: list[str], question: str) -> str:
     inputs = conversation.inputs
     roles = {m: (conversation.roles or {}).get(m) for m in chosen}
@@ -823,7 +849,8 @@ def _combined_follow_up_prompt(conversation: BoardConversation, chosen: list[str
         lines += ["## Board member conduct (the same for every member)", "", conversation.conduct, ""]
     lines += ["## Members to ask again, in this order", "", ", ".join(chosen), ""]
     for member, role in roles.items():
-        lines += _member_section(member, role, conversation.member_data.get(member, ""))
+        lines += _member_section(member, role, conversation.member_data.get(member, ""),
+                                 conversation.member_knowledge.get(member, ""))
         earlier = next((a for a in conversation.result.assessments if a.member == member), None)
         lines += ["#### Earlier assessment of this member", ""]
         lines.append(json.dumps({"applies": earlier.applies, "view": earlier.view, "impact": earlier.impact,
@@ -880,6 +907,7 @@ def _member_follow_up_prompt(conversation: BoardConversation, member: str, quest
         str(inputs.get("topic", conversation.result.topic)), str(inputs.get("context", "")),
         tuple(inputs.get("options", ())), tuple(inputs.get("constraints", ())),
         member, role, conversation.conduct, conversation.member_data.get(member, ""), conversation.project,
+        conversation.member_knowledge.get(member, ""),
     )]
     earlier = next((a for a in conversation.result.assessments if a.member == member), None)
     lines += ["", "## Your earlier assessment", ""]
@@ -949,6 +977,7 @@ def ask_follow_up_full(
                 failed.append(f"{member}: no entry in the combined answer")
                 continue
             sent = dict(conversation.sent_notes)
+            sent.update(conversation.member_notes.get(member, {}))
             sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
             parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
             parsed["flags"] = _entry_flags(parsed, (conversation.roles or {}).get(member))
@@ -985,6 +1014,7 @@ def ask_follow_up_full(
                 failed.append(f"{member}: response did not parse as JSON with view/risks/recommendation")
                 continue
             sent = dict(conversation.sent_notes)
+            sent.update(conversation.member_notes.get(member, {}))
             sent.update(_kpi_note_bodies(conversation.member_data.get(member, "")))
             parsed["sources"] = tuple(verify_sources(parsed["sources"], sent))
             member_answers.append(MemberAssessment(member=member, **parsed))
