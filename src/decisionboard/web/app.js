@@ -387,10 +387,18 @@
       </div>`).join("");
     const synthesising = session.phase === "synthesising";
     const n = Object.keys(session.members).length;
-    $("running-title").textContent = synthesising ? `Consolidating the ${n} assessments` : "The board is in session";
+    const answered = Object.values(session.members).filter((s) => s === "done").length;
+    $("running-title").textContent = synthesising ? "Consolidating the answers" : "The board is in session";
     $("running-detail").textContent = synthesising
-      ? "One more call reads all the answers and writes the recommendation."
-      : `${n} members, each answering without seeing the others.`;
+      ? "One more call reads every answer and writes the board direction."
+      : `${n} member(s), each answering without seeing the others.`;
+    const tile = $("direction-tile");
+    tile.className = `direction-tile ${synthesising ? "running" : "pending"}`;
+    tile.querySelector(".avatar").innerHTML = `<svg viewBox="0 0 24 24">${SYNTHESIS_ICON}</svg>`;
+    $("direction-state").textContent = synthesising
+      ? "Thinking: reading all answers, weighing the disagreements, writing the recommendation…"
+      : `Waits for every member to answer (${answered} of ${n} so far)`;
+    $("direction-spinner").hidden = !synthesising;
     show("running");
   }
 
@@ -427,7 +435,7 @@
     const answers = (t.assessments || []).map((a) => `
       <div class="turn-member" style="border-left-color:${esc(meta(a.member).color)}">
         <div class="who">${esc(a.member)}${a.applies === false ? ' <span class="na-note">· not affected</span>' : ""}</div>
-        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>`}</dl>
+        <dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.applies === false ? "" : `${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>`}</dl>
       </div>`).join("");
     const failed = (t.failed_members || []).length ? `<p class="error small">Failed: ${t.failed_members.map(esc).join(" · ")}</p>` : "";
     const details = answers ? `<details class="turn-members"><summary class="muted small">What each member said</summary>${answers}</details>` : "";
@@ -479,7 +487,7 @@
         <div class="card-head">${avatar(name)}<div><div class="card-title">${esc(name)}</div><div class="muted small">${esc(meta(name).title)}${meta(name).level ? ` · level ${meta(name).level}` : ""}${(meta(name).roles || []).length > 1 ? ` · ${meta(name).roles.length} roles` : ""}</div></div></div>
         ${a.applies === false
           ? `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`
-          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd><dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd></dl>`}
+          : `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd></dl>`}
       </div>`;
     }).join("");
   }

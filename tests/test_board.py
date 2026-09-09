@@ -370,6 +370,16 @@ class TestMemberChoiceApplicabilityAndRetry(unittest.TestCase):
         synthesis_prompt = provider.calls[-1][1]
         self.assertIn('"applies": false', synthesis_prompt)
 
+    def test_the_impact_chain_is_kept_as_bullets_and_reaches_the_synthesis(self):
+        texts = [json.dumps({"applies": True, "view": "- v", "impact": ["housing open -> fixture late", "fixture late -> PV slips"],
+                             "risks": ["r"], "recommendation": "- wait"})]
+        texts += [_member_response()] * (len(MEMBERS) - 1) + [SYNTHESIS_RESPONSE]
+        provider = FakeProvider(texts)
+        result = board.run_board(self.config, provider, topic="T")
+        self.assertEqual(result.assessments[0].impact, "- housing open -> fixture late\n- fixture late -> PV slips")
+        self.assertEqual(result.assessments[1].impact, "")
+        self.assertIn("fixture late -> PV slips", provider.calls[-1][1])
+
     def test_a_tool_only_failure_is_retried_once_without_tools(self):
         class ToolsFirst(FakeProvider):
             def __init__(self):

@@ -9,6 +9,13 @@ produce the synthesis that follows them (FR-3.4): the overall
 recommendation, the decisive criterion behind it, the main counter-arguments
 against it, and what new information would change the recommendation.
 
+Each assessment carries an `impact` chain: the member's reasoning about
+what the decision does to its area. Weigh those chains against each other -
+where one member's consequence lands in another member's area (a late
+housing freeze that stops manufacturing equipment), name the dependency in
+`decisive_criterion` or `counter_arguments` even if neither member spelled
+it out. That cross-reading is the synthesis's own job.
+
 A member whose `applies` is false has said, with reasons, that the topic
 does not touch its responsibilities. It has no vote. Do not count it as
 agreement or disagreement; name it under `not_affected` with its reason in

@@ -129,6 +129,14 @@ button.ghost { background: transparent; }
 .member-tile.running { opacity: 1; }
 .member-tile.running .avatar { animation: pulse 1.2s ease-in-out infinite; }
 .member-tile.done, .member-tile.failed { opacity: 1; }
+/* The consolidation step, visible as its own box under the members (9 September 2026) */
+.direction-rule { height: 1px; background: var(--line); margin: 1.6rem 0 1.2rem; }
+.direction-tile { display: flex; align-items: center; gap: .8rem; padding: 1rem 1.1rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); opacity: .5; transition: opacity .3s; }
+.direction-tile.running, .direction-tile.done { opacity: 1; }
+.direction-tile.running .avatar { animation: pulse 1.2s ease-in-out infinite; }
+.direction-tile .avatar { flex: none; }
+.direction-tile .spinner.small { width: 22px; height: 22px; margin: 0 0 0 auto; border-width: 2px; }
+.direction-tile.pending .avatar { filter: grayscale(1); }
 .member-tile > div { min-width: 0; overflow: hidden; }
 .member-tile > div > div:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member-tile .state { margin-left: auto; font-size: .8rem; color: var(--muted); white-space: nowrap; }

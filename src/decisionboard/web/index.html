@@ -31,7 +31,7 @@
       <textarea id="question" rows="5" placeholder="For example: We must choose between reworking the Gen6 housing tooling or switching supplier. Budget is tight and the SOP date cannot move."></textarea>
       <div class="row between">
         <span id="home-hint" class="muted small"></span>
-        <button type="submit" class="primary">Ask the board</button>
+        <button type="submit" class="primary">Prepare the question</button>
       </div>
     </form>
     <p id="home-error" class="error" hidden></p>
@@ -86,6 +86,15 @@
     <h2 id="running-title">The board is in session</h2>
     <p id="running-detail" class="muted">The members, each answering without seeing the others.</p>
     <div id="member-grid" class="member-grid"></div>
+    <div class="direction-rule"></div>
+    <div id="direction-tile" class="direction-tile pending">
+      <span class="avatar avatar-synthesis" aria-hidden="true"></span>
+      <div>
+        <div class="card-title">Board direction</div>
+        <div id="direction-state" class="muted small">Waits for every member to answer</div>
+      </div>
+      <div id="direction-spinner" class="spinner small" hidden></div>
+    </div>
   </section>
 
   <!-- Result -->

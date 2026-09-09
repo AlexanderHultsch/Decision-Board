@@ -53,6 +53,7 @@ class MemberAssessment:
     risks: str
     recommendation: str
     applies: bool = True      # False: the member said, with reasons, that the topic does not touch it
+    impact: str = ""          # the dependency chain into this member's area, one bullet per step
 
 
 @dataclass
@@ -207,11 +208,15 @@ def _parse_member_response(text: str) -> dict[str, Any] | None:
     applies = data.get("applies", True)
     if isinstance(applies, str):
         applies = applies.strip().lower() not in ("false", "no", "0")
+    impact = data.get("impact", "")
+    if isinstance(impact, list):
+        impact = "\n".join(f"- {item}" for item in (str(i).strip() for i in impact) if item)
     return {
         "view": str(data["view"]),
         "risks": str(risks),
         "recommendation": str(data["recommendation"]),
         "applies": bool(applies),
+        "impact": str(impact or ""),
     }
 
 
@@ -223,6 +228,7 @@ def _synthesis_prompt(
             "member": assessment.member,
             "applies": assessment.applies,
             "view": assessment.view,
+            "impact": assessment.impact,
             "risks": assessment.risks,
             "recommendation": assessment.recommendation,
         }
@@ -489,7 +495,7 @@ def _follow_up_prompt(
     if member_answers:
         lines += ["", "## Member answers to the new question", ""]
         lines.append(json.dumps([
-            {"member": a.member, "applies": a.applies, "view": a.view, "risks": a.risks,
+            {"member": a.member, "applies": a.applies, "view": a.view, "impact": a.impact, "risks": a.risks,
              "recommendation": a.recommendation}
             for a in member_answers
         ], indent=2))
@@ -513,8 +519,8 @@ def _member_follow_up_prompt(conversation: BoardConversation, member: str, quest
     earlier = next((a for a in conversation.result.assessments if a.member == member), None)
     lines += ["", "## Your earlier assessment", ""]
     if earlier is not None:
-        lines.append(json.dumps({"applies": earlier.applies, "view": earlier.view, "risks": earlier.risks,
-                                 "recommendation": earlier.recommendation}, indent=2))
+        lines.append(json.dumps({"applies": earlier.applies, "view": earlier.view, "impact": earlier.impact,
+                                 "risks": earlier.risks, "recommendation": earlier.recommendation}, indent=2))
     else:
         lines.append("(you did not produce an assessment in the first round)")
     lines += ["", "## Board recommendation so far", "", conversation.result.synthesis, "", "## Conversation so far"]
