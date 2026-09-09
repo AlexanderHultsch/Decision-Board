@@ -36,7 +36,11 @@ _LINE_TRIM = 200
 # Windows' CreateProcess rejects a command line above 32,767 characters;
 # the prompt is passed as one argument, so a large knowledge block can
 # reach it. Refuse with a clear message before that happens.
-_WINDOWS_COMMAND_LIMIT = 30000
+# The prompt travels on standard input (OC-10), never on the command line:
+# on Windows the whole command line is capped at 32,767 characters and a
+# board call is longer than that (33,033 on 9 September 2026). The one
+# positional argument tells the model where the instruction is.
+PROMPT_HEADER = "The complete instruction follows on standard input. Follow it exactly."
 _OPTIONAL_FLAGS = ("--auto", "--dir")
 
 
@@ -200,8 +204,8 @@ class OpenCodeProvider(AiProvider):
                 f"task {task!r} has no model configured - set provider.models.{key}"
             )
 
-        command = self._build_command(model_string, prompt)
-        stdout, _duration = self._run(command)
+        command = self._build_command(model_string)
+        stdout, _duration = self._run(command, prompt)
         text, input_tokens, output_tokens = self._parse_output(stdout)
 
         parts = model_string.split("/", 1)
@@ -249,7 +253,10 @@ class OpenCodeProvider(AiProvider):
             self._supported = frozenset(flag for flag in _OPTIONAL_FLAGS if flag in help_text)
         return self._supported
 
-    def _build_command(self, model_string: str, prompt: str) -> list[str]:
+    def _build_command(self, model_string: str, prompt: str | None = None) -> list[str]:
+        """The command line without the prompt: the prompt goes to ``_run``
+        as standard input (OC-10). ``prompt`` is accepted and ignored so
+        older callers keep working."""
         command = [self._binary, "run", "--format", "json", "--model", model_string]
         supported = self._supported_flags()
         if self._cwd is not None and "--dir" in supported:
@@ -270,18 +277,13 @@ class OpenCodeProvider(AiProvider):
         extra = _config_key(self._config, "provider.opencode.extra_args", []) or []
         if isinstance(extra, list):
             command += [str(item) for item in extra]
-        command.append(prompt)
-        if sys.platform == "win32":
-            length = sum(len(part) + 3 for part in command)
-            if length > _WINDOWS_COMMAND_LIMIT:
-                raise OpenCodeError(
-                    f"the prompt is too long to pass to opencode on Windows ({length:,} characters; "
-                    f"the limit is about {_WINDOWS_COMMAND_LIMIT:,}). Lower the knowledge token budget "
-                    "in Options."
-                )
+        command.append(PROMPT_HEADER)
         return command
 
-    def _run(self, command: list[str]) -> tuple[str, float]:
+    def _run(self, command: list[str], prompt: str) -> tuple[str, float]:
+        """Run ``command`` with ``prompt`` on standard input. ``opencode run``
+        appends piped input to its message, so the model receives the
+        header from the command line followed by the whole prompt."""
         started = time.monotonic()
         try:
             # OpenCode writes UTF-8; without saying so, Windows decodes it as
@@ -289,7 +291,7 @@ class OpenCodeProvider(AiProvider):
             # or, for some byte values, a UnicodeDecodeError that takes the
             # run down.
             result = subprocess.run(
-                command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                command, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=self._timeout_seconds, env=opencode_environment(self._config),
             )
         except FileNotFoundError as exc:

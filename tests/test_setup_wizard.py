@@ -537,6 +537,30 @@ class TestOpenCodeConfigCheck(unittest.TestCase):
         self.assertNotEqual(found, str(wrong))
         self.assertIn("not usable", out.getvalue())
 
+    def test_a_wrong_file_stored_by_an_earlier_run_is_not_offered_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "config.local.json"
+            wrong.write_text(json.dumps({"setup": {}, "provider": {}}), encoding="utf-8")
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=False, vault="", model="x/y", run_test=False, out=out)
+            with mock.patch.dict(os.environ, {"OPENCODE_CONFIG": ""}):
+                chosen = wizard.step_opencode_config(str(wrong))
+        self.assertEqual(chosen, "")
+        self.assertIn("stored OpenCode configuration file is not usable", out.getvalue())
+
+    def test_a_rejected_choice_is_not_repeated_in_the_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wrong = Path(tmp) / "config.local.json"
+            wrong.write_text(json.dumps({"setup": {}, "provider": {}}), encoding="utf-8")
+            right = Path(tmp) / "opencode.json"
+            right.write_text(json.dumps({"provider": {"azure": {"models": {"Kimi": {}}}}}), encoding="utf-8")
+            out = io.StringIO()
+            wizard = setup_wizard.Wizard(interactive=True, vault="", model=None, run_test=False, out=out)
+            answers = ["3", str(wrong), "1"]
+            wizard.ask = lambda prompt, default="": answers.pop(0) if answers else default
+            wizard._choose_company_file(str(right))
+        self.assertEqual(wizard.problems, [])
+
     def test_the_wizard_refuses_the_wrong_file_and_offers_to_choose_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             wrong = Path(tmp) / "config.local.json"

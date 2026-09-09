@@ -41,7 +41,7 @@ class TestBuildCommand(unittest.TestCase):
         with mock.patch.object(opencode_client.subprocess, "run", _probe(NEW_HELP)):
             command = provider._build_command("opencode/big-pickle", "hello")
         self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle",
-                                   "--dir", "/repo", "--auto", "hello"])
+                                   "--dir", "/repo", "--auto", opencode_client.PROMPT_HEADER])
 
     def test_auto_approve_false_never_passes_auto(self):
         config = {"provider": {"models": {"board": "x/y"}, "opencode": {"auto_approve": False}}}
@@ -65,17 +65,27 @@ class TestBuildCommand(unittest.TestCase):
         self.assertNotIn("--auto", command)
         self.assertNotIn("--dir", command)
 
-    def test_an_over_long_prompt_is_refused_on_windows_with_a_useful_message(self):
+    def test_the_prompt_travels_on_stdin_so_windows_has_no_length_limit(self):
+        """OC-10: a 33,033-character board call failed on Windows on 9
+        September 2026 because the prompt was a command-line argument."""
         provider = OpenCodeProvider(CONFIG)
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)), \
+        prompt = "x" * 40000
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            if command[1:] == ["run", "--help"]:
+                return mock.Mock(stdout=OLD_HELP, stderr="", returncode=0)
+            seen["command"] = command
+            seen["input"] = kwargs.get("input")
+            return mock.Mock(stdout='{"type":"text","part":{"text":"OK"}}\n', stderr="", returncode=0)
+
+        with mock.patch.object(opencode_client.subprocess, "run", fake_run), \
              mock.patch.object(opencode_client.sys, "platform", "win32"):
-            with self.assertRaises(OpenCodeError) as raised:
-                provider._build_command("x/y", "x" * 31000)
-        self.assertIn("token budget", str(raised.exception))
-        with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)), \
-             mock.patch.object(opencode_client.sys, "platform", "linux"):
-            provider._supported = None
-            provider._build_command("x/y", "x" * 31000)   # no limit elsewhere
+            provider.complete("ai_board", prompt)
+        self.assertEqual(seen["input"], prompt)
+        self.assertNotIn(prompt, seen["command"])
+        self.assertEqual(seen["command"][-1], opencode_client.PROMPT_HEADER)
+        self.assertLess(sum(len(part) for part in seen["command"]), 1000)
 
 
 if __name__ == "__main__":

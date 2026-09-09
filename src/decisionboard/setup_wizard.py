@@ -479,6 +479,12 @@ class Wizard:
         else:
             if "<you>" in current or (current and not Path(current).expanduser().is_file()):
                 current = ""
+            if current and opencode_config_problem(current):
+                # A wrong file stored by an earlier run (9 September 2026:
+                # config.local.json itself) is not offered again.
+                self.say(f"        (the stored OpenCode configuration file is not usable: {current} "
+                         f"{opencode_config_problem(current)})")
+                current = ""
             found = current or self.find_opencode_config()
             if not self.interactive:
                 candidate = found
@@ -525,7 +531,9 @@ class Wizard:
             problem = opencode_config_problem(candidate)
             if not problem:
                 return candidate
-            self.warn(f"{candidate} {problem}")
+            # Shown, not recorded: once a usable file is chosen this is
+            # history, not something the summary should repeat.
+            self.say(f"{WARN}{candidate} {problem}")
             self.say("        Choose again.")
 
     def find_opencode_config(self) -> str:
@@ -864,7 +872,8 @@ class Wizard:
         config = self.step_config(info)
         self.step_test_call(config, info)
         self.heading("7. Summary")
-        notes = [problem for problem in self.problems if problem not in self.failures]
+        notes = list(dict.fromkeys(problem for problem in self.problems if problem not in self.failures))
+        self.failures = list(dict.fromkeys(self.failures))
         if self.failures:
             self.say("        Must be fixed before the board can run:")
             for failure in self.failures:
