@@ -34,7 +34,7 @@ class TestBuildCommand(unittest.TestCase):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
         with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
             command = provider._build_command("opencode/big-pickle", "hello")
-        self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle", "hello"])
+        self.assertEqual(command, ["opencode", "run", "--format", "json", "--model", "opencode/big-pickle", opencode_client.PROMPT_HEADER])
 
     def test_auto_and_dir_are_passed_when_listed(self):
         provider = OpenCodeProvider(CONFIG, cwd="/repo")
@@ -165,4 +165,4 @@ class TestNoAnswerDiagnostics(unittest.TestCase):
         provider = OpenCodeProvider(config)
         with mock.patch.object(opencode_client.subprocess, "run", _probe(OLD_HELP)):
             command = provider._build_command("azure/m", "hello")
-        self.assertEqual(command[-3:], ["--agent", "plan", "hello"])
+        self.assertEqual(command[-3:], ["--agent", "plan", opencode_client.PROMPT_HEADER])
