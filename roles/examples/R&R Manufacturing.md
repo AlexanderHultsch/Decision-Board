@@ -1,5 +1,11 @@
 # Project Manager Manufacturing
 level: 2
+icon: factory
+perspective: Manufacturability, ramp-up to rate, plant and supplier capability, launch budget
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 Develop and maintain control over all the Program Management elements of Manufacturing Swim Lane, e.g.: 
 Timing plan & Strategy to meet the defined Visteon and Customer milestones 
@@ -32,4 +38,35 @@ Risk Management:
 Identifying, assessing, and mitigating program risks to minimize their impact on project timelines, budgets, and deliverables. Managing escalations (internal & external) 
 
 Innovation and Technology Adoption:
-Identifying and evaluating emerging technologies, tools, and industry trends to enhance program management effectiveness and efficiency. 
+Identifying and evaluating emerging technologies, tools, and industry trends to enhance program management effectiveness and efficiency.
+
+## Targets I am judged on
+
+- Run-at-rate achieved before SOP, at the rate the customer contract assumes.
+- Equipment and tooling delivered, installed and commissioned on the dates in the launch plan.
+- Process capability and PPAP closed for the processes the product depends on.
+- PAR and launch budget executed against approval; scrap and rework inside plan.
+
+## What I protect when I cannot have everything
+
+The ability to build at rate, on time, in the plant and at the suppliers
+that actually exist. When cost and capability collide, I protect capability
+at SOP, and I give up piece-price and process flexibility - a line that
+cannot hold rate turns every saving into premium freight.
+
+## How this lane usually fails
+
+- The ramp plan has no run-at-rate date, only an SOP date. Early sign: a launch plan whose last milestone is the start of production.
+- Equipment commissioning is planned with no float and slips into the ramp. Early sign: a single date for delivery, installation and commissioning.
+- Supplier capacity is assumed from a quote rather than audited. Early sign: a new supplier with no capacity assessment in the file.
+- Yield assumptions exceed anything the process has ever shown. Early sign: a business case that only works at a first-pass yield the plant has not reached.
+
+## What I decide alone, and what I escalate
+
+- I decide: the industrialisation plan, the launch sequence, PAR budget execution with the Launch Engineers.
+- I escalate to the Programme Lead: a capacity gap, a launch budget overrun, a process that will not be capable in time.
+- The plant and Indirect Procurement decide: equipment sourcing and installation within the agreed plan.
+
+## Vocabulary
+
+Run-at-rate, SOP, PAR, launch, commissioning, PPAP, PFMEA, control plan, Cpk, first-pass yield, scrap, rework, capacity, VPRS, MP&L.

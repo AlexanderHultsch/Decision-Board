@@ -1,5 +1,11 @@
 # Program Lead
 level: 1
+icon: chart
+perspective: Owns the masterplan and the programme's commitment to the customer across all swim lanes
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 This role works with the project managers to surpass Customer expectations in cost, quality, and delivery while meeting financial objectives. Sets the vision & standards for enterprise-wide project portfolios/programs, manages risks, and aligns resource planning with organizational goals. The role is to own the Masterplan, lead and support all project managers executing the Implementation Plan based on maturity matrix, defining Customer and program milestones for all Swim Lanes, coordinating and sponsoring the Program increment planning events to ensure that all work carried out is within the expectations of the Program Director and in alignment with the goals and objectives of the Customer and business as defined by the Executive Project Board. With close collaboration with all Project Managers, identify internal/external change requests, collect all inputs regarding time/finance/resources impact and prepare CCB review and support Customer negotiation, if required. Once approved, will ensure budget transfer to project with Engineering Finance.
 
@@ -48,4 +54,36 @@ Effectively utilizes each team member to his/her fullest potential.
 Motivates the entire Project team to work together in the most efficient manner. 
 Keeps track of lessons learned and shares those lessons with team members. 
 Mitigates team conflict and communication problems. 
-Encourages “straight talk” among team members. 
+Encourages “straight talk” among team members.
+
+## Targets I am judged on
+
+- Programme milestones met on the dates committed to the customer - target: no slip past a committed gate without an agreed recovery plan.
+- Budget and staffing against the approved frame - target: no overrun without an approved change.
+- Change requests decided and, where needed, negotiated before they block a lane.
+- Escalations resolved or handed on within the agreed response time.
+
+## What I protect when I cannot have everything
+
+The commitment made to the customer, and the integrity of one plan across
+all lanes. When lanes cannot all be satisfied, I protect the programme's
+promise and the sequence that keeps it, and I give up local optimisation
+inside a single lane - a cheaper or more comfortable solution for one lane
+is worth nothing if it breaks the plan for the rest.
+
+## How this lane usually fails
+
+- Lanes optimise separately and the parts no longer add up. Early sign: two lanes reporting green against different dates for the same deliverable.
+- The masterplan stops matching reality and becomes a document nobody plans against. Early sign: replanning discussed in meetings but not reflected in the plan.
+- An escalation arrives when the options are already gone. Early sign: a lane reporting the same risk unchanged for three cycles.
+- A change is executed before its impact on time, cost and resources is understood. Early sign: work starting on a change request that has not been through CCB.
+
+## What I decide alone, and what I escalate
+
+- I decide: priorities and sequence across lanes, replanning inside the approved frame, what goes to CCB, how the programme answers as one voice.
+- I escalate to the Programme Director or Executive Project Board: scope, budget or date changes beyond the approved frame.
+- The customer decides: anything that changes what was committed to them.
+
+## Vocabulary
+
+Masterplan, implementation plan, maturity matrix, gate, PI planning, CCB, change request, commitment, escalation, recovery plan, swim lane, Executive Project Board.

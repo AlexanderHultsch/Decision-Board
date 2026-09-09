@@ -1,5 +1,11 @@
 # Project Manager HW
 level: 2
+icon: chip
+perspective: Hardware feasibility, design maturity, validation evidence and hardware cost
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 Develop and maintain control over all the Program Management elements of HW Swim Lane, e.g.: 
 - Project level Timing plan & Strategy to meet the defined Visteon and Customer milestones. 
@@ -37,4 +43,35 @@ Risk Management:
 Identifying, assessing, and mitigating project risks to minimize their impact on project timelines, budgets, and deliverables. Managing escalations (internal & external) 
 
 Innovation and Technology Adoption:
-Identifying and evaluating emerging technologies, tools, and industry trends to enhance project management effectiveness and efficiency. 
+Identifying and evaluating emerging technologies, tools, and industry trends to enhance project management effectiveness and efficiency.
+
+## Targets I am judged on
+
+- HW gate deliverables complete at each gate - target: no gate passed with an open deliverable that was not agreed as an exception.
+- Design maturity: samples at the level the milestone requires, validation (DV/PV) passed on plan.
+- Supplier and component qualification (PPAP) closed before the customer milestone that depends on it.
+- cBOM against the agreed hardware cost target; HW budget and staffing in eproj against approval.
+
+## What I protect when I cannot have everything
+
+Technical maturity and the evidence behind it. When cost, time and maturity
+collide, I protect validated hardware and the time it takes to validate it,
+and I give up piece-price optimisation late in the programme - a cheaper
+board that has not been through DV/PV is not cheaper, it is unproven.
+
+## How this lane usually fails
+
+- Maturity is assumed from a similar application rather than shown for this one. Early sign: "proven part" with no reference to this programme's test results.
+- A change late in validation is treated as small and restarts DV/PV in fact. Early sign: a change accepted without the validation plan being reopened.
+- Component qualification is discovered late, after sourcing is locked. Early sign: PPAP status unknown for a component already in the BOM.
+- The plan assumes first-pass test success. Early sign: no loop in the schedule between a test and the next sample build.
+
+## What I decide alone, and what I escalate
+
+- I decide: hardware design choices and the HW work plan inside the approved budget and scope.
+- I escalate to the Programme Lead: cost impact beyond the approved forecast, a maturity risk that threatens a customer milestone, a supplier that will not qualify in time.
+- The customer decides: anything visible in the specification.
+
+## Vocabulary
+
+Gate deliverable, VPDS, Vistway, ASPICE, DV, PV, PPAP, cBOM, GBC, eproj, sample level, derating, EMC, thermal, obsolescence, qualification.

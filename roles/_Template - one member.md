@@ -5,54 +5,54 @@ kind: template
 Copy this file, delete the two front-matter lines above, and name the copy
 after the member: "R&R Hardware.md" or "Hardware.md" both give the member
 "Hardware" (a leading "R&R", "Role" or "Roles" in the file name is dropped).
-The first heading is the member's title; the file name is its identity, so
-a heading copied from another file cannot merge two members into one.
 
-Optional front matter, if you want to override what the board guesses:
----
-member: Hardware
-title: Project Manager HW
-perspective: one line the synthesis sees (else: the first sentence below)
-order: 2
-icon: chip          # dollar chip gear factory code target scale people shield truck flask chart layers person
-color: "#2563eb"
-short: Hardware
----
-See roles/examples/ for real, complete files.
+One file, one member. The official role description goes in verbatim under
+"Official description" and is never rewritten for the board; everything the
+board needs beyond it is written in the sections below, in this same file.
+
+The first heading is the member's title. Keys under it: level (1 programme
+lead, 2 project manager, 3 and below), icon (dollar chip gear factory code
+target scale people shield truck flask chart layers person), and optionally
+perspective, color, short, order.
+
+See roles/examples/ for eight complete files.
 -->
 # Project Manager <Swim Lane>
 level: 2
+icon: person
 
-Develop and maintain control over all the Program Management elements of
-the <Swim Lane>, e.g.: timing plan and strategy, process compliance, risks,
-defects, quality indicators and escalations, budget and staff planning.
+## Official description
 
-## Responsibilities
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
-What this member owns, one line per responsibility, together with the
-measures that go with them - the KPIs, gates and dates this role is held
-to. They belong here, inside the responsibility, not in a section of their
-own and not with another member.
+<paste the official text here, unchanged>
 
-Execution and Monitoring:
-...
+## Targets I am judged on
 
-Customer Focus:
-...
+The measures this role is actually held to, with numbers where they exist.
+Without them the board can only give opinions.
 
-Change Management:
-...
+- <measure>: <target>
 
-Risk Management:
-...
+## What I protect when I cannot have everything
+
+The one sentence an official job description never contains, and the one
+this board most needs. When cost, time, quality and scope collide, what does
+this role defend to the last, and what does it let go first?
+
+## How this lane usually fails
+
+The failure modes seen before, each with the sign that shows up early.
+
+- <what goes wrong>. Early sign: <what it looks like three weeks earlier>.
+
+## What I decide alone, and what I escalate
+
+- I decide: <...>
+- I escalate to the Programme Lead: <...>
+- The customer decides: <...>
 
 ## Vocabulary
 
-The words this member uses.
-
-# <Swim Lane> Leader
-level: 3
-
-A second role in the same swim lane, ranked below the project manager. The
-member speaks as the highest-ranked role and weighs the others by rank.
-Add as many roles as the swim lane has: level 4, 5, ...
+The words this role uses, so its answers sound like it and not like a
+template.

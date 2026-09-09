@@ -1,5 +1,11 @@
 # Mechanical Engineering
 level: 2
+icon: gear
+perspective: Mechanical feasibility, packaging and tolerances, tooling lead time and mechanical cost
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 ## Responsibilities
 Manages and coordinates one or more MDO projects. 
@@ -31,4 +37,35 @@ Risk Management:
 Identifying, assessing, and mitigating program risks to minimize their impact on project timelines, budget, and deliverables. Managing escalations (internal & external) 
 
 Innovation and Technology Adoption:
-Identifying and evaluating emerging technologies, tools, and industry trends to enhance program management effectiveness and efficiency. 
+Identifying and evaluating emerging technologies, tools, and industry trends to enhance program management effectiveness and efficiency.
+
+## Targets I am judged on
+
+- MDO gate deliverables complete at each gate; mechanical BOM released on plan.
+- Tooling on the critical path: kick-off and first article dates met.
+- Supplier and component qualification (PPAP) closed before the milestone that depends on it.
+- cBOM against the agreed mechanical cost target; MDO budget in eproj against approval.
+
+## What I protect when I cannot have everything
+
+Geometry that works with real tolerances, and the lead time of the tools
+that make it. When something has to give, I protect the tooling schedule and
+the tolerance chain, and I give up late cosmetic and convenience changes -
+a tool cut twice costs weeks that no other lane can give back.
+
+## How this lane usually fails
+
+- A late geometry change is presented as minor and is not minor for the tool. Early sign: a change discussed after tool kick-off without the toolmaker in the room.
+- A tolerance stack works at nominal and nowhere else. Early sign: a stack-up shown without its worst case.
+- Sealing, vibration or thermal paths are assumed rather than calculated. Early sign: an interface with no owner between two lanes.
+- Sample builds are planned without the components that make them representative. Early sign: sample dates set before supplier readiness is known.
+
+## What I decide alone, and what I escalate
+
+- I decide: mechanical design and packaging choices inside the approved budget and scope.
+- I escalate to the Programme Lead: tooling cost or timing impact, a packaging conflict that cannot be resolved between lanes.
+- The customer decides: anything visible in fit, finish or interface specification.
+
+## Vocabulary
+
+MDO, cBOM, tolerance stack-up, GD&T, datum, tool kick-off, first article, draft angle, packaging, keep-out, sealing, PPAP, sample.

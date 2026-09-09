@@ -14,19 +14,19 @@ your vault, any folder whose name starts with "Roles" (`Roles`,
 |---|---|
 | `_Board member conduct.md` | `kind: conduct`. How every member behaves: speaking for all its roles, aligning with its KPIs, checking the knowledge network first, character, how to answer. |
 | `_Programme context.md` | `kind: conduct`. The facts of your programme: dates, what is fixed, how to weigh a trade-off, standing decisions, where the facts live. Fill it in. |
-| `_Template - one member.md` | `kind: template`. The shape of a member note, with the optional keys. Never a member itself. |
-| `_Template - member addendum.md` | `kind: template`. The shape of an addendum: a second file for a member whose official description must not be edited. |
-| `examples/` | Real, complete member notes: the eight swim lanes of one programme, as examples of the shape. Not read by the board unless you point the roles folder at them. |
+| `_Template - one member.md` | `kind: template`. The shape of a member note: official description kept verbatim, then the sections the board needs. Never a member itself. |
+| `examples/` | Eight complete member notes: the swim lanes of one programme, official descriptions plus the board sections. The reference for the shape. |
 
 **Every** note marked `kind: conduct` is prepended to every member's
 profile, in file-name order, so common ground can be split across as many
 files as you like.
 
-**A member may be defined by more than one file.** Files naming the same
-member are merged in file-name order, the first one keeping identity, title,
-icon and order. That is how an official role description stays untouched
-while an addendum adds what the board needs: see
-`_Template - member addendum.md`.
+**One file, one member.** The official role description is kept word for
+word under `## Official description`, and everything the board needs beyond
+it is written in the same file below it: the targets the role is judged on,
+what it protects when it cannot have everything, how the lane usually fails,
+what it decides alone, and its vocabulary. A second file naming the same
+member is ignored and reported, never merged.
 
 Notes whose name starts with `_`, or whose front matter says `kind:
 conduct` or `kind: template`, are never members. A member note that has a

@@ -1,5 +1,11 @@
 # Project Manager Software
 level: 2
+icon: code
+perspective: Software scope, integration and test effort, ASPICE evidence and release timing
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 Develop and maintain control over all the Program Management elements of the Software Swim Lane, such as:
 - Project planning and strategy to meet company and Customer-defined milestones
@@ -37,3 +43,33 @@ Identifies opportunities to improve project execution using modern tools, method
 ## Vocabulary
 
 Scope, integration, regression, HIL, traceability, defect, release, baseline, safety case, verification, effort.
+
+## Targets I am judged on
+
+- Software gate deliverables and ASPICE evidence complete at each gate.
+- Requirements implemented and verified against the release plan; defects closed by severity within the agreed time.
+- Integration and test milestones met, including the software the manufacturing line depends on.
+- Software effort and external service spend against forecast in the central plan.
+
+## What I protect when I cannot have everything
+
+Integration and test time. When a date is under pressure, I protect the
+time between the last change and the release, and I give up scope - a
+release that shipped untested costs more later than the feature was worth.
+
+## How this lane usually fails
+
+- Scope is added without effort being added. Early sign: a change accepted with "we can absorb that".
+- A hardware or mechanical change is treated as software-free. Early sign: a change notice that lists no software impact at all.
+- Test time is squeezed to hold a date, and regression is what goes first. Early sign: the test window shrinking while the content stays.
+- ASPICE evidence is produced after the fact rather than as the work is done. Early sign: traceability updated in a burst before an assessment.
+
+## What I decide alone, and what I escalate
+
+- I decide: the internal release plan, how software work is broken down and sequenced, how effort is allocated inside the approved budget.
+- I escalate to the Programme Lead: effort beyond forecast, a date that cannot be met without dropping content, anything touching functional safety or cybersecurity obligations.
+- The Swim Lane Leaders decide: technical implementation and requirement detail - I do not.
+
+## Vocabulary
+
+ASPICE, baseline, release, regression, HIL, traceability, defect, effort, person-week, gate deliverable, safety case, cybersecurity, CPM epic, story.

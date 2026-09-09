@@ -46,8 +46,12 @@ class TestRealExamples(unittest.TestCase):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
         hw = board.profiles["Hardware"]
         self.assertEqual(hw.title, "Project Manager HW")
-        self.assertTrue(hw.perspective.startswith("Develop and maintain control over all the Program Management elements of HW Swim Lane"))
-        self.assertLessEqual(len(hw.perspective), 200)
+        self.assertEqual(hw.perspective,
+                         "Hardware feasibility, design maturity, validation evidence and hardware cost")
+        for member, profile in board.profiles.items():
+            self.assertTrue(profile.perspective, member)
+            self.assertNotIn("Taken from the internal role description", profile.perspective, member)
+            self.assertLessEqual(len(profile.perspective), 200, member)
         self.assertEqual(hw.icon, "chip")
         self.assertEqual(board.profiles["Software"].icon, "code")
         self.assertEqual(board.profiles["Systems"].icon, "flask")
@@ -55,10 +59,28 @@ class TestRealExamples(unittest.TestCase):
         self.assertEqual(board.profiles["Program Lead"].icon, "chart")
         self.assertEqual(board.profiles["Finance"].icon, "dollar")
 
-    def test_old_style_and_new_style_notes_mix(self):
+    def test_every_example_keeps_its_official_text_and_adds_the_board_sections(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
-        self.assertIn("## Character", board.profiles["Finance"].body)
-        self.assertIn("## Responsibilities", board.profiles["Systems"].body)
+        for member, profile in board.profiles.items():
+            for heading in ("## Official description",
+                            "## Targets I am judged on",
+                            "## What I protect when I cannot have everything",
+                            "## How this lane usually fails",
+                            "## What I decide alone, and what I escalate",
+                            "## Vocabulary"):
+                self.assertIn(heading, profile.body, f"{member}: {heading}")
+        # the official wording is untouched inside its section
+        self.assertIn("VPDS Process Compliance", board.profiles["Hardware"].body)
+        self.assertIn("Champions as Project Manager VPRS preliminary analysis",
+                      board.profiles["Manufacturing"].body)
+
+    def test_what_each_member_protects_is_different(self):
+        board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})
+        protects = set()
+        for profile in board.profiles.values():
+            section = profile.body.split("## What I protect when I cannot have everything")[1]
+            protects.add(section.split("##")[0].strip()[:80])
+        self.assertEqual(len(protects), len(board.profiles))
 
     def test_there_is_no_kpi_member_kpis_belong_to_each_role(self):
         board = roles.load_board({"knowledge": {"roles_folder": str(EXAMPLES)}})

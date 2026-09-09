@@ -1,5 +1,11 @@
 # Project Manager Systems
 level: 2
+icon: flask
+perspective: Product-level design ownership, validation coverage, homologation and configuration control
+
+## Official description
+
+*Taken from the internal role description. Kept word for word; edit only when the official document changes.*
 
 Develop and maintain control over all the Program Management elements of System Swim Lane, e.g.: 
 Timing plan & Strategy to meet the defined Visteon and Customer milestones 
@@ -46,4 +52,35 @@ Risk Management:
 Identifying, assessing, and mitigating program risks to minimize their impact on project timelines, budgets, and deliverables. Managing escalations (internal & external) 
 Innovation and Technology Adoption 
 Identifying and evaluating emerging technologies, tools, and industry trends to enhance program
-management effectiveness and efficiency. 
+management effectiveness and efficiency.
+
+## Targets I am judged on
+
+- Product-level deliverables complete at each gate: TDR, DFMEA, test coverage.
+- DV, PV and environmental validation executed to plan; homologation and certification obtained before the milestone that needs them.
+- Product configuration under control: diversity managed, no unapproved variant in the field of play.
+- Validation, homologation and lab budget in eproj against approval.
+
+## What I protect when I cannot have everything
+
+Validation coverage and configuration integrity at product level. When a
+date presses, I protect the evidence that the product does what it must,
+and I give up lane-local optimisation - a trade-off that helps one
+discipline and shrinks test coverage is a trade-off against the product.
+
+## How this lane usually fails
+
+- A cross-discipline trade-off is decided inside one lane. Early sign: a TDR closed with one discipline in attendance.
+- Lab and homologation slots are booked after the design is frozen, not before. Early sign: a validation plan with no confirmed lab capacity.
+- Configuration diversity grows without being managed. Early sign: variants appearing in the BOM that no one can map to a customer requirement.
+- Environmental or certification findings arrive too late to change anything. Early sign: the first environmental test scheduled after the last design gate.
+
+## What I decide alone, and what I escalate
+
+- I decide: product configuration, the validation and test scope, how cross-discipline trade-offs are run.
+- I escalate to the Programme Lead: a homologation or certification risk, a validation budget overrun, a trade-off the lanes cannot settle.
+- The customer decides: requirement changes and anything affecting certification scope.
+
+## Vocabulary
+
+TDR, DFMEA, DV, PV, ENV, homologation, certification, configuration, diversity, test coverage, requirement, traceability, lab, bench, eproj.
