@@ -245,7 +245,13 @@ with the reason in small text; a pick that did not parse shows the banner
 and the Python ranking. `board eval-knowledge --selection ai|python`
 prints the hit rate per question and in total; the per-step figure is
 read from the statistics split (core, own, summaries) of a run. The set
-holds three example questions until Alex supplies the ten real ones.
+holds three example questions until Alex supplies the ten real ones. Two rules the first measurement forced, both in `knowledge.py`: pages
+about the vault itself (`kind: guide`, the abbreviations table) are never
+ranked or summarised for a member, the abbreviations table instead
+contributes the rows the question uses to the core; and a section larger
+than half the budget (and at least 1,500 tokens) is not sent whole unless
+picked by hand, since the abbreviations table and the task table of the
+process overview had been taking four fifths of every member's block.
 
 ## 6. Audit trail
 

@@ -162,12 +162,14 @@ class TestSetProperty(unittest.TestCase):
         out = enrich.set_property(text, "affected_swimlanes", ["Hardware"])
         self.assertEqual(out, "---\nkind: process\naffected_swimlanes: [Hardware]\nupdated: 2026-09-01\n---\n# Page\n")
         out = enrich.set_property(text, "phases", ["MP3", "MP4"])
-        self.assertIn("updated: 2026-09-01\nphases: [MP3, MP4]\n---\n# Page\n", out)
+        self.assertIn("  - Mechanical\nphases: [MP3, MP4]\nupdated: 2026-09-01\n---\n# Page\n", out)   # updated stays last
         out = enrich.set_property("# Page\n", "summary", "AI summary, not official. Two: things.")
         self.assertEqual(out, '---\nsummary: "AI summary, not official. Two: things."\n---\n# Page\n')
         self.assertEqual(knowledge._front_matter(out)["summary"], "AI summary, not official. Two: things.")
+        out = enrich.set_property("---\nkind: note\n---\n# Page\n", "updated", "2026-09-10")
+        self.assertEqual(out, "---\nkind: note\nupdated: 2026-09-10\n---\n# Page\n")
         out = enrich.set_property(text, "aliases", ["Mech, Displays, Optical Dev", "MDO"])
-        self.assertIn("aliases:\n  - Mech, Displays, Optical Dev\n  - MDO\n---", out)
+        self.assertIn("aliases:\n  - Mech, Displays, Optical Dev\n  - MDO\nupdated:", out)
         self.assertEqual(knowledge._front_matter(out)["aliases"], ["Mech, Displays, Optical Dev", "MDO"])
         self.assertEqual(enrich.set_property(text, "Kind", "kpi").count("kind"), 0)   # case-insensitive replace
 

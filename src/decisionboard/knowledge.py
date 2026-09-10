@@ -436,6 +436,8 @@ FORCED_CAP_TOKENS = 12000     # manual picks on top of the budget stop here, wha
 CORE_SHARE = 0.4              # the shared core may take this share of the budget, the rest is the member's own
 BRIEF_PAGES = 20              # one-line summaries of further pages, per member
 BRIEF_CAP_TOKENS = 800        # ... within this many tokens, on top of the budget
+SECTION_SHARE = 0.5           # one section may take this share of the budget; a bigger one is not sent whole unless picked by hand
+_BIG_SECTION_TOKENS = 1500    # ... the rule applies to sections at least this big, so a small budget still gets its best section
 _BOOST_LEAD = 6               # spec 5.1: the page's lead_swimlane is this member
 _BOOST_AFFECTED = 3           # the member is among the page's affected_swimlanes
 _BOOST_PHASE = 3              # the task is active in a phase the question names
@@ -502,14 +504,68 @@ def expand_terms(terms: list[str], question: str, notes: list[Note]) -> list[str
     return expanded
 
 
-def core_sections(prepared: "_Prepared", notes: list[Note], projects: list[str], phases: tuple[str, ...]) -> list[Section]:
+def _is_abbreviations(note: Note) -> bool:
+    return note.kind == "reference" and "abbreviation" in note.title.lower()
+
+
+def is_meta(note: Note) -> bool:
+    """A page about the vault itself, never knowledge for a decision: the
+    guide (``kind: guide``) and the abbreviations page. Neither is ranked
+    or summarised for a member (a manual pick still sends it). The
+    abbreviations page still expands the question's terms and supplies the
+    rows of the core, see ``abbreviation_rows``. Decided 10 September
+    2026, when the abbreviations table, one 4,800-token section, was found
+    to take four fifths of every member's budget on every question."""
+    return note.kind == "guide" or _is_abbreviations(note)
+
+
+_ABBREV_HEADING = "Abbreviations used in the question"
+_ABBREV_ROWS = 25
+_ABBREV_INDEX = 900           # a synthetic section, numbered past any real one
+
+
+def abbreviation_rows(notes: list[Note], question: str) -> Section | None:
+    """The rows of the abbreviations table whose abbreviation the question
+    uses (``MG4`` finds ``MG``), as one small section for the shared core,
+    so every member reads what the question's abbreviations mean instead
+    of the whole table. None when nothing matches."""
+    note = next((n for n in notes if _is_abbreviations(n)), None)
+    if note is None or not question.strip():
+        return None
+    words: set[str] = set()
+    for word in re.findall(r"[A-Za-z][\w&/-]*", question):
+        words.add(word.lower())
+        words.add(re.sub(r"\d+$", "", word).lower())
+    header: list[str] = []
+    rows: list[str] = []
+    for line in note.body.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(header) < 2:
+            header.append(line.strip())           # the header row and the separator
+            continue
+        if cells and any(part.strip().lower() in words for part in cells[0].split("/")):
+            rows.append(line.strip())
+    if len(header) < 2 or not rows:
+        return None
+    body = f"## {_ABBREV_HEADING}\n\n" + "\n".join(header + rows[:_ABBREV_ROWS])
+    return Section(note=note, heading=_ABBREV_HEADING, body=body, index=_ABBREV_INDEX)
+
+
+def core_sections(prepared: "_Prepared", notes: list[Note], projects: list[str], phases: tuple[str, ...],
+                  question: str = "") -> list[Section]:
     """The shared core (spec 5.1): the project page(s), the section of the
-    process overview that defines the phases and gates, and the Definition
-    of every task active in a phase the question names. In that order; the
-    packing caps it at ``CORE_SHARE`` of the budget."""
+    process overview that defines the phases and gates, the rows of the
+    abbreviations table the question uses, and the Definition of every task
+    active in a phase the question names. In that order; the packing caps
+    it at ``CORE_SHARE`` of the budget."""
     pinned = {n.relative for n in _pinned(notes, projects)}
     core = [s for s in prepared.sections if s.relative in pinned]
     core += [s for s in prepared.sections if s.heading.lower() == _GATE_SECTION and s.note.kind == "process"]
+    abbreviations = abbreviation_rows(notes, question)
+    if abbreviations is not None:
+        core.append(abbreviations)
     if phases:
         wanted = set(phases)
         core += [s for s in prepared.sections
@@ -540,7 +596,10 @@ def select_sections(
     score. The score carries the page properties: the page's lead is this
     ``member`` (+6), the member is affected (+3), the task is active in a
     phase the question names (+3); the question's terms are expanded by
-    aliases and abbreviations. After the budget is spent, up to
+    aliases and abbreviations. A section larger than ``SECTION_SHARE`` of
+    the budget is never sent whole unless picked by hand (the task table
+    of the process overview took four fifths of every block before this
+    rule). After the budget is spent, up to
     ``BRIEF_PAGES`` further pages go in as one line each (the page's
     ``summary``), within ``BRIEF_CAP_TOKENS`` on top. ``pinned`` notes are
     accepted for older callers and become part of the core."""
@@ -551,12 +610,15 @@ def select_sections(
     prep = prepared or _Prepared.of(notes)
     named_phases = tuple(phases) if phases is not None else question_phases(question)
     if core is None:
-        core = core_sections(prep, notes, projects or [], named_phases)
+        core = core_sections(prep, notes, projects or [], named_phases, question)
         core = [s for s in prep.sections if s.relative in {n.relative for n in (pinned or [])}] + [s for s in core if s.relative not in {n.relative for n in (pinned or [])}]
     core_ids = {section_id(s): i for i, s in enumerate(core)}
     preferred_ids = {str(x): i for i, x in enumerate(preferred)}
     all_sections = [section for section in prep.sections
-                    if section_id(section) not in banned and section.relative not in banned]
+                    if section_id(section) not in banned and section.relative not in banned
+                    and (not is_meta(section.note) or section_id(section) in forced or section.relative in forced)]
+    all_sections += [section for section in core
+                     if section.index >= _ABBREV_INDEX and section.relative not in banned]   # built for this question, not in the vault
     member_key = member.strip().lower()
 
     def is_forced(section: Section) -> bool:
@@ -598,6 +660,7 @@ def select_sections(
     chosen: list[tuple[Section, str, str]] = []      # section, chunk, tier ("core" or "own")
     core_used = 0
     cut_once = False
+    skipped_big: Section | None = None       # the best section too big for its share, cut in when nothing else fills the block
     for section in ranked:
         label = _label(section)
         chunk = f"{label}\n{section.body}\n\n"
@@ -618,6 +681,10 @@ def select_sections(
                 remaining -= cost
                 core_used += cost
             continue
+        if cost > _BIG_SECTION_TOKENS and cost > token_budget * SECTION_SHARE:
+            if skipped_big is None:
+                skipped_big = section
+            continue          # one table must not be the whole block; the page's summary still reaches the member
         if cost <= remaining:
             chosen.append((section, chunk, "own"))
             remaining -= cost
@@ -635,6 +702,15 @@ def select_sections(
             remaining = 0
             break
         continue              # too big: a smaller, lower-ranked section may still fit
+    if skipped_big is not None and not cut_once and not any(tier == "own" for _s, _c, tier in chosen):
+        # Nothing else filled the member's share: the best big section is
+        # cut to what is left rather than sending an empty block.
+        label = _label(skipped_big)
+        room_chars = remaining * _CHARS_PER_TOKEN - len(label) - 40
+        if room_chars > 200:
+            chosen.append((skipped_big, f"{label}\n{skipped_big.body[:room_chars]}\n[... cut to fit the token budget]\n\n", "own"))
+            selection.truncated = True
+            remaining = 0
     # Sections of one note stay together, in the note's own order, under the
     # note's first appearance in the ranking - per tier: a page's Definition
     # in the core does not pull its Coaching into the core.
@@ -664,7 +740,7 @@ def select_sections(
         if note is not None and relative not in sent_pages and note not in brief_order:
             brief_order.append(note)
     for section in ranked:
-        if section.relative in sent_pages or section.note in brief_order or section.note.kind == "project":
+        if section.relative in sent_pages or section.note in brief_order or section.note.kind == "project" or is_meta(section.note):
             continue
         brief_order.append(section.note)
     brief_lines: list[str] = []
@@ -797,7 +873,7 @@ def gather_for_members(
     result: dict[str, KnowledgeSelection] = {}
     prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
     phases = question_phases(question)
-    core = core_sections(prepared, notes, chosen, phases) if prepared is not None else []
+    core = core_sections(prepared, notes, chosen, phases, question) if prepared is not None else []
     for member, terms in member_terms.items():
         if vault is None:
             result[member] = KnowledgeSelection(vault_path=None)
@@ -826,7 +902,7 @@ def candidates(config: dict, question: str, member_terms: dict[str, list[str] | 
         return {m: [] for m in member_terms}
     prepared = _Prepared.of(notes)
     phases = question_phases(question)
-    core = core_sections(prepared, notes, chosen, phases)
+    core = core_sections(prepared, notes, chosen, phases, question)
     core_ids = {section_id(s) for s in core}
     result: dict[str, list[dict[str, Any]]] = {}
     for member, terms in member_terms.items():

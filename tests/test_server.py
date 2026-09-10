@@ -185,7 +185,7 @@ class TestServerFlow(unittest.TestCase):
 
         status, state = self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["200k"]})
         self.assertEqual(status, 200)
-        self.assertEqual(state["phase"], "clarifying")           # the clarifier looks again
+        self.assertIn(state["phase"], ("clarifying", "confirm"))   # the clarifier looks again (and may already be done)
         state = self.wait_for(sid, lambda s: s["phase"] == "confirm")
         self.assertEqual(len(state["rounds"]), 1)
         self.assertEqual(state["llm_calls"], 2)                  # two clarifier calls

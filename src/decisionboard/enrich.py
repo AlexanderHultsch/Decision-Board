@@ -134,8 +134,8 @@ def _summaries(provider: AiProvider, batch: list[Note]) -> dict[str, str]:
 
 def set_property(text: str, key: str, value: Any) -> str:
     """The page text with ``key: value`` set in its front matter, replacing
-    the key where it is (inline or as a block list), appending before the
-    closing ``---`` otherwise, creating the front matter when there is
+    the key where it is (inline or as a block list), inserting it before
+    ``updated`` (else before the closing ``---``) otherwise, creating the front matter when there is
     none. Lists are written inline (as a block list when an item holds a
     comma), a string with a colon is quoted."""
     block: list[str] = []
@@ -171,7 +171,11 @@ def set_property(text: str, key: str, value: Any) -> str:
             continue
         out.append(raw)
     if not done:
-        out.append(line)
+        # A new key goes in front of ``updated`` so that one stays last.
+        at = next((i for i, raw in enumerate(out) if re.match(r"^updated\s*:", raw, flags=re.I)), len(out))
+        if key.lower() == "updated":
+            at = len(out)
+        out.insert(at, line)
     return "---\n" + "\n".join(out) + tail
 
 

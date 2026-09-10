@@ -321,6 +321,58 @@ class TestSecondGeneration(unittest.TestCase):
         self.assertEqual(block.reasons["VPDS_Customer Part Approval.md#Definition"], "the plant proves the part")
 
 
+class TestMetaPages(unittest.TestCase):
+    """Decided 10 September 2026: the guide and the abbreviations table are
+    about the vault, not the decision. They never take a member's budget;
+    the rows the question uses reach the core instead."""
+
+    def _vault(self, tmp: Path) -> Path:
+        (tmp / "_How this vault works.md").write_text(
+            "---\nkind: guide\n---\n# How this vault works\n\n## Properties\n\nThe DV tests and the MG4 gate are words this page uses.\n"
+            "Design verification, gates, freeze, housing - " * 20, encoding="utf-8")
+        (tmp / "Abbreviations.md").write_text(
+            "---\nkind: reference\n---\n# Abbreviations\n\nEvery abbreviation.\n\n| Abbreviation | Full form | Description |\n| --- | --- | --- |\n"
+            "| DV | Design Verification | Closed by MG4 |\n| DVP&R | Design Verification Plan and Report | Results |\n"
+            "| MG | Maturity Gate | The review |\n| PPAP | Production Part Approval Process | Part approval |\n"
+            "| SQ/SQE | Supplier Quality Engineer | Supplier quality |\n" + "| X%d | Filler %d | Filler |\n" * 0, encoding="utf-8")
+        (tmp / "VPDS_Design Verification Testing.md").write_text(
+            "---\nkind: process\n---\n# VPDS task - Design Verification Testing\n\n## Definition\n\nDV tests verify the design before MG4.\n", encoding="utf-8")
+        return tmp
+
+    def test_guide_and_table_are_never_ranked_and_the_used_rows_reach_the_core(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = knowledge.load_vault(self._vault(Path(tmp)))
+            selection = knowledge.select_sections(notes, "Can we pass MG4 with the DV tests and the DVP&R still open?", 3000)
+            paths = [n.relative for n in selection.notes]
+            self.assertNotIn("_How this vault works.md", paths)
+            self.assertNotIn("_How this vault works.md", [n.relative for n in selection.briefs])
+            core = [s for s in selection.sections if s.heading == knowledge._ABBREV_HEADING]
+            self.assertEqual(len(core), 1)
+            self.assertIn("| DV |", core[0].body)
+            self.assertIn("| MG |", core[0].body)
+            self.assertIn("| DVP&R |", core[0].body)
+            self.assertNotIn("| PPAP |", core[0].body)
+            self.assertIn("| Abbreviation | Full form |", core[0].body)
+            self.assertIn(knowledge._ABBREV_HEADING, selection.core_text)
+            self.assertNotIn("| PPAP |", selection.text)              # the whole table never goes out
+            self.assertIn("VPDS_Design Verification Testing.md", paths)
+            # A section over half the budget is not sent whole: it would be the whole block.
+            (Path(tmp) / "Big table.md").write_text("---\nkind: process\nsummary: The DV table.\n---\n# DV table\n\n## DV rows\n\n" +
+                                                  "| DV | MG4 | design verification |\n" * 300, encoding="utf-8")
+            notes = knowledge.load_vault(Path(tmp))
+            big = knowledge.select_sections(notes, "Can we pass MG4 with the DV tests still open?", 3000)
+            self.assertNotIn("DV rows", [s.heading for s in big.sections])
+            self.assertIn("DV rows", [s.heading for s in knowledge.select_sections(notes, "DV?", 3000, extra=["Big table.md"]).sections])
+            # A manual pick still sends the guide, whole.
+            forced = knowledge.select_sections(notes, "Anything?", 3000, extra=["_How this vault works.md"])
+            self.assertIn("_How this vault works.md", [n.relative for n in forced.notes])
+            self.assertIsNone(knowledge.abbreviation_rows(notes, "Nothing abbreviated here"))
+            self.assertIsNone(knowledge.abbreviation_rows([n for n in notes if n.kind != "reference"], "MG4"))
+            sq = knowledge.abbreviation_rows(notes, "Who is the SQE?")
+            self.assertIn("| SQ/SQE |", sq.body)
+            self.assertEqual(knowledge.section_id(sq), f"Abbreviations.md#{knowledge._ABBREV_HEADING}")
+
+
 class TestPicker(unittest.TestCase):
     def test_only_candidate_ids_survive_and_a_bad_answer_keeps_python_in_force(self):
         from decisionboard import picker
