@@ -38,14 +38,15 @@
     const box = $("thread-list");
     try {
       const data = await api("GET", "/api/ask");
-      const rows = data.threads || [];
+      // Only open threads (spec 11.1, decision 10): a closed one moves to
+      // the archive by itself and stays readable there.
+      const rows = (data.threads || []).filter((r) => r.status !== "closed");
       box.innerHTML = rows.length ? rows.map((r) => `
         <div class="thread-row" data-id="${esc(r.id)}">
           <button type="button" class="thread-open" title="Open this thread">${esc(r.title)}</button>
-          ${r.status === "closed" ? '<span class="closed-tag">closed</span>' : ""}
           <span class="thread-meta">${r.questions} question(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
           <button type="button" class="ghost small-btn thread-delete" title="Delete this thread">Delete</button>
-        </div>`).join("") : "<p class='muted small'>No threads yet. Ask the first question above.</p>";
+        </div>`).join("") : "<p class='muted small'>No open thread. Ask the first question above; closed threads are in the archive.</p>";
       box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => PM.navigate(`/ask/${b.closest(".thread-row").dataset.id}`)));
       box.querySelectorAll(".thread-delete").forEach((b) => b.addEventListener("click", async () => {
         const id = b.closest(".thread-row").dataset.id;

@@ -51,7 +51,9 @@ machine without admin rights). The home page holds the project picker, one
 card per agent and the open work of every agent. The top bar shows the
 project and three status lights (vault, AI, project; hover for the detail);
 the menu at the right holds Options, Statistics, Status details, the vault in
-Obsidian and the link to report a bug. Options changes the knowledge source,
+Obsidian, the Archive and the link to report a bug. Inside the board a step
+line (Question, Clarify, Confirm, Result) goes back to any earlier step with
+everything typed kept. Options changes the knowledge source,
 the model, the token budget, the audit folder or the theme.
 
 The command line is still there for the board:
@@ -99,8 +101,11 @@ fallback source.
 
 Nothing is written to the vault without your confirmation. When you close a
 topic or a thread the agent proposes a note and a place for it; you edit and
-confirm, or do not write. Threads and topics themselves are kept as JSON
-files under `config/threads/`, never in the vault.
+confirm, or do not write. The work itself is kept as one JSON file per topic
+and per thread under `config/history/`, never in the vault: the home page
+lists what is open, the Archive in the menu holds what you have closed, and
+both can be reopened to read. A topic keeps the paths of the vault pages it
+was sent, never their text.
 
 The role profiles the board reads live in a folder of the vault whose name
 starts with "Roles", or any folder you choose in Options: one note per

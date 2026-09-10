@@ -368,6 +368,51 @@
     $("btn-menu").setAttribute("aria-expanded", String(!list.hidden));
   }
 
+  // -- the archive (decision 10): everything closed, of every agent --
+
+  let archive = [];
+
+  const AGENT_NAME = { board: "Board", ask: "Ask the vault" };
+
+  function workRow(r, extra) {
+    return `<div class="thread-row ${extra}" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}">
+      <span class="agent-tag">${esc(AGENT_NAME[r.kind] || r.kind)}</span>
+      <button type="button" class="thread-open" title="Open">${esc(r.title)}</button>
+      <span class="thread-meta">${r.count} ${esc(r.unit)}(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>`;
+  }
+
+  function pathOf(row) { return row.dataset.kind === "board" ? `/board/${row.dataset.id}` : `/ask/${row.dataset.id}`; }
+
+  function renderArchive() {
+    const filter = ($("archive-filter").value || "").trim().toLowerCase();
+    const rows = archive.filter((r) => !filter || r.title.toLowerCase().includes(filter));
+    $("archive-count").textContent = archive.length
+      ? `${rows.length} of ${archive.length} closed · newest first`
+      : "Nothing closed yet. A topic or a thread moves here when you close it.";
+    $("archive-list").innerHTML = rows.map((r) => `${workRow(r, "archive-row")}
+      <button type="button" class="ghost small-btn archive-delete" title="Delete this for good">Delete</button></div>`).join("");
+    $("archive-list").querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(pathOf(b.closest(".thread-row")))));
+    $("archive-list").querySelectorAll(".archive-delete").forEach((b) => b.addEventListener("click", async () => {
+      const row = b.closest(".thread-row");
+      if (!window.confirm("Delete this for good? Its questions and answers are removed; a note written to the vault stays.")) return;
+      try { await api("DELETE", `/api/history/${row.dataset.id}`); loadArchive(); } catch (err) { setError("archive-error", err.message); }
+    }));
+  }
+
+  function openArchive() {
+    $("archive-filter").value = "";     // a fresh look each time the archive is opened
+    loadArchive();
+  }
+
+  async function loadArchive() {
+    setError("archive-error", "");
+    try {
+      const data = await api("GET", "/api/history?state=closed");
+      archive = data.items || [];
+      renderArchive();
+    } catch (err) { setError("archive-error", err.message); }
+  }
+
   // -- the home page (decision 5): the recent open work of every agent --
 
   async function loadRecent() {
@@ -375,17 +420,9 @@
     try {
       const data = await api("GET", "/api/history?state=open");
       const items = data.items || [];
-      const agentName = { board: "Board", ask: "Ask the vault" };
-      box.innerHTML = items.length ? items.map((r) => `
-        <div class="thread-row recent-row" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}">
-          <span class="agent-tag">${esc(agentName[r.kind] || r.kind)}</span>
-          <button type="button" class="thread-open" title="Open">${esc(r.title)}</button>
-          <span class="thread-meta">${r.count} ${esc(r.unit)}(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
-        </div>`).join("") : "<p class='muted small'>Nothing open. Start with an agent above.</p>";
-      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => {
-        const row = b.closest(".recent-row");
-        navigate(row.dataset.kind === "board" ? `/board/${row.dataset.id}` : `/ask/${row.dataset.id}`);
-      }));
+      box.innerHTML = items.length ? items.map((r) => `${workRow(r, "recent-row")}</div>`).join("")
+        : "<p class='muted small'>Nothing open. Start with an agent above; closed work is in the archive.</p>";
+      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(pathOf(b.closest(".thread-row")))));
     } catch (err) { setError("start-error", err.message); }
   }
 
@@ -429,7 +466,11 @@
 
   $("btn-status-test-yes").addEventListener("click", runAiTest);
 
-  document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
+  $("btn-archive").addEventListener("click", () => navigate("/archive"));
+
+  $("archive-filter").addEventListener("input", renderArchive);
+
+  document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new, #btn-board-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
 
   $("btn-projects").addEventListener("click", () => toggleProjectMenu());
 
@@ -561,6 +602,7 @@
   let currentRoute = "start";
   function register(agent) { agents.push(agent); }
   function routeOf(pathname) {
+    if (pathname === "/archive") return "archive";
     for (const a of agents) { const r = a.match(pathname); if (r) return r; }
     return "start";
   }
@@ -575,8 +617,11 @@
     const agent = agentFor(currentRoute);
     agents.forEach((a) => { if (a !== agent && a.onLeave) a.onLeave(); });
     renderProjectChips();
-    $("nav-arrows").hidden = !(agent && agent.id === "board");   // the arrows stay for the board until its step line (spec 11.3, step 3)
-    if (!agent) { show("start"); loadRecent(); return; }
+    if (!agent) {
+      $("step-line").hidden = true;
+      if (currentRoute === "archive") { show("archive"); openArchive(); return; }
+      show("start"); loadRecent(); return;
+    }
     if (agent.onEnter) agent.onEnter();
     agent.render(currentRoute);
   }
@@ -591,6 +636,7 @@
   window.PM = {
     $, esc, api, store, show, setError, fmt, fmtNum, fmtSec, lines, md, fmtDate,
     register, navigate, setPath, showProposal, openOptions, renderProjectPicker, loadStatus, loadRecent,
+    steps: () => $("step-line"),
     route: () => currentRoute,
     projects: () => (chosenProjects || []),
     get config() { return config; },

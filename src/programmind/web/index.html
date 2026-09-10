@@ -17,10 +17,6 @@
     <svg viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg>
     <span id="project-chip-label">All projects</span>
   </button>
-  <nav class="nav-arrows" id="nav-arrows" aria-label="Steps" hidden>
-    <button id="btn-nav-back" class="nav-btn" type="button" title="Back one step (stops the board if it is working)" disabled><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><span>Back</span></button>
-    <button id="btn-nav-forward" class="nav-btn" type="button" title="Forward again" disabled><span>Forward</span><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-  </nav>
   <div class="topbar-right">
     <div class="status-icons" id="status-icons" aria-label="Status">
       <div class="status" id="status-vault">
@@ -54,6 +50,7 @@
         <button id="btn-stats" type="button" role="menuitem">Statistics</button>
         <button id="btn-status" type="button" role="menuitem">Status details</button>
         <a id="link-obsidian" role="menuitem" href="#" hidden>Open vault in Obsidian</a>
+        <button id="btn-archive" type="button" role="menuitem">Archive</button>
         <a id="link-bug" role="menuitem" href="https://github.com/AlexanderHultsch/program-mind/issues" target="_blank" rel="noopener">Report a bug</a>
       </div>
     </div>
@@ -61,6 +58,15 @@
 </header>
 
 <main id="app" class="page">
+
+  <!-- The step line inside a flow (spec 11.1, decision 6): earlier steps go
+       back exactly as the arrows did; the browser's Back still steps too. -->
+  <nav id="step-line" class="step-line" aria-label="Steps" hidden>
+    <button type="button" class="step" data-step="0"><span class="step-mark">1</span><span class="step-name">Question</span></button>
+    <button type="button" class="step" data-step="1"><span class="step-mark">2</span><span class="step-name">Clarify</span></button>
+    <button type="button" class="step" data-step="2"><span class="step-mark">3</span><span class="step-name">Confirm</span></button>
+    <button type="button" class="step" data-step="3"><span class="step-mark">4</span><span class="step-name">Result</span></button>
+  </nav>
 
   <!-- Home page (spec 11.1, decision 5): the project once, one card per agent, the recent open work -->
   <section id="screen-start" class="screen" hidden>
@@ -126,7 +132,7 @@
       </div>
     </form>
     <p id="ask-error" class="error" hidden></p>
-    <p class="eyebrow">Threads <span class="muted small">newest first · a closed thread stays readable</span></p>
+    <p class="eyebrow">Open threads <span class="muted small">newest first · a closed thread moves to the archive</span></p>
     <div id="thread-list" class="thread-list"></div>
   </section>
 
@@ -166,6 +172,16 @@
       <div class="row"><a class="ghost btn-link" href="/ask" id="btn-thread-new">New thread</a></div>
     </div>
     <p id="thread-error" class="error" hidden></p>
+  </section>
+
+  <!-- Archive (spec 11.1, decision 10): everything closed, of every agent -->
+  <section id="screen-archive" class="screen" hidden>
+    <h1 class="greeting">Archive</h1>
+    <p class="lede">Everything you have closed, of every agent. Closed work moves here by itself; it stays readable and can be deleted. A note written into your vault stays there.</p>
+    <input id="archive-filter" type="text" class="outline-filter" placeholder="Search by title…" aria-label="Search the archive by title">
+    <p id="archive-count" class="muted small"></p>
+    <div id="archive-list" class="thread-list"></div>
+    <p id="archive-error" class="error" hidden></p>
   </section>
 
   <!-- Clarifying -->
@@ -295,6 +311,10 @@
         </div>
       </form>
       <p id="result-error" class="error" hidden></p>
+      <div id="board-closed" class="card" hidden>
+        <p class="muted" id="board-closed-text">This topic is closed. It stays here to read; it takes no further questions.</p>
+        <div class="row"><a class="ghost btn-link" href="/board" id="btn-board-new">New topic</a></div>
+      </div>
     </div>
   </section>
 

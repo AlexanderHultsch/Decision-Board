@@ -39,6 +39,7 @@ from typing import Any
 from programmind.ai.opencode_client import opencode_config_problem
 from programmind.agents.board import clarify as clarify_mod
 from programmind.knowledge import knowledge as knowledge_mod
+from programmind.memory import history as history_mod
 from programmind.memory import memory_writer
 from programmind.agents.ask import ask as ask_mod
 from programmind.knowledge import picker
@@ -46,15 +47,21 @@ from programmind.agents.board import roles as roles_mod
 from programmind.ai.opencode_client import stop_call
 from programmind.ai.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, build_provider
 from programmind.memory.audit import log_run
-from programmind.agents.board.board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
+from programmind.agents.board.board import (
+    BoardConversation, BoardResult, MemberAssessment, ask_follow_up_full, prompt_sizes, role_terms,
+    run_board, run_board_combined,
+)
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIR = PACKAGE_DIR / "web"                       # the shell: index.html, shell.js, style.css
 AGENTS_DIR = PACKAGE_DIR / "agents"                 # each agent ships its script under agents/<name>/web/
 DEFAULT_PORT = 8765
+BOARD_KIND = "board"                              # the ``kind`` of a board topic in the history folder
 DEFAULT_SITE_NAME = "mind"                         # http://mind.localhost:8765/ (spec 11.1, decision 1)
 STATUS_CHECK_PROMPT = "Reply with the single word OK."   # the confirmed test call of the AI status icon (11.1, decision 7)
 _GATE_LINE = re.compile(r"\bM[GP]\s?\d{1,2}\b", re.I)   # a line of the project page that names a gate or a phase
+_TABLE_RULE = re.compile(r"^\|[\s:|-]+\|$")             # the ---|--- row under a table header
+_GATE_LINES = 12                                        # at most this many rows in the hover card
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -171,6 +178,21 @@ def _selection_value(value: Any) -> str:
     return "python" if str(value or "").strip().lower() == "python" else "ai"
 
 
+def _settled_phase(phase: str, session: "Session") -> str:
+    """The phase a topic read from disk can be worked from. A call that was
+    running when the server stopped cannot be resumed, and a memory proposal
+    was never written to disk, so both come back one step earlier."""
+    if phase in ("closed", "written", "result", "confirm", "questions", "error"):
+        return phase
+    if session.result is not None:
+        return "result"
+    if session.inputs and session.clarification is not None:
+        return "confirm"
+    if session.clarification is not None:
+        return "questions"
+    return "error"
+
+
 def _restore_last_round(session: "Session") -> None:
     """Under the session lock: back to the last round of questions with its
     answers. The clarifier may have replaced the questions before failing;
@@ -240,12 +262,100 @@ class Session:
         self.llm_calls = 0
         self.proposal: memory_writer.MemoryProposal | None = None
         self.written_path: str | None = None
+        self.discarded = False                            # Start over: the topic is dropped, not archived
+        self.saved_stamp = 0.0                            # when the snapshot now on disk was taken
 
     @property
     def title(self) -> str:
         """The topic as the recent-work list names it: the clarified topic, else the question."""
         topic = str(self.inputs.get("topic") or "").strip() if self.inputs else ""
         return (topic or self.question.strip())[:120] or "New topic"
+
+    @property
+    def status(self) -> str:
+        """``closed`` once the topic is closed, with or without a note; the
+        archive lists those and the home page the rest (11.1, decision 10)."""
+        return "closed" if self.phase in ("closed", "written") else "open"
+
+    def to_record(self) -> dict[str, Any]:
+        """The topic as it is kept on disk (11.1, decision 9): the inputs,
+        the answers, the synthesis, the follow-ups, the statistics and the
+        paths of the knowledge sent - never the knowledge text itself, which
+        is the vault's and is re-read from it when a member is asked again."""
+        with self.lock:
+            clarification = None
+            if self.clarification is not None:
+                clarification = {"topic": self.clarification.topic, "context": self.clarification.context,
+                                 "options": list(self.clarification.options),
+                                 "constraints": list(self.clarification.constraints),
+                                 "questions": list(self.clarification.questions),
+                                 "parse_error": self.clarification.parse_error}
+            return {
+                "id": self.id, "kind": BOARD_KIND, "status": self.status, "phase": self.phase,
+                "created": self.started, "updated": time.time(),
+                "question": self.question, "projects": list(self.projects),
+                "inputs": dict(self.inputs), "clarification": clarification,
+                "answers": list(self.answers), "rounds": deepcopy(self.rounds),
+                "selected_members": list(self.selected_members), "members": dict(self.members),
+                "member_meta": deepcopy(self.member_meta), "roles": deepcopy(self.roles),
+                "mode": self.mode, "budget": self.budget, "selection": self.selection,
+                "extra": list(self.extra), "exclude": list(self.exclude),
+                "knowledge": deepcopy(self.knowledge),
+                "knowledge_paths": {m: sorted(paths) for m, paths in self.member_paths.items()},
+                "knowledge_split": deepcopy(self.knowledge_split),
+                "result": deepcopy(self.result), "turns": deepcopy(self.turns),
+                "calls": list(self.calls), "marks": list(self.marks),
+                "llm_calls": self.llm_calls, "written_path": self.written_path,
+            }
+
+    @staticmethod
+    def from_record(data: dict[str, Any]) -> "Session":
+        """A topic read back from disk. Nothing that was running survives a
+        restart, so a topic caught mid-call comes back at the last step it
+        can be worked from; the follow-up conversation is rebuilt from the
+        result when the first follow-up needs it."""
+        session = Session(str(data.get("question") or ""), [str(p) for p in data.get("projects") or []])
+        session.id = str(data.get("id") or session.id)
+        session.started = float(data.get("created") or time.time())
+        session.marks = [m for m in data.get("marks") or [] if isinstance(m, dict)] or session.marks
+        session.calls = [c for c in data.get("calls") or [] if isinstance(c, dict)]
+        session.inputs = dict(data.get("inputs") or {})
+        raw = data.get("clarification")
+        if isinstance(raw, dict):
+            session.clarification = clarify_mod.Clarification(
+                topic=str(raw.get("topic") or ""), context=str(raw.get("context") or ""),
+                options=[str(o) for o in raw.get("options") or []],
+                constraints=[str(c) for c in raw.get("constraints") or []],
+                questions=[str(q) for q in raw.get("questions") or []],
+                parse_error=raw.get("parse_error"))
+        session.answers = [str(a) for a in data.get("answers") or []]
+        session.rounds = [r for r in data.get("rounds") or [] if isinstance(r, dict)]
+        session.selected_members = [str(m) for m in data.get("selected_members") or []]
+        session.members = {str(k): str(v) for k, v in (data.get("members") or {}).items()}
+        session.member_meta = [m for m in data.get("member_meta") or [] if isinstance(m, dict)]
+        session.roles = dict(data.get("roles") or session.roles)
+        session.mode = "combined" if data.get("mode") == "combined" else "individual"
+        session.budget = data.get("budget")
+        session.selection = _selection_value(data.get("selection"))
+        session.extra = [str(x) for x in data.get("extra") or []]
+        session.exclude = [str(x) for x in data.get("exclude") or []]
+        session.knowledge = dict(data.get("knowledge") or session.knowledge)
+        session.member_paths = {str(m): [str(p) for p in paths]
+                                for m, paths in (data.get("knowledge_paths") or {}).items()}
+        session.knowledge_split = dict(data.get("knowledge_split") or {})
+        session.result = data.get("result") if isinstance(data.get("result"), dict) else None
+        session.turns = [t for t in data.get("turns") or [] if isinstance(t, dict)]
+        session.llm_calls = int(data.get("llm_calls") or 0)
+        session.written_path = data.get("written_path")
+        session.phase = _settled_phase(str(data.get("phase") or ""), session)
+        session.busy = False
+        session.pick_state = "done" if session.result is not None else "idle"
+        for turn in session.turns:
+            if turn.get("pending"):                      # a call the stopped server never finished
+                turn["pending"] = False
+                turn["error"] = True
+                turn["answer"] = turn.get("answer") or "The server stopped before this answer came back."
+        return session
 
     def snapshot(self) -> dict[str, Any]:
         """The session as the page sees it. Polled once a second: only the
@@ -574,22 +684,38 @@ class BoardServer:
         self._spawn(session, self._clarify, session)
         return session
 
-    @staticmethod
-    def _spawn(session: Session, target, *args) -> None:
+    def _spawn(self, session: Session, target, *args) -> None:
         """A background step whose crash must show up as the session's error,
-        never as a page polling 'clarifying' forever."""
+        never as a page polling 'clarifying' forever. Whatever the step did,
+        the topic on disk is brought up to date after it (11.1, decision 9);
+        a thread saves itself as it always has."""
         def run() -> None:
             try:
                 target(*args)
             except Exception as exc:   # noqa: BLE001 - the whole point is to surface anything
                 session.fail(f"internal error: {exc!r}")
+            finally:
+                if isinstance(session, Session):
+                    self.save_session(session)
         threading.Thread(target=run, daemon=True).start()
 
     def get_session(self, session_id: str) -> Session:
+        """The open topic, from memory or from the history folder (11.1,
+        decision 9): a reload, a restart or a click in the archive all reach
+        the same topic."""
         with self.lock:
             session = self.sessions.get(session_id)
-        if session is None:
+        if session is not None:
+            return session
+        try:
+            data = self.topic_store().load(session_id)
+        except ValueError:
             raise ApiError(404, "Unknown session - start a new topic.")
+        if data is None or data.get("kind") != BOARD_KIND:
+            raise ApiError(404, "Unknown session - start a new topic.")
+        session = Session.from_record(data)
+        with self.lock:
+            session = self.sessions.setdefault(session.id, session)
         return session
 
     def _clarify(self, session: Session) -> None:
@@ -941,6 +1067,10 @@ class BoardServer:
         the original assessments."""
         question = (question or "").strip()
         with session.lock:
+            resting = session.phase == "result"
+        if resting and session.conversation is None and session.result is not None:
+            self._rebuild_conversation(session)          # a topic read back from disk
+        with session.lock:
             if session.phase != "result" or session.conversation is None:
                 raise ApiError(409, "There is no open board result to ask about.")
             if session.busy:
@@ -961,6 +1091,49 @@ class BoardServer:
                                   "mode": follow_mode, "data": None, "assessments": [], "failed_members": []})
             index = len(session.turns) - 1
         self._spawn(session, self._follow_up, session, question, chosen, follow_mode, index)
+
+    def _rebuild_conversation(self, session: Session) -> None:
+        """The follow-up conversation of a topic read back from disk. The
+        result, the turns and the input come from the record; the profiles,
+        the conduct note and the KPI notes are read fresh, as a run reads
+        them. The knowledge blocks are not kept on disk (only their paths
+        are), so a member asked again gets its block selected anew from the
+        vault - the same path ``_follow_up`` already takes for a member who
+        was not asked the first time."""
+        result = session.result or {}
+        with session.lock:
+            inputs = dict(session.inputs)
+            turns = [(t["question"], t.get("answer") or "") for t in session.turns
+                     if not t.get("pending") and not t.get("error")]
+            projects = list(session.projects)
+        try:
+            board = roles_mod.load_board(self.config)
+            profiles, conduct = dict(board.profiles), board.conduct
+        except Exception:   # noqa: BLE001 - a missing roles folder must not block reading the topic
+            profiles, conduct = {}, ""
+        try:
+            member_data = knowledge_mod.kpi_notes(self.config, list(profiles), projects=projects)
+        except Exception:   # noqa: BLE001
+            member_data = {}
+        restored = BoardResult(
+            topic=str(result.get("topic") or inputs.get("topic") or ""),
+            assessments=[MemberAssessment(**a) for a in result.get("assessments") or [] if isinstance(a, dict)],
+            synthesis=str(result.get("synthesis") or ""),
+            failed_members=[str(f) for f in result.get("failed_members") or []],
+            ai_result=None, llm_calls=int(result.get("llm_calls") or 0),
+            synthesis_data=result.get("synthesis_data"), sources=dict(result.get("sources") or {}),
+            mode="combined" if result.get("mode") == "combined" else "individual",
+        )
+        with session.lock:
+            if session.conversation is not None:
+                return
+            session.conversation = BoardConversation(
+                result=restored, turns=turns, roles=profiles,
+                inputs={"topic": inputs.get("topic", ""), "context": inputs.get("context", ""),
+                        "options": list(inputs.get("options") or []),
+                        "constraints": list(inputs.get("constraints") or [])},
+                conduct=conduct, member_data=member_data, project=", ".join(projects),
+            )
 
     def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual",
                    index: int = -1) -> None:
@@ -1223,7 +1396,9 @@ class BoardServer:
                 problems.append(f"the OpenCode configuration file {problem}")
             elif not _config_file_has_key(config_file):
                 unverified.append("no key visible in the OpenCode configuration file (it may come from OpenCode's own store)")
-        elif profile != "private":
+        elif profile == "private":
+            unverified.append("OpenCode holds the login itself; nothing here can verify it")
+        else:
             unverified.append("no OpenCode configuration file set; OpenCode's own lookup decides the gateway")
         if problems:
             out["state"] = "red"
@@ -1289,15 +1464,8 @@ class BoardServer:
         except knowledge_mod.KnowledgeUnavailable:
             return out
         for note in knowledge_mod._pinned(notes, chosen):
-            gates = []
-            for line in note.body.splitlines():
-                if _GATE_LINE.search(line) and not line.lstrip().startswith(("#", "phases:", "---")):
-                    cleaned = re.sub(r"\s*\|\s*", " · ", line.strip().strip("|")).strip(" ·-*")
-                    if cleaned and cleaned not in gates:
-                        gates.append(cleaned[:120])
-                if len(gates) >= 12:
-                    break
-            out["pages"].append({"path": note.relative, "title": note.title, "summary": note.summary, "gates": gates})
+            out["pages"].append({"path": note.relative, "title": note.title, "summary": note.summary,
+                                 "gates": _gate_lines(note.body)})
         unknown = [p for p in chosen if p.lower() not in {k.lower() for k in known}]
         if unknown:
             out["state"] = "amber"
@@ -1310,23 +1478,49 @@ class BoardServer:
         (their files come with step 3). ``state``: open, closed or all."""
         rows: list[dict[str, Any]] = []
         for row in self.thread_store().list():
-            rows.append({"kind": "ask", "id": row["id"], "title": row["title"], "status": row["status"],
+            rows.append({"kind": ask_mod.KIND, "id": row["id"], "title": row["title"], "status": row["status"],
                          "updated": row["updated"], "created": row["created"], "projects": row["projects"],
                          "count": row["questions"], "unit": "question"})
         with self.lock:
-            sessions = list(self.sessions.values())
-        for session in sessions:
-            with session.lock:
-                closed = session.phase in ("closed", "written")
-                last = session.marks[-1]["at"] if session.marks else session.started
-                rows.append({"kind": "board", "id": session.id, "title": session.title,
-                             "status": "closed" if closed else "open", "updated": last, "created": session.started,
-                             "projects": list(session.projects), "count": session.llm_calls, "unit": "call",
-                             "phase": session.phase})
+            live = dict(self.sessions)
+        for data in self.topic_store().records(BOARD_KIND):
+            session = live.pop(str(data.get("id")), None)
+            rows.append(self._topic_row(session) if session is not None else {
+                "kind": BOARD_KIND, "id": str(data.get("id")), "title": str(data.get("title") or "") or _record_title(data),
+                "status": "closed" if data.get("status") == "closed" else "open",
+                "updated": float(data.get("updated") or 0), "created": float(data.get("created") or 0),
+                "projects": [str(p) for p in data.get("projects") or []],
+                "count": int(data.get("llm_calls") or 0), "unit": "call", "phase": str(data.get("phase") or "")})
+        rows.extend(self._topic_row(session) for session in live.values())   # never written yet
         wanted = {"open": ("open",), "closed": ("closed",)}.get(state, ("open", "closed"))
         rows = [r for r in rows if r["status"] in wanted]
         rows.sort(key=lambda r: r["updated"], reverse=True)
         return rows
+
+    @staticmethod
+    def _topic_row(session: Session) -> dict[str, Any]:
+        with session.lock:
+            last = session.marks[-1]["at"] if session.marks else session.started
+            return {"kind": BOARD_KIND, "id": session.id, "title": session.title, "status": session.status,
+                    "updated": last, "created": session.started, "projects": list(session.projects),
+                    "count": session.llm_calls, "unit": "call", "phase": session.phase}
+
+    def delete_record(self, record_id: str) -> None:
+        """Delete one piece of work from the archive (11.1, decision 10):
+        the file and whatever of it this server still holds. A note it wrote
+        into the vault stays where it is."""
+        with self.lock:
+            session = self.sessions.pop(record_id, None)
+            ask_session = self.asks.pop(record_id, None)
+        for live in (session, ask_session):
+            if live is not None and live.busy:
+                live.stop_work()
+        try:
+            found = self.topic_store().delete(record_id)
+        except ValueError:
+            raise ApiError(404, "unknown record")
+        if not found and session is None and ask_session is None:
+            raise ApiError(404, "unknown record")
 
     # -- Ask the vault (spec section 10) --------------------------------------
 
@@ -1339,14 +1533,37 @@ class BoardServer:
         vault_path = _get(self.config, "knowledge.vault_path", "")
         return Path(str(vault_path)).expanduser().name if vault_path else ""
 
+    def history_folder(self) -> Path:
+        """One folder for the work of every agent (11.1, decision 9)."""
+        return history_mod.history_folder(self.config, self.config_path)
+
     def thread_store(self) -> "ask_mod.ThreadStore":
-        configured = _get(self.config, "server.threads_folder", "")
-        if configured:
-            folder = Path(str(configured)).expanduser()
-        else:
-            base = self.config_path.parent if self.config_path else Path.cwd() / "config"
-            folder = base / "threads"
-        return ask_mod.ThreadStore(folder)
+        return ask_mod.ThreadStore(self.history_folder())
+
+    def topic_store(self) -> history_mod.HistoryStore:
+        return history_mod.HistoryStore(self.history_folder())
+
+    def save_session(self, session: Session) -> None:
+        """The topic on disk, after every step that changed it. Two steps can
+        finish at the same moment - the answer to a request and the background
+        job it started - so the older of two snapshots never overwrites the
+        newer. A topic that cannot be written is said so on the page, but
+        never takes a running board down."""
+        stamp = time.monotonic()
+        record = session.to_record()
+        with self.lock:
+            if session.saved_stamp > stamp:
+                return                        # a newer snapshot of this topic is already on disk
+            session.saved_stamp = stamp
+        try:
+            if session.discarded:
+                self.topic_store().delete(session.id)
+                return
+            self.topic_store().save(session.id, record)
+        except OSError as exc:
+            with session.lock:
+                if not session.busy and not session.error:
+                    session.error = f"The topic could not be saved: {exc}"
 
     def list_threads(self) -> list[dict[str, Any]]:
         rows = self.thread_store().list()
@@ -1598,12 +1815,17 @@ class BoardServer:
             session.phase = "idle"
 
     def abandon(self, session: Session) -> None:
-        """Leave the topic: stop any running call and close it without a note."""
+        """Leave the topic: stop any running call and drop it. Start over is
+        not closing (11.1, decision 10): the topic had no result to keep, so
+        it goes, rather than filling the archive with abandoned questions."""
         session.stop_work()
         with session.lock:
             session.busy = False
             session.phase = "closed"
+            session.discarded = True
             session.mark("abandoned")
+        with self.lock:
+            self.sessions.pop(session.id, None)
 
     def close(self, session: Session, remember: bool) -> None:
         """Close the topic; with ``remember`` the memory proposal is started."""
@@ -1672,6 +1894,31 @@ class BoardServer:
             if session.phase != "proposal":
                 raise ApiError(409, "There is no memory proposal to discard.")
             session.phase = "closed"
+
+
+def _gate_lines(body: str) -> list[str]:
+    """The gate baseline of a project page: the rows of its gate table, and
+    only those, when the page holds one; the plain lines that name a gate or
+    a phase when it does not (10 September 2026 - a page that writes its
+    baseline as prose still says something, a page with a table must not
+    have prose about MG3 mixed into it)."""
+    lines = [line for line in body.splitlines() if _GATE_LINE.search(line)]
+    rows = [line for line in lines if line.lstrip().startswith("|") and not _TABLE_RULE.match(line.strip())]
+    if not rows:
+        rows = [line for line in lines if not line.lstrip().startswith(("#", "|", "phases:", "---"))]
+    gates: list[str] = []
+    for line in rows[:_GATE_LINES]:
+        cleaned = re.sub(r"\s*\|\s*", " · ", line.strip().strip("|")).strip(" ·-*")
+        if cleaned and cleaned not in gates:
+            gates.append(cleaned[:120])
+    return gates
+
+
+def _record_title(data: dict[str, Any]) -> str:
+    """A topic's title from its record: the clarified topic, else the question."""
+    inputs = data.get("inputs") if isinstance(data.get("inputs"), dict) else {}
+    topic = str(inputs.get("topic") or "").strip()
+    return (topic or str(data.get("question") or "").strip())[:120] or "New topic"
 
 
 def _sentence(text: str) -> str:
@@ -1840,7 +2087,7 @@ def make_handler(server: BoardServer):
             path = self.path.split("?", 1)[0]
             try:
                 self._local_only(post=False)
-                if path in ("/", "/index.html", "/board", "/ask") or path.startswith(("/ask/", "/board/")):
+                if path in ("/", "/index.html", "/board", "/ask", "/archive") or path.startswith(("/ask/", "/board/")):
                     self._static("index.html")       # one page; the script reads the path (spec 9.5)
                 elif path.startswith("/static/"):
                     self._static(path[len("/static/"):])
@@ -1869,6 +2116,9 @@ def make_handler(server: BoardServer):
                 if path.startswith("/api/ask/"):
                     server.delete_thread(path.split("/")[3])
                     self._json(200, {"deleted": True})
+                elif path.startswith("/api/history/"):
+                    server.delete_record(path.split("/")[3])       # the archive deletes either agent's work
+                    self._json(200, {"deleted": True})
                 else:
                     self._json(404, {"error": "not found"})
             except ApiError as exc:
@@ -1893,6 +2143,7 @@ def make_handler(server: BoardServer):
                     self._json(200, {"path": chosen})
                 elif path == "/api/sessions":
                     session = server.start_session(str(body.get("question") or ""), body.get("projects"))
+                    server.save_session(session)
                     self._json(201, session.snapshot())
                 elif path.startswith("/api/sessions/"):
                     parts = path.split("/")
@@ -1923,6 +2174,7 @@ def make_handler(server: BoardServer):
                         server.discard_memory(session)
                     else:
                         raise ApiError(404, "unknown action")
+                    server.save_session(session)      # the topic on disk follows every step (11.1, decision 9)
                     self._json(200, session.snapshot())
                 elif path == "/api/ask":
                     self._json(201, server.new_thread(body.get("projects"), body.get("budget")).snapshot())

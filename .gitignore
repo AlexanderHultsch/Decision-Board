@@ -10,8 +10,11 @@ config/*.bak
 # The default audit folder the setup wizard proposes
 audit/
 
-# Ask the vault threads (spec 10): conversations with the vault, never committed
+# The work of every agent (spec 10 and 11): threads and board topics, kept
+# next to the local config, never committed
+config/history/
 config/threads/
+history/
 threads/
 
 # Secrets — never commit

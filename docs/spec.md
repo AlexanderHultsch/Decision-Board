@@ -552,6 +552,15 @@ still defaults to `ai` until the shell (step 2) lands. The vault property
 `Part of Decision Board AI` keeps its name: it is the vault's convention,
 not the tool's.
 
+**Refined, 10 September 2026 (step 3).** A private setup (`setup.profile`
+is `private`, OpenCode holding the login itself) is **amber**, not green,
+until a test call has answered: green in decision 7 means a gateway
+configuration with a key was found, and there is nothing there to find.
+The project card's gate baseline is read from the **rows of the project
+page's gate table** when the page holds one, and only from its plain
+lines when it does not: a page with a table must not have prose about a
+gate mixed into the baseline.
+
 **Built, step 2 (10 September 2026).** The shell: the top bar with the
 node-graph mark (the same as the tab icon), the wordmark as the home button,
 the project chip (click: home, with the picker open), the three status icons
@@ -579,6 +588,37 @@ come with steps 3 and 4. The step arrows stay in the top bar, shown on the
 board only, until the step line (step 3) replaces them. The browser walk
 covers the icons, the menu, the status page with the test call and the
 reopening from the home page.
+
+**Built, step 3 (10 September 2026).** The history, the step line and the
+archive. Every board topic is one JSON file in the same folder as the
+threads, told apart by `kind` (`board`, `ask`): the folder is
+`config/history/`, `server.history_folder` overrides it and the old
+`server.threads_folder` is still read, a default `threads/` folder being
+renamed once so nothing written before this step is lost. A topic is
+written when it is started and after every step that changes it, from
+either side (the answer to a request and the background job that finished
+it), so the newer of two snapshots never loses to the older. The record
+holds the inputs, the rounds, the answers, the synthesis, the follow-ups,
+the statistics and the **paths** of the knowledge sent, never the
+knowledge text: the vault's words stay in the vault, and a member asked
+again in a reopened topic has its block selected anew, the path a member
+who was not asked the first time already took. A topic read back rests at
+the last step it can be worked from, since a call that was running when
+the server stopped cannot be resumed, and its follow-up conversation is
+rebuilt from the record when the first follow-up needs it. **Start over is
+not closing**: a topic left mid-work is deleted rather than archived. The
+step line (Question · Clarify · Confirm · Result) sits above the board's
+screens and the arrows are gone from the top bar: an earlier step goes
+back exactly as the arrows did, one server-side `back` per step, and the
+step after the current one goes forward again; the browser's Back still
+steps through it, and clicking Question with nothing behind the first
+round lands on the question screen with the question kept. The archive at
+`/archive` is in the menu and lists everything closed, of both agents,
+searchable by title and deletable (`DELETE /api/history/<id>`, which drops
+the file and whatever the server still holds; a note written into the
+vault stays). Home and both agent pages list only open work. A closed
+topic reopened from the archive is read-only, as a closed thread is: the
+result and the follow-ups stay, the follow-up form goes.
 
 ### 11.2 Reuse
 

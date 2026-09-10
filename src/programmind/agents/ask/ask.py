@@ -23,12 +23,14 @@ from pathlib import Path
 from typing import Any
 
 from programmind.ai.prompts import load_prompt
+from programmind.memory.history import HistoryStore, new_id
 from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
 from programmind.knowledge.knowledge import (
     KPI_STALE_DAYS, KPI_TOKEN_CAP, _CHARS_PER_TOKEN, _config_value, _freshness, _project_list, _roles_inside,
     active_projects, for_project, load_vault,
 )
 
+KIND = "ask"                              # the ``kind`` of this agent's records in the history folder
 MARKER = "## Question to the vault"       # the line the statistics recognise an ask call by
 DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: twice a member's, there is only one call
 MAX_HISTORY_CHARS = 12000                 # of earlier questions and answers carried into a call
@@ -197,7 +199,7 @@ class Thread:
                 "projects": list(self.projects), "created": self.created, "updated": self.updated}
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "projects": list(self.projects), "budget": self.budget, "status": self.status,
+        return {"id": self.id, "kind": KIND, "projects": list(self.projects), "budget": self.budget, "status": self.status,
                 "turns": self.turns, "calls": self.calls, "created": self.created, "updated": self.updated,
                 "written_path": self.written_path, "extra": list(self.extra), "exclude": list(self.exclude)}
 
@@ -217,57 +219,41 @@ class Thread:
         return thread
 
 
-_ID = re.compile(r"^[a-z0-9]{6,32}$")
-
-
 class ThreadStore:
-    """One JSON file per thread in ``folder``; the folder is created on the
-    first write. A file that does not parse is skipped, never deleted."""
+    """The threads of this agent inside the shared history folder (spec
+    11.1, decision 9): one JSON file per thread, ``kind: ask``, never in
+    the vault. A file that does not parse is skipped, never deleted."""
 
     def __init__(self, folder: Path | str) -> None:
-        self.folder = Path(folder)
+        self.store = HistoryStore(folder)
+
+    @property
+    def folder(self) -> Path:
+        return self.store.folder
 
     def _path(self, thread_id: str) -> Path:
-        if not _ID.match(thread_id):
-            raise ValueError(f"bad thread id: {thread_id!r}")
-        return self.folder / f"{thread_id}.json"
+        return self.store.path(thread_id)
 
     def new(self, projects: list[str] | None = None, budget: int | None = None) -> Thread:
-        return Thread(id=uuid.uuid4().hex[:12], projects=list(projects or []), budget=int(budget or DEFAULT_TOKEN_BUDGET))
+        return Thread(id=new_id(), projects=list(projects or []), budget=int(budget or DEFAULT_TOKEN_BUDGET))
 
     def save(self, thread: Thread) -> Path:
         thread.updated = time.time()
-        self.folder.mkdir(parents=True, exist_ok=True)
-        path = self._path(thread.id)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(thread.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(path)
-        return path
+        return self.store.save(thread.id, thread.to_dict())
 
     def load(self, thread_id: str) -> Thread | None:
-        path = self._path(thread_id)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return Thread.from_dict(data) if isinstance(data, dict) else None
+        data = self.store.load(thread_id)
+        if data is None or data.get("kind", KIND) != KIND:
+            return None                     # a board topic is not a thread
+        return Thread.from_dict(data)
 
     def delete(self, thread_id: str) -> bool:
-        path = self._path(thread_id)
-        try:
-            path.unlink()
-            return True
-        except FileNotFoundError:
-            return False
+        return self.store.delete(thread_id)
 
     def list(self) -> list[dict[str, Any]]:
-        """Newest first."""
-        threads: list[Thread] = []
-        if not self.folder.is_dir():
-            return []
-        for path in self.folder.glob("*.json"):
-            thread = self.load(path.stem) if _ID.match(path.stem) else None
-            if thread is not None:
-                threads.append(thread)
+        """Newest first. A record written before the ``kind`` property
+        existed is a thread: nothing else was kept then."""
+        threads = [Thread.from_dict(data) for data in self.store.records()
+                   if data.get("kind", KIND) == KIND]
         threads.sort(key=lambda t: t.updated, reverse=True)
         return [t.summary() for t in threads]

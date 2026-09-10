@@ -38,6 +38,9 @@
 
   let session = null;
 
+  let justClosed = false;    // closed on this screen: the confirmation, not the read-only result
+
+
   let pollTimer = null;
 
   const openMembers = new Set();
@@ -146,6 +149,7 @@
     try {
       session = await api("POST", "/api/sessions", { question, projects: PM.projects() });
       store.del("question");
+      justClosed = false;
       openMembers.clear();
       $("screen-result").dataset.phase = "";
       $("turns").dataset.key = "";
@@ -153,12 +157,57 @@
     } catch (err) { setError("home-error", err.message); }
   }
 
-  function renderNav() {
-    if (PM.route() !== "board") { $("btn-nav-back").disabled = true; $("btn-nav-forward").disabled = true; return; }
+  // Question · Clarify · Confirm · Result. Which step the topic stands on,
+  // and which of the others can be reached from it: an earlier step goes
+  // back exactly as the arrows did, the next one forward again.
+
+  const STEP_OF = { clarifying: 1, questions: 1, confirm: 2, running: 3, synthesising: 3, result: 3,
+                    proposing: 3, proposal: 3, closed: 3, written: 3 };
+
+  function stepIndex() {
+    if (!session || !$("screen-home").hidden) return 0;
+    if (session.phase === "error") return session.result ? 3 : (session.inputs && session.inputs.topic) ? 2 : 1;
+    return STEP_OF[session.phase] || 0;
+  }
+
+  function renderSteps() {
+    const line = PM.steps();
+    if (!["board", "board-topic"].includes(PM.route())) { line.hidden = true; return; }
+    line.hidden = false;
+    const current = stepIndex();
     const nav = (session && session.nav) || { back: false, forward: false };
-    const onHome = !$("screen-home").hidden;
-    $("btn-nav-back").disabled = !session || onHome || !nav.back && !["questions"].includes(session.phase);
-    $("btn-nav-forward").disabled = !session || (onHome ? ["closed", "written"].includes(session.phase) : !nav.forward);
+    const onHome = !session || !$("screen-home").hidden;
+    const canBack = !!session && !onHome && (nav.back || session.phase === "questions");
+    const canForward = !!session && (onHome ? !["closed", "written"].includes(session.phase) : nav.forward);
+    line.querySelectorAll(".step").forEach((button) => {
+      const step = Number(button.dataset.step);
+      const clickable = step < current ? canBack : step === current ? false : step === current + 1 ? canForward : false;
+      button.className = `step${step === current ? " current" : step < current ? " done" : ""}${clickable ? " clickable" : ""}`;
+      button.disabled = !clickable;
+      button.title = step === current ? "Where the topic stands"
+        : clickable ? (step < current ? "Go back to this step; everything typed is kept" : "Forward again")
+        : "Not reachable from here";
+    });
+  }
+
+  async function goToStep(target) {
+    if (!session) return;
+    if (!$("screen-home").hidden) { render(); return; }   // a topic is open behind the question screen
+    for (let guard = 0; guard < 8; guard++) {
+      const current = stepIndex();
+      if (current === target) break;
+      if (current < target) return goForward();
+      try {
+        session = await api("POST", `/api/sessions/${session.id}/back`);
+      } catch (err) {
+        // Nothing behind the first round: the question screen, with the
+        // question kept and the topic still reachable with the next step.
+        $("question").value = session.question;
+        PM.setPath("/board"); show("home"); renderSteps(); pushHistory();
+        return;
+      }
+    }
+    render();
   }
 
   let lastPhase = null;
@@ -172,7 +221,7 @@
 
   function render() {
     if (PM.route() !== "board") return;
-    if (!session) { show("home"); renderNav(); return; }
+    if (!session) { show("home"); renderSteps(); return; }
     store.set("session", session.id);
     if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
     if (needsPolling(session)) { if (!pollTimer) startPolling(); } else stopPolling();
@@ -186,7 +235,7 @@
       case "proposing": return show("proposing");
       case "proposal": return PM.showProposal(session.proposal, session.knowledge.vault_path || "", memoryHandlers);
       case "written":
-      case "closed": return renderDone();
+      case "closed": return justClosed || !session.result ? renderDone() : renderResult();
       case "error": return showError(session.error);
       default: return showError(`Unknown state: ${session.phase}`);
     }
@@ -195,7 +244,7 @@
 
   const _render = render;
 
-  render = function () { _render(); renderNav(); pushHistory(); };
+  render = function () { _render(); renderSteps(); pushHistory(); };
 
   function showError(message) {
     $("error-detail").textContent = message || "Unknown error.";
@@ -395,7 +444,7 @@
       // Nothing to return to on the server: the home screen with the question kept,
       // the topic still reachable with Forward.
       $("question").value = session.question;
-      show("home"); renderNav(); pushHistory();
+      show("home"); renderSteps(); pushHistory();
     }
   }
 
@@ -588,6 +637,14 @@
       $("turns").innerHTML = session.turns.map(renderTurn).join("");
       $("turns").dataset.key = turnsKey;
     }
+    const closed = ["closed", "written"].includes(session.phase);
+    $("followup-form").hidden = closed;
+    $("board-closed").hidden = !closed;
+    if (closed) {
+      $("board-closed-text").textContent = session.written_path
+        ? `This topic is closed. A note was written to your vault: ${session.written_path}`
+        : "This topic is closed. It stays here to read; it takes no further questions.";
+    }
     $("btn-followup").disabled = session.busy;
     $("btn-close").disabled = session.busy;
     const again = picked($("followup-members")).length;
@@ -624,6 +681,7 @@
 
   async function closeTopic(remember) {
     setError("close-error", "");
+    justClosed = true;                    // this screen closed it: the confirmation follows
     try {
       session = await api("POST", `/api/sessions/${session.id}/close`, { remember });
       $("close-dialog").hidden = true;
@@ -665,7 +723,7 @@
     store.set("question", $("question").value);
     $("followup").value = "";
     PM.setPath("/board");
-    show("home"); renderNav();
+    show("home"); renderSteps();
     $("question").focus();
   }
 
@@ -733,9 +791,7 @@
 
   $("outline-filter").addEventListener("input", renderOutline);
 
-  $("btn-nav-back").addEventListener("click", goBack);
-
-  $("btn-nav-forward").addEventListener("click", goForward);
+  PM.steps().querySelectorAll(".step").forEach((button) => button.addEventListener("click", () => goToStep(Number(button.dataset.step))));
 
   $("btn-error-back").addEventListener("click", goBack);
 
@@ -758,6 +814,7 @@
     try {
       const data = await api("GET", `/api/sessions/${id}`);
       session = data;
+      justClosed = false;                 // a closed topic opened from the archive is read, not closed again
       openMembers.clear();
       $("screen-result").dataset.phase = "";
       $("turns").dataset.key = "";
@@ -765,7 +822,7 @@
       PM.setPath("/board");
       lastPhase = null;
       render();
-    } catch (err) { setError("home-error", err.message); PM.setPath("/board"); show("home"); renderNav(); }
+    } catch (err) { setError("home-error", err.message); PM.setPath("/board"); show("home"); renderSteps(); }
   }
 
   PM.register({
@@ -773,10 +830,10 @@
     match: (pathname) => (pathname === "/board" ? "board" : pathname.startsWith("/board/") ? "board-topic" : null),
     render: (route) => {
       if (route === "board-topic") return openTopic(location.pathname.split("/")[2]);
-      if (session) render(); else { show("home"); renderNav(); }
+      if (session) render(); else { show("home"); renderSteps(); }
     },
     onEnter: () => { lastPhase = null; },
-    onLeave: () => { stopPolling(); renderNav(); },
+    onLeave: () => { stopPolling(); PM.steps().hidden = true; },
     onPopState: () => { if (session && $("screen-home").hidden) goBack(); else if (session) goForward(); },
     boot: () => { $("question").value = store.get("question") || ""; return resumeSession(); },
     stats: () => session,

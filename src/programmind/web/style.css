@@ -101,7 +101,8 @@ svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-wi
 .menu-list button, .menu-list a { display: block; width: 100%; text-align: left; padding: .5rem .8rem; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-decoration: none; cursor: pointer; }
 .menu-list button:hover, .menu-list a:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .menu-list[hidden] { display: none; }
-/* The home page's recent work (decision 5). */
+/* The archive (decision 10) and the home page's recent work (decision 5). */
+.archive-row .thread-meta { margin-left: auto; }
 .recent-row .agent-tag { flex: none; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: .1rem .45rem; }
 
 .page { max-width: 1120px; margin: 0 auto; padding: 2.5rem 2rem 4rem; }
@@ -236,13 +237,23 @@ button.ghost { background: transparent; }
 /* A dropdown without the browser's own chrome: rounded, a chevron, a focus ring. */
 button.brand { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 button.brand:hover .brand-mark { filter: brightness(1.1); }
-.nav-arrows { display: flex; gap: .3rem; }
-.nav-arrows[hidden] { display: none; }
-.nav-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .3rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: .85rem; cursor: pointer; }
-.nav-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.nav-btn:disabled { opacity: .35; cursor: default; }
-.nav-btn:not(:disabled):hover { border-color: var(--muted); }
-@media (max-width: 640px) { .nav-btn span { display: none; } }
+/* The step line inside a flow (spec 11.1, decision 6): Question, Clarify,
+   Confirm, Result. An earlier step is a button that goes back; the step
+   after the current one is a button again once it has been visited. */
+.step-line { display: flex; align-items: center; gap: .2rem; flex-wrap: wrap; margin: 0 0 2rem; }
+.step-line[hidden] { display: none; }
+.step { display: inline-flex; align-items: center; gap: .45rem; padding: .35rem .8rem .35rem .45rem; border-radius: 999px;
+  border: 1px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: .9rem; cursor: default; }
+.step + .step::before { content: ""; width: 1.4rem; height: 1px; background: var(--line); margin-right: .45rem; }
+.step-mark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none;
+  border-radius: 50%; border: 1px solid var(--line); background: var(--card); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.step.done { color: var(--text); }
+.step.done .step-mark { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+.step.current { color: var(--text); font-weight: 600; border-color: var(--line); background: var(--card); }
+.step.current .step-mark { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.step.clickable { cursor: pointer; }
+.step.clickable:hover { border-color: var(--accent); color: var(--text); }
+@media (max-width: 560px) { .step-name { display: none; } .step { padding: .35rem .45rem; } .step + .step::before { width: .8rem; } }
 /* The knowledge slider and the live estimate on the confirm screen (9 September 2026) */
 .budget-row { display: flex; align-items: center; gap: 1rem; margin: .2rem 0 .4rem; }
 .budget-row input[type=range] { flex: 1; max-width: 28rem; accent-color: var(--accent); }

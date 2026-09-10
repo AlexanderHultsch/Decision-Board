@@ -20,7 +20,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
-from programmind.shell.server import create_http_server, site_name  # noqa: E402
+from programmind.shell.server import Session, create_http_server, site_name  # noqa: E402
+from programmind.memory import history as history_mod  # noqa: E402
 from programmind.agents.board import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
@@ -661,7 +662,7 @@ class TestSiteName(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"vault_path": ""},
-                      "server": {"site_name": "ai"}}
+                      "server": {"site_name": "ai", "history_folder": str(Path(cls.tmp.name) / "history")}}
         cls.httpd, cls.board_server = create_http_server(cls.config, None, port=0, provider=RoutingFakeProvider())
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
@@ -997,3 +998,204 @@ class TestShellStatus(unittest.TestCase):
         self.call("POST", f"/api/sessions/{session['id']}/abandon")
         _, listed = self.call("GET", "/api/history")
         self.assertEqual(listed["items"], [])
+
+
+class TestHistory(unittest.TestCase):
+    """Spec 11.1, decisions 9 and 10: every board topic is kept next to the
+    threads, comes back after a restart, and moves to the archive when it
+    is closed. A topic left with Start over is dropped, not archived."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name) / "vault"
+        self.vault.mkdir()
+        (self.vault / "Tooling.md").write_text("---\ntitle: Tooling\n---\nTooling is late.\n", encoding="utf-8")
+        make_roles(self.vault / "Roles&Responsibilities")
+        self.folder = Path(self.tmp.name) / "history"
+        self.config_path = Path(self.tmp.name) / "config.local.json"
+        self.config = {"provider": {"models": {"board": "fake/m"}},
+                       "knowledge": {"vault_path": str(self.vault), "token_budget": 6000, "selection": "python"},
+                       "server": {"history_folder": str(self.folder)}}
+        self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.provider = RoutingFakeProvider()
+        self.servers = []
+        self.port = self.start()
+
+    def tearDown(self):
+        for httpd in self.servers:
+            httpd.shutdown()
+            httpd.server_close()
+        self.tmp.cleanup()
+
+    def start(self) -> int:
+        """One more server over the same folder - a restart, as far as the
+        work on disk is concerned."""
+        httpd, _ = create_http_server(json.loads(self.config_path.read_text(encoding="utf-8")),
+                                      self.config_path, port=0, provider=self.provider)
+        self.servers.append(httpd)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        return httpd.server_address[1]
+
+    def call(self, method, path, body=None, port=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(f"http://127.0.0.1:{port or self.port}{path}", data=data, method=method,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def wait_for(self, sid, predicate, port=None, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            _, state = self.call("GET", f"/api/sessions/{sid}", port=port)
+            if predicate(state):
+                return state
+            time.sleep(0.02)
+        self.fail(f"timed out waiting; last phase {state['phase']} error {state['error']}")
+
+    def run_to_result(self, question="Rework or switch?"):
+        _, state = self.call("POST", "/api/sessions", {"question": question, "projects": ["Dual DCDC"]})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["200k"], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Rework or switch", "context": "SOP is fixed.",
+                                                       "options": ["Rework"], "constraints": [], "members": CLASSIC[:2]})
+        return sid, self.wait_for(sid, lambda s: s["phase"] == "result")
+
+    def test_a_topic_is_written_as_one_file_beside_the_threads_and_says_what_it_is(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework or switch?"})
+        sid = state["id"]
+        record = json.loads((self.folder / f"{sid}.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["kind"], "board")
+        self.assertEqual(record["status"], "open")
+        self.assertEqual(record["question"], "Rework or switch?")
+        _, created = self.call("POST", "/api/ask", {})
+        thread = json.loads((self.folder / f"{created['id']}.json").read_text(encoding="utf-8"))
+        self.assertEqual(thread["kind"], "ask")          # both agents, one folder, told apart by kind
+
+    def test_a_topic_comes_back_after_a_restart_and_takes_a_follow_up(self):
+        sid, state = self.run_to_result()
+        self.assertEqual(len(self.provider.prompts) > 0, True)
+        self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "Why?"})
+        self.wait_for(sid, lambda s: not s["busy"])
+        self.wait_for_record(sid, lambda r: r["turns"] and not r["turns"][-1].get("pending"))
+        second = self.start()                            # a new server, the same folder
+        status, state = self.call("GET", f"/api/sessions/{sid}", port=second)
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "result")
+        self.assertEqual(state["result"]["synthesis_data"]["overall_recommendation"], "Rework")
+        self.assertEqual(len(state["turns"]), 1)
+        self.assertEqual(state["turns"][0]["data"]["recommendation_now"], "Rework, unchanged.")
+        self.assertEqual(sorted(state["members"]), sorted(CLASSIC[:2]))
+        self.assertEqual(state["projects"], ["Dual DCDC"])
+        # The conversation is rebuilt from the record: the next follow-up works.
+        status, _ = self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "And the cost?"}, port=second)
+        self.assertEqual(status, 200)
+        state = self.wait_for(sid, lambda s: not s["busy"], port=second)
+        self.assertEqual(len(state["turns"]), 2)
+        self.assertFalse(state["turns"][1].get("error", False))
+        self.assertEqual(state["turns"][1]["data"]["recommendation_now"], "Rework, unchanged.")
+        self.assertEqual(state["turns"][1]["question"], "And the cost?")
+
+    def test_a_closed_topic_moves_to_the_archive_and_an_abandoned_one_is_dropped(self):
+        sid, _ = self.run_to_result()
+        _, listed = self.call("GET", "/api/history?state=open")
+        self.assertEqual([r["id"] for r in listed["items"]], [sid])
+        self.call("POST", f"/api/sessions/{sid}/close", {"remember": False})
+        _, listed = self.call("GET", "/api/history?state=open")
+        self.assertEqual(listed["items"], [])
+        _, listed = self.call("GET", "/api/history?state=closed")
+        self.assertEqual([r["id"] for r in listed["items"]], [sid])
+        self.assertEqual(listed["items"][0]["title"], "Rework or switch")
+        self.assertEqual(listed["items"][0]["kind"], "board")
+        self.assertTrue((self.folder / f"{sid}.json").exists())
+
+        _, state = self.call("POST", "/api/sessions", {"question": "Something else?"})
+        other = state["id"]
+        self.assertTrue((self.folder / f"{other}.json").exists())
+        self.call("POST", f"/api/sessions/{other}/abandon")             # Start over
+        self.assertFalse((self.folder / f"{other}.json").exists())      # not archived: dropped
+        _, listed = self.call("GET", "/api/history?state=all")
+        self.assertEqual([r["id"] for r in listed["items"]], [sid])
+
+    def test_the_archive_deletes_a_topic_and_a_thread_and_keeps_the_vault_note(self):
+        sid, _ = self.run_to_result()
+        self.call("POST", f"/api/sessions/{sid}/close", {"remember": False})
+        _, created = self.call("POST", "/api/ask", {})
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "What is late?"})
+        self.wait_for_thread(created["id"])
+        self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
+        _, listed = self.call("GET", "/api/history?state=closed")
+        self.assertEqual(sorted(r["kind"] for r in listed["items"]), ["ask", "board"])
+
+        status, _ = self.call("DELETE", f"/api/history/{sid}")
+        self.assertEqual(status, 200)
+        self.assertFalse((self.folder / f"{sid}.json").exists())
+        status, _ = self.call("DELETE", f"/api/history/{created['id']}")
+        self.assertEqual(status, 200)
+        _, listed = self.call("GET", "/api/history?state=all")
+        self.assertEqual(listed["items"], [])
+        status, _ = self.call("DELETE", f"/api/history/{sid}")
+        self.assertEqual(status, 404)
+        self.assertEqual(self.call("GET", f"/api/sessions/{sid}")[0], 404)
+
+    def wait_for_record(self, record_id, predicate, timeout=10):
+        """The page reads the topic in memory; the disk catches up right
+        after the step that changed it. A restart waits for that."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                record = json.loads((self.folder / f"{record_id}.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                record = None
+            if record is not None and predicate(record):
+                return record
+            time.sleep(0.02)
+        self.fail("the topic was never written")
+
+    def wait_for_thread(self, thread_id, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            _, state = self.call("GET", f"/api/ask/{thread_id}")
+            if not state["busy"]:
+                return state
+            time.sleep(0.02)
+        self.fail("the thread never answered")
+
+    def test_a_topic_caught_mid_call_comes_back_at_the_step_it_can_be_worked_from(self):
+        record = {"id": "abcdef123456", "kind": "board", "status": "open", "phase": "running",
+                  "question": "Rework or switch?", "inputs": {"topic": "Rework or switch", "context": "x"},
+                  "clarification": {"topic": "Rework or switch", "context": "x", "questions": []},
+                  "created": time.time(), "updated": time.time()}
+        (self.folder).mkdir(parents=True, exist_ok=True)
+        (self.folder / "abcdef123456.json").write_text(json.dumps(record), encoding="utf-8")
+        status, state = self.call("GET", "/api/sessions/abcdef123456")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "confirm")       # the run cannot be resumed; its inputs can
+        self.assertFalse(state["busy"])
+
+    def test_the_folder_defaults_to_history_and_the_old_threads_folder_is_taken_over(self):
+        base = Path(self.tmp.name) / "elsewhere"
+        (base / "threads").mkdir(parents=True)
+        (base / "threads" / "abcdef123456.json").write_text('{"id": "abcdef123456"}', encoding="utf-8")
+        folder = history_mod.history_folder({}, base / "config.local.json")
+        self.assertEqual(folder, base / "history")
+        self.assertTrue((folder / "abcdef123456.json").exists())     # the threads written before the rename
+        self.assertFalse((base / "threads").exists())
+        # A folder named in the configuration is used as it stands, under either name.
+        named = {"server": {"threads_folder": str(base / "kept")}}
+        self.assertEqual(history_mod.history_folder(named, base / "config.local.json"), base / "kept")
+
+    def test_the_record_carries_the_knowledge_paths_but_never_the_knowledge_text(self):
+        sid, _ = self.run_to_result()
+        record = json.loads((self.folder / f"{sid}.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["knowledge_paths"][CLASSIC[0]], ["Tooling.md"])
+        self.assertNotIn("Tooling is late.", json.dumps(record))     # the vault's words stay in the vault
+        restored = Session.from_record(record)
+        self.assertEqual(restored.id, sid)
+        self.assertEqual(restored.title, "Rework or switch")
+        self.assertEqual(restored.status, "open")
+        self.assertEqual(restored.member_paths[CLASSIC[0]], ["Tooling.md"])

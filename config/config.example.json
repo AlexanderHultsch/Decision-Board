@@ -28,14 +28,14 @@
   },
 
   "server": {
-    "_comment": "The browser interface listens on 127.0.0.1 only. site_name is the name under .localhost the browser uses (http://<site_name>.localhost:<port>/): every name under .localhost resolves to this machine in Chrome, Edge and Firefox without admin rights, while the server still listens on 127.0.0.1 only.",
+    "_comment": "The browser interface listens on 127.0.0.1 only. site_name is the name under .localhost the browser uses (http://<site_name>.localhost:<port>/): every name under .localhost resolves to this machine in Chrome, Edge and Firefox without admin rights, while the server still listens on 127.0.0.1 only. history_folder is where the work of every agent is kept, one JSON file per board topic and per Ask the vault thread, never in the vault; empty means history/ next to config.local.json. The older name threads_folder is still read.",
     "port": 8765,
     "site_name": "mind",
-    "threads_folder": ""
+    "history_folder": ""
   },
 
   "ask": {
-    "_comment": "Ask the vault (spec section 10): one agent answering any question from the vault. token_budget is the default of its slider: knowledge tokens per question, twice a board member's since there is only one call. server.threads_folder is where the threads are kept as JSON files, never in the vault; empty means threads/ next to config.local.json.",
+    "_comment": "Ask the vault (spec section 10): one agent answering any question from the vault. token_budget is the default of its slider: knowledge tokens per question, twice a board member's since there is only one call.",
     "token_budget": 12000
   },
 
