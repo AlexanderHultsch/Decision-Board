@@ -1022,11 +1022,47 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
     return result
 
 
+def detect_roles_folder(vault: Path) -> Path | None:
+    """A roles folder inside the vault by name: ``Roles``,
+    ``Roles&Responsibilities``, ``Roles & Responsibilities``, ``R&R``..."""
+    if not vault.is_dir():
+        return None
+    try:
+        for child in sorted(vault.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            name = child.name.lower().replace(" ", "")
+            if name.startswith("role") or name in ("r&r", "randr", "rnr"):
+                return child
+    except OSError:
+        return None
+    return None
+
+
+def resolve_roles_folder(config: dict) -> tuple[Path | None, str]:
+    """Where the role profiles come from and why: the configured folder,
+    else a roles folder detected in the vault, else nothing. It lives here
+    rather than with the board (10 September 2026): every reader of the
+    vault has to know which folder to leave out, and a module every agent
+    uses must not depend on one of them."""
+    configured = _config_value(config, "knowledge.roles_folder")
+    if configured:
+        return Path(str(configured)).expanduser(), "configured"
+    vault = _config_value(config, "knowledge.vault_path")
+    if vault:
+        detected = detect_roles_folder(Path(str(vault)).expanduser())
+        if detected is not None:
+            return detected, "vault"
+    return None, "none"
+
+
+DEFAULT_ROLES_SUBFOLDER = "Roles"     # the folder the wizard offers to create inside the vault
+
+
 def _roles_inside(config: dict, vault: Path) -> tuple[str, ...]:
     """The roles folder as a vault-relative path when it lies inside the
     vault (section 3.4: profiles are not knowledge notes), else nothing."""
-    from programmind.agents.board.roles import resolve_folder   # local import: roles imports this module
-    folder, _ = resolve_folder(config)
+    folder, _ = resolve_roles_folder(config)
     if folder is None:
         return ()
     try:

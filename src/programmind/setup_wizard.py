@@ -637,7 +637,9 @@ class Wizard:
         other on request. Missing or empty: offer to create it and copy the
         examples in."""
         from programmind.agents.board import roles as roles_mod
-        default = (roles_mod.detect_folder(vault) or (vault / roles_mod.DEFAULT_SUBFOLDER)) if vault else None
+        from programmind.knowledge import knowledge as knowledge_mod
+        default = (knowledge_mod.detect_roles_folder(vault)
+                   or (vault / knowledge_mod.DEFAULT_ROLES_SUBFOLDER)) if vault else None
         if self.roles_arg:
             folder = Path(self.roles_arg).expanduser()
         elif default is None:

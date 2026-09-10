@@ -645,6 +645,15 @@ status page with its test call, the home page and its open work, both
 agents, the step line, the archive with its search and its deletion, and
 the two written pages - and prints `errors: []`.
 
+**The wart of step 1 is gone (10 September 2026).** `knowledge/` no longer
+imports from an agent: `resolve_folder` and `detect_folder` moved out of
+`agents/board/roles.py` into `knowledge/knowledge.py` as
+`resolve_roles_folder` and `detect_roles_folder`, with
+`DEFAULT_ROLES_SUBFOLDER` beside them. Every reader of the vault has to
+know which folder to leave out, so the knowledge module owns the question;
+`roles.py` keeps the name `DEFAULT_SUBFOLDER` pointing at the new
+constant. Behaviour is unchanged.
+
 ### 11.2 Reuse
 
 Everything behind the API stays: sessions, threads, the knowledge

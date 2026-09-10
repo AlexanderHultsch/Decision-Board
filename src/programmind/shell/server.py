@@ -605,7 +605,7 @@ class BoardServer:
         }
 
     def _roles_status(self) -> dict[str, Any]:
-        folder, origin = roles_mod.resolve_folder(self.config)
+        folder, origin = knowledge_mod.resolve_roles_folder(self.config)
         try:
             board = roles_mod.load_board(self.config)
         except roles_mod.RolesUnavailable as exc:
@@ -622,7 +622,7 @@ class BoardServer:
         vault = _get(self.config, "knowledge.vault_path")
         if vault:
             vault_dir = Path(str(vault)).expanduser()
-            return roles_mod.detect_folder(vault_dir) or (vault_dir / roles_mod.DEFAULT_SUBFOLDER)
+            return knowledge_mod.detect_roles_folder(vault_dir) or (vault_dir / knowledge_mod.DEFAULT_ROLES_SUBFOLDER)
         raise ApiError(400, "Choose a roles folder (or a knowledge source) first.")
 
     def install_roles(self) -> dict[str, Any]:
@@ -1367,7 +1367,7 @@ class BoardServer:
         out["notes"] = len(notes)
         out["last_read"] = time.time()
         out["projects"] = len(knowledge_mod.project_names(notes))
-        folder, _origin = roles_mod.resolve_folder(self.config)
+        folder, _origin = knowledge_mod.resolve_roles_folder(self.config)
         out["roles_folder"] = str(folder) if folder is not None else None
         missing = []
         if not out["projects"]:

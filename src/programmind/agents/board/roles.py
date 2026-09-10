@@ -50,9 +50,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from programmind.knowledge.knowledge import _front_matter
+from programmind.knowledge.knowledge import DEFAULT_ROLES_SUBFOLDER, _front_matter, resolve_roles_folder
 
-DEFAULT_SUBFOLDER = "Roles"
+DEFAULT_SUBFOLDER = DEFAULT_ROLES_SUBFOLDER   # kept as the name this module has always used
 SUPPORT_DIR = Path(__file__).resolve().parents[4] / "roles"
 CONDUCT_NAME = "_Board member conduct.md"
 TEMPLATE_NAME = "_Template - member.md"
@@ -284,37 +284,6 @@ def parse_file(path: Path, source: str) -> list[RoleProfile]:
     return [_make_profile(member, merged, clean_body, source, path, tuple(roles))]
 
 
-def detect_folder(vault: Path) -> Path | None:
-    """A roles folder inside the vault by name: ``Roles``,
-    ``Roles&Responsibilities``, ``Roles & Responsibilities``, ``R&R``..."""
-    if not vault.is_dir():
-        return None
-    try:
-        for child in sorted(vault.iterdir()):
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            name = child.name.lower().replace(" ", "")
-            if name.startswith("role") or name in ("r&r", "randr", "rnr"):
-                return child
-    except OSError:
-        return None
-    return None
-
-
-def resolve_folder(config: dict) -> tuple[Path | None, str]:
-    """Where the profiles come from and why: the configured folder, else a
-    roles folder detected in the vault, else nothing."""
-    configured = _config(config, "knowledge.roles_folder")
-    if configured:
-        return Path(str(configured)).expanduser(), "configured"
-    vault = _config(config, "knowledge.vault_path")
-    if vault:
-        detected = detect_folder(Path(str(vault)).expanduser())
-        if detected is not None:
-            return detected, "vault"
-    return None, "none"
-
-
 def _is_member_file(path: Path) -> bool:
     name = path.name.lower()
     return path.is_file() and not name.startswith("_") and not name.startswith("readme")
@@ -383,7 +352,7 @@ def load_board(config: dict) -> Board:
     plus the conduct note and the members left off. Raises
     ``RolesUnavailable`` when there is no folder, it cannot be read, or it
     holds fewer than two filled profiles - a board of one is not a board."""
-    folder, source = resolve_folder(config)
+    folder, source = resolve_roles_folder(config)
     if folder is None:
         raise RolesUnavailable("no roles folder chosen - the board has no members")
     if not folder.is_dir():

@@ -128,7 +128,7 @@ class TestLoadRoles(unittest.TestCase):
             b = roles.load_board({"knowledge": {"vault_path": str(vault)}})
             self.assertEqual(b.folder.name, "Roles&Responsibilities")
             self.assertEqual(b.source, "vault")
-            self.assertEqual(roles.detect_folder(vault).name, "Roles&Responsibilities")
+            self.assertEqual(knowledge.detect_roles_folder(vault).name, "Roles&Responsibilities")
 
     def test_empty_profiles_are_left_off_the_board_and_named(self):
         with tempfile.TemporaryDirectory() as tmp:
