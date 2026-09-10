@@ -108,10 +108,10 @@ class TestTaskTable(unittest.TestCase):
         self.assertEqual(phases["Maturity Gate Review"][0], "MP0")
         self.assertNotIn("Task", phases)
 
-    def test_aliases_are_the_bracketed_abbreviation_and_the_table_name(self):
+    def test_aliases_are_the_table_name_only_and_never_an_abbreviation(self):
         def note(title, **extra):
             return knowledge.Note(path=Path("x"), relative="x", title=title, tags=(), body="", kind="process", **extra)
-        self.assertEqual(enrich.task_aliases(note("VPDS_Customer Part Approval (PPAP)"), "Customer Part Approval (PPAP)"), ("PPAP",))
+        self.assertEqual(enrich.task_aliases(note("VPDS_Customer Part Approval (PPAP)"), "Customer Part Approval (PPAP)"), ())
         gates = note("VPDS_Maturity Gate Reviews (MP1 to MP7)")
         self.assertEqual(enrich.task_aliases(gates, "Maturity Gate Review"), ("Maturity Gate Review",))
         kept = note("VPDS_Design Freeze", aliases=("Freeze",))
@@ -127,7 +127,8 @@ class TestPropose(unittest.TestCase):
         by_key = {(c.path, c.key): c for c in proposal.changes}
         freeze = "Process/VPDS/VPDS_Tasks/VPDS_Design Freeze.md"
         self.assertEqual(by_key[(freeze, "phases")].value, ["MP3", "MP4"])
-        self.assertEqual(by_key[("Process/VPDS/VPDS_Tasks/VPDS_Customer Part Approval (PPAP).md", "aliases")].value, ["PPAP"])
+        self.assertNotIn(("Process/VPDS/VPDS_Tasks/VPDS_Customer Part Approval (PPAP).md", "aliases"), by_key)   # PPAP is the table's job
+        self.assertEqual(by_key[("Process/VPDS/VPDS_Tasks/VPDS_Maturity Gate Reviews (MP1 to MP7).md", "aliases")].value, ["Maturity Gate Review"])
         self.assertNotIn((freeze, "aliases"), by_key)                       # nothing to add for a plain title
         summary = by_key[(freeze, "summary")].value
         self.assertTrue(summary.startswith(enrich.SUMMARY_PREFIX + " "))

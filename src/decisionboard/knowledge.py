@@ -468,11 +468,14 @@ def question_phases(text: str) -> tuple[str, ...]:
 def expand_terms(terms: list[str], question: str, notes: list[Note]) -> list[str]:
     """The question's terms plus what the vault says they mean (spec 5.1):
     a page's ``aliases`` reach its title words and back, and a row of the
-    Abbreviations page reaches the full form's words. "PPAP" in a question
-    then matches "part approval" on a page, and "part approval" reaches the
-    page whose alias is PPAP. Two-letter abbreviations (DV, PV) are read
-    from the question directly, since ``query_terms`` drops them."""
+    Abbreviations page reaches the full form's words and the title words
+    of the pages the row links to. "PPAP" in a question then matches
+    "part approval" on a page and the Customer Part Approval page itself,
+    and "part approval" reaches a page whose alias is PPAP. Two-letter
+    abbreviations (DV, PV) are read from the question directly, since
+    ``query_terms`` drops them."""
     table: dict[str, set[str]] = {}
+    title_words_of = {n.path.stem.lower(): query_terms(re.sub(r"[_\-]+", " ", n.title)) for n in notes}
 
     def link(key: str, words) -> None:
         key = key.strip().lower()
@@ -487,14 +490,20 @@ def expand_terms(terms: list[str], question: str, notes: list[Note]) -> list[str
                 link(word, title_words)
             for word in title_words:
                 link(word, [alias.lower()])
-        if note.kind == "reference" and "abbreviation" in note.title.lower():
+        if _is_abbreviations(note):
             for line in note.body.splitlines():
-                cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.startswith("|") else []
+                cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))] if line.startswith("|") else []
                 if len(cells) < 2 or cells[0].lower() in ("abbreviation", "") or cells[0].startswith("-"):
                     continue
                 full = [w for w in query_terms(cells[1]) if w != "(?)"][:4]
+                # The row's links name the pages the abbreviation stands for
+                # (decided 10 September 2026: the table is the one place for
+                # abbreviations, a page needs no alias of its own for them).
+                linked: list[str] = []
+                for target in re.findall(r"\[\[([^\]|#\\]+)", " ".join(cells[2:])):
+                    linked.extend(w for w in title_words_of.get(target.strip().lower(), ()) if w not in linked)
                 for abbr in cells[0].split("/"):
-                    link(abbr, full)
+                    link(abbr, full + linked)
     short = [w.lower() for w in re.findall(r"\b[A-Za-z]{2}\b", question) if w.lower() in table]
     expanded = list(terms)
     for term in list(terms) + short:

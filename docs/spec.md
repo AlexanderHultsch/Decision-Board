@@ -236,7 +236,9 @@ start.
 
 **As built, where it differs from the table.** The `summaries` command is
 `board enrich`: it proposes `phases` (from the task table), `aliases` (the
-bracketed abbreviation in the title and the task table's name) and the
+task table's name when it differs from the title; abbreviations stay on the
+Abbreviations page, whose row links tell the selection which page an
+abbreviation stands for) and the
 summaries in one pass, prints them, and writes only with `--write` after a
 yes; `--refresh` rewrites every summary, `--no-summaries` skips the model.
 The candidate list per member is 40 sections, the pick returns at most 8 in

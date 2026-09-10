@@ -277,6 +277,20 @@ class TestSecondGeneration(unittest.TestCase):
         terms = knowledge.expand_terms(knowledge.query_terms("DV plan"), "DV plan", notes)
         self.assertIn("verification", terms)        # a two-letter abbreviation is read from the question
 
+    def test_a_table_row_reaches_the_page_it_links_to_without_an_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "Abbreviations.md").write_text(
+                "---\nkind: reference\n---\n# Abbreviations\n\n| Abbreviation | Full form | Description |\n| --- | --- | --- |\n"
+                "| TDR | Technical Design Review | VPDS task [[VPDS_Technical Design Reviews\\|Design Reviews]]; see [[R&R Systems#Process]] |\n",
+                encoding="utf-8")
+            (Path(tmp) / "VPDS_Technical Design Reviews.md").write_text("---\nkind: process\n---\n# VPDS task - Technical Design Reviews\n\nExperts review.\n", encoding="utf-8")
+            (Path(tmp) / "R&R Systems.md").write_text("---\nkind: role\n---\n# Project Manager Systems\n\n## Process\n\nSystems.\n", encoding="utf-8")
+            notes = knowledge.load_vault(Path(tmp))
+        terms = knowledge.expand_terms(knowledge.query_terms("Is the TDR late?"), "Is the TDR late?", notes)
+        self.assertIn("technical", terms)           # the full form
+        self.assertIn("reviews", terms)             # the linked task page's title, through the escaped-pipe link
+        self.assertIn("systems", terms)             # the linked role page's title, through the anchor link
+
     def test_property_boosts_prefer_the_members_own_pages(self):
         with tempfile.TemporaryDirectory() as tmp:
             notes = knowledge.load_vault(self._vault(Path(tmp)))

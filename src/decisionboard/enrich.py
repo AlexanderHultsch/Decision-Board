@@ -4,8 +4,8 @@ pages, derived from the vault itself, and a ``summary`` on every page,
 written by the model and marked as such.
 
 Python derives what it can (AP-1): the phases come from the task table on
-the VPDS overview, the aliases from the page title and the ``task``
-property. The model writes only the summaries, from the page text, and
+the VPDS overview, the aliases from the ``task`` property when the table's
+name differs from the title. The model writes only the summaries, from the page text, and
 every summary is prefixed so nobody mistakes it for official text. Nothing
 is written before Alex has seen the proposals and said yes.
 """
@@ -62,14 +62,12 @@ def task_phases(overview: Note) -> dict[str, tuple[str, ...]]:
 
 
 def task_aliases(note: Note, task: str) -> tuple[str, ...]:
-    """Aliases Python can defend: what the title carries in parentheses
-    (``(BOM)``), the task table's shorter name when it differs from the
-    title, and the aliases already there."""
+    """Aliases Python can defend: the task table's shorter name when it
+    differs from the title, and the aliases already there. Abbreviations
+    are not aliases: the Abbreviations page is their one place, and the
+    selection reads that page's links (decided 10 September 2026)."""
     title = note.title.replace("VPDS_", "").strip()
     aliases = list(note.aliases)
-    for inner in re.findall(r"\(([^)]+)\)", title):
-        if re.fullmatch(r"[A-Z][A-Z0-9&/-]{1,9}", inner.strip()) and inner.strip() not in aliases:
-            aliases.append(inner.strip())
     if task and task.lower() != title.lower() and task not in aliases:
         aliases.append(task)
     return tuple(aliases)
