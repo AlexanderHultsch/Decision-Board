@@ -186,6 +186,53 @@ says yes to remembering. Each call carries the fixed overhead described in
 section 4 plus up to `knowledge.token_budget` tokens of notes for the
 clarifier and member calls.
 
+### 5.1 Knowledge selection, second generation
+
+**Decided 10 September 2026, to be built.** Goal: better answers through
+more *relevant* knowledge per token and wider coverage, with Alex in
+control of how much the model decides and how many tokens go out. Time is
+not a constraint; cost is watched, not a bottleneck.
+
+**Pipeline per question**
+
+| Step | Rule | Reason |
+|---|---|---|
+| 1 Python first cut | Every section is scored as today (question terms double, member terms single), plus the page properties: `affected_swimlanes` names the member +3, `lead_swimlane` is the member +6, the task is active in the question's phase +3 (`phases` property on task pages, the phase read from the aligned input). `aliases` on the page and the Abbreviations page expand the question's terms. The top 40 sections per member, each with the page's `summary`, form the candidate list | Free, instant, deterministic. Uses the properties the vault now carries. |
+| 2 AI-assisted pick | One call (`knowledge_pick.md`) receives the question, the members and the candidate list (id, page, heading, summary) and returns per member: sections to send in full, sections to send as a one-line summary, and one reason per pick. Python accepts only ids that exist; an empty or failed call falls back to the Python ranking and says so in the picks screen and the statistics | Picks by meaning, not by word count; the reasons make the choice checkable; nothing invented reaches a member. |
+| 3 Packing | Per member: the **shared core** first (project page, the phase and gate definitions, the Definition of every task active in the question's phase), then the member's full sections up to the slider, then up to 20 one-line summaries within a fixed 800-token cap on top, then manual picks up to 12,000 as today. KPI notes unchanged | Coverage grows from about 8 to about 30 sections per member for the same slider value. |
+| 4 Combined mode | The shared core goes out once per call, each member gets only its delta | Removes the sixfold repetition that dominated the input cost. |
+| 5 Role terms | The member-term sections are found by heading text at any level | The `###` headings on role pages broke the end-of-section search. |
+
+**Vault side.** Every page gets a `summary` property: two lines, written by
+the board's `summaries` command from the page text, prefixed `AI summary,
+not official`, written only for pages without one or older than the page,
+and shown to Alex for confirmation before writing, like every write. Task
+pages get `aliases` (`[PPAP, Production Part Approval]`) and `phases`
+(from the task table). Long Coaching sections get `###` sub-headings at
+the sheet's own sub-titles, wording untouched.
+
+**Interface.** Simple and clear: one new dropdown, information behind an
+"i" button, no new screen.
+
+| Element | Behaviour |
+|---|---|
+| Dropdown **Knowledge selection**, under the token slider, styled like the mode dropdown. Options: `AI assisted (recommended)`, `Python only`. Last choice remembered | Decides whether step 2 runs. |
+| Its "i" text, two blocks in the style of the mode info. **AI assisted:** the model reads a list of candidate sections with their summaries and picks, per member, what that member needs, with a reason you can read. *Pro:* picks by meaning, knows synonyms, improves as the vault grows. *Con:* one extra call per question, about the size of one member call; the model can pick wrongly, so the picks are shown before the board runs. *Cost:* one call more. **Python only:* the program ranks sections by how often the question's words and the member's words appear. *Pro:* free, instant, the same result every time. *Con:* literal; misses pages that say the same thing in other words; weaker as the vault grows. *Cost:* none | Pros and cons where the choice is made. |
+| Slider "i": what the number caps (full sections per member), what rides on top (summaries, manual picks, KPI notes), and that the estimate follows the slider | No hidden budget. |
+| Picks screen (the existing "What each member would receive"): per member two groups, **in full** and **as summary**, each section ticked with the model's reason in small text; buttons `Accept all` and `Use Python picks instead`; a banner when the AI pick failed and the Python ranking is shown | Alex sees and can change every pick before a token is spent on the board. |
+| Estimate line counts the pick call: `N calls · about T tokens` | Cost visible before the button. |
+| Statistics: a row `knowledge pick`; per member the knowledge tokens split into core, own sections and summaries | Effect of each step measurable. |
+
+**Measurement.** `tests/knowledge_eval/`: ten real questions from Alex,
+each with the pages a good answer must use. `board eval-knowledge` prints
+the hit rate per mode and per step, so every change to the ranking is
+judged by a number, not by feel.
+
+**Order of work.** Role terms and property boosts; summaries, aliases,
+phases and sub-headings; shared core and summaries tier; the pick call
+with dropdown, picks screen and statistics; the evaluation set from the
+start.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that
@@ -260,6 +307,9 @@ could be deleted. Built in `server.py` and `web/`.
 | 15 | Options holds the knowledge source, the token budget, the model string, the token limit, the audit folder, auto-approve and the theme, and writes `config.local.json` on save. |
 | 16 | Local only: the server binds to 127.0.0.1 and nothing else, so there is no login. |
 | 17 | The CLI `board` command stays, unchanged. Both front ends call the same `run_board`. |
+| 18 | Knowledge selection is a dropdown with two options, AI assisted (default) and Python only, with an "i" that states what each does, its pros, its cons and its cost. Decided 10 September 2026, see 5.1. |
+| 19 | Every pick the model makes is shown with its reason before the board runs and can be changed; a failed pick falls back to the Python ranking and says so. |
+| 20 | The page `summary` is written by AI, marked as such, and confirmed by Alex before it is written. |
 
 ### 9.2 Flow
 
