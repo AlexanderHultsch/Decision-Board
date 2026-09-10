@@ -270,6 +270,23 @@ a failed pick was counted as a call the run never made, the estimate
 rebuilt the candidates on every keystroke, `enrich` stamped KPI dates and
 could double the summary marker.
 
+### 5.2 Fresh knowledge on every turn
+
+**Decided and built 10 September 2026**, after the first day of use: the
+clarifier's second round asked who the project managers are and could not
+read the page that names them, because the vault had been read once, for
+the first question, and never again.
+
+| # | Decision |
+|---|---|
+| 1 | **Every call that answers something new selects its own pages.** No call runs on the selection another question made. That holds for each clarifier round, for every member asked again in a follow-up, for the board's own follow-up answer, and for every question of an Ask the vault thread. |
+| 2 | **Python ranks it, never the model.** The AI-assisted pick of 5.1 runs where it always did, on the confirm screen, and nowhere else: a clarifier round and a follow-up must not cost an extra model call. The cost of reading again is zero calls. |
+| 3 | **The question being answered now decides.** The ranking counts how often a query word appears in a section, so a subject that has been in the query since the first question outweighs the new question every time - which is exactly why a follow-up kept getting the first question's pages back. The earlier question (a thread) or the topic (the board) joins the query only when the new question carries no word of its own, as "and who approves that?" does. |
+| 4 | **The clarifier ranks on everything the rounds have said**: the original question, and the questions and answers of every round so far. The clarifier's own question is part of it - "what are the names of the project managers" is the text that pulls the pages naming them. |
+| 5 | **What was sent stays sent.** A member asked again receives the block chosen for the new question, and its earlier assessment is in the prompt as before. A citation is checked against every page that member has been sent in this topic, in any round, so a fact taken from the first round still checks out. |
+| 6 | **The page says what was read.** A follow-up turn, in either agent, names the pages that this topic or thread had not seen before ("Read from the vault for this question: ..."). Nothing new to report, nothing shown. |
+| 7 | The slider's budget applies per call, as it always has. Reading again costs tokens, not calls. |
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that
@@ -500,9 +517,12 @@ New: `ask.py` (the prompt assembly, the JSON parsing with the source check, the 
 
 ### 10.4 As built, where it differs from the decisions
 
-The ranking query is the question plus the two questions before it in
-the thread, so "and who approves that?" still finds the pages of the
-question it follows. A running call can be stopped from the page
+The ranking query was the question plus the two questions before it in the
+thread; since 10 September 2026 (spec 5.2, decision 3) it is the question
+alone, with the earlier ones joining only when the new question carries no
+word of its own, so "and who approves that?" still finds the pages of the
+question it follows while a question of its own subject is no longer
+outweighed by the one before it. A running call can be stopped from the page
 (`POST /api/ask/<id>/stop`); the question stays typed and nothing is
 recorded. `DELETE /api/ask/<id>` removes a thread and its file; a note it
 wrote to the vault stays. The slider goes up to 40,000 tokens. The thread
@@ -653,6 +673,32 @@ imports from an agent: `resolve_folder` and `detect_folder` moved out of
 know which folder to leave out, so the knowledge module owns the question;
 `roles.py` keeps the name `DEFAULT_SUBFOLDER` pointing at the new
 constant. Behaviour is unchanged.
+
+**Changed after the first day of use (10 September 2026).** Six things the
+first real session showed:
+
+- **The browser's Back trapped the board.** A topic opened from the home
+  page pushed its `/board/<id>` address into the history and every step of
+  the flow pushed another entry, including the steps the Back button itself
+  caused: Back then bounced between two screens for ever. The address that
+  only opens a topic is now replaced rather than pushed, and a step the
+  browser's Back caused adds no entry. Back steps through the flow and then
+  leaves for the page behind it, as it does for a thread.
+- **A row of work is one target.** The whole row opens the topic or the
+  thread, not only its title, and the rows are laid out in columns of their
+  own width, so a longer agent name or date no longer shifts the titles out
+  of line.
+- **Status details left the menu.** The three icons carry it: hovering shows
+  the detail, clicking opens the page. Decision 8's list loses that entry.
+- **The current step is unmistakable.** The step the topic stands on is a
+  filled pill with a ring; the steps behind it carry a check mark instead of
+  their number.
+- **A citation that could not be confirmed is not an error.** "Citations
+  that failed the check", in red, is now "To check", in amber, with a "?"
+  and one line saying what it means: the model named a page that was not
+  among those sent, the statement may still be right, and nothing the board
+  read confirms it.
+- **The knowledge is read again on every turn** (spec 5.2).
 
 ### 11.2 Reuse
 

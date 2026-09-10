@@ -959,7 +959,7 @@ def _combined_follow_up_prompt(conversation: BoardConversation, chosen: list[str
 def _follow_up_prompt(
     assessments: list[MemberAssessment], turns: list[tuple[str, str]], question: str,
     roles: dict[str, RoleProfile] | None = None,
-    member_answers: list[MemberAssessment] | None = None,
+    member_answers: list[MemberAssessment] | None = None, knowledge: str = "",
 ) -> str:
     lines = [_synthesis_prompt(assessments, roles), "", "## Conversation so far"]
     if turns:
@@ -978,6 +978,9 @@ def _follow_up_prompt(
              "own_judgement": a.judgement}
             for a in member_answers
         ], indent=2))
+    if knowledge:
+        # Pages selected for this question, not for the first one (spec 5.2).
+        lines += ["", knowledge]
     lines.append("")
     lines.append("## New question")
     lines.append(question)
@@ -1031,7 +1034,7 @@ def _follow_up_text(data: dict[str, Any]) -> str:
 
 def ask_follow_up_full(
     config: dict, provider: AiProvider | None, conversation: BoardConversation, question: str,
-    members: tuple[str, ...] | list[str] = (), mode: str = "individual",
+    members: tuple[str, ...] | list[str] = (), mode: str = "individual", knowledge: str = "",
 ) -> FollowUp:
     """One follow-up turn on a completed board run.
 
@@ -1112,7 +1115,7 @@ def ask_follow_up_full(
             member_answers.append(MemberAssessment(member=member, **parsed))
 
     prompt = _follow_up_prompt(conversation.result.assessments, conversation.turns, question,
-                               conversation.roles, member_answers or None)
+                               conversation.roles, member_answers or None, knowledge)
     ai_result = provider.complete(TASK_BOARD, prompt)
     calls += 1
     try:

@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from programmind import __version__  # noqa: E402
 from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
-from programmind.shell.server import Session, create_http_server, site_name  # noqa: E402
+from programmind.shell.server import Session, _ranking_query, create_http_server, site_name  # noqa: E402
 from programmind.memory import history as history_mod  # noqa: E402
 from programmind.agents.board import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
@@ -1213,3 +1213,137 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(restored.title, "Rework or switch")
         self.assertEqual(restored.status, "open")
         self.assertEqual(restored.member_paths[CLASSIC[0]], ["Tooling.md"])
+
+
+class TestFreshKnowledge(unittest.TestCase):
+    """Spec 5.2: every call that answers something new selects its own pages
+    from the vault. The clarifier's later rounds and every follow-up read
+    again; nothing runs on the first question's selection."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name) / "vault"
+        self.vault.mkdir()
+        # Each page on its own fits the budget below; no two of them do, so
+        # what reaches a prompt is what that call's question ranked first.
+        (self.vault / "Tooling.md").write_text(
+            "---\ntitle: Tooling\n---\n" + "The housing tooling at supplier X is late. " * 26, encoding="utf-8")
+        (self.vault / "People.md").write_text(
+            "---\ntitle: People\n---\n" + "The project managers are Ana Adler and Bo Baker. " * 26, encoding="utf-8")
+        (self.vault / "Warranty.md").write_text(
+            "---\ntitle: Warranty\n---\n" + "The warranty reserve covers field returns for three years. " * 24,
+            encoding="utf-8")
+        make_roles(self.vault / "Roles&Responsibilities")
+        self.config_path = Path(self.tmp.name) / "config.local.json"
+        self.config = {"provider": {"models": {"board": "fake/m"}},
+                       "knowledge": {"vault_path": str(self.vault), "token_budget": 300, "selection": "python"},
+                       "server": {"history_folder": str(Path(self.tmp.name) / "history")}}
+        self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.provider = RoutingFakeProvider()
+        self.httpd, self.board_server = create_http_server(self.config, self.config_path, port=0, provider=self.provider)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.tmp.cleanup()
+
+    call = TestHistory.call
+    wait_for = TestHistory.wait_for
+
+    def prompts_with(self, marker):
+        with self.provider.lock:
+            return [p for p in self.provider.prompts if marker in p]
+
+    def test_a_later_clarifier_round_reads_the_pages_its_own_question_is_about(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework the housing tooling or switch supplier?"})
+        sid = state["id"]
+        state = self.wait_for(sid, lambda s: s["phase"] == "questions")
+        first = self.prompts_with("## Question from Alex")[0]
+        self.assertIn("housing tooling at supplier X is late", first)
+        self.assertNotIn("Ana Adler", first)              # nobody asked about people yet
+        self.assertIn("Tooling.md", state["knowledge"]["notes"])
+
+        # The answer names the project managers: the next round must find them.
+        self.call("POST", f"/api/sessions/{sid}/answers",
+                  {"answers": ["The project managers Ana Adler and Bo Baker approved it."]})
+        self.wait_for(sid, lambda s: s["phase"] in ("confirm", "questions"))
+        second = self.prompts_with("## Clarification so far")[0]
+        self.assertIn("Ana Adler", second)                # the page, not just the answer, is in the prompt
+        self.assertIn("project managers are Ana Adler", second)
+
+    def test_a_member_asked_again_gets_pages_for_the_new_question_and_the_turn_names_them(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework the housing tooling or switch supplier?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["No budget question."], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.call("POST", f"/api/sessions/{sid}/run", {
+            "topic": "Rework the housing tooling or switch supplier", "context": "The tooling is late.",
+            "options": ["Rework"], "constraints": [], "members": ["Finance"], "budget": 300})
+        state = self.wait_for(sid, lambda s: s["phase"] == "result")
+        self.assertIn("Tooling.md", state["member_knowledge_paths"]["Finance"])
+
+        self.call("POST", f"/api/sessions/{sid}/follow-up",
+                  {"question": "What does the warranty reserve cover?", "members": ["Finance"]})
+        state = self.wait_for(sid, lambda s: not s["busy"])
+        again = self.prompts_with("## Your earlier assessment")[0]
+        self.assertIn("warranty reserve covers field returns", again)   # selected for the follow-up
+        turn = state["turns"][-1]
+        self.assertIn("Warranty.md", turn["new_pages"])                 # named on the turn, as new
+        self.assertIn("Warranty.md", state["member_knowledge_paths"]["Finance"])
+        self.assertIn("Tooling.md", state["member_knowledge_paths"]["Finance"])   # what was sent stays sent
+
+    def test_a_follow_up_without_members_still_reads_for_its_own_question(self):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework the housing tooling or switch supplier?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["x"], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Rework or switch", "context": "c", "options": [],
+                                                       "constraints": [], "members": ["Finance"], "budget": 300})
+        self.wait_for(sid, lambda s: s["phase"] == "result")
+        before = len(self.provider.prompts)
+        self.call("POST", f"/api/sessions/{sid}/follow-up", {"question": "Who are the project managers?"})
+        state = self.wait_for(sid, lambda s: not s["busy"])
+        board_answer = self.prompts_with("## New question")[-1]
+        self.assertIn("project managers are Ana Adler", board_answer)
+        self.assertIn("People.md", state["turns"][-1]["new_pages"])
+        self.assertEqual(len(self.provider.prompts) - before, 1)   # one call: the ranking is Python's
+
+    def test_every_question_of_a_thread_reads_again(self):
+        _, created = self.call("POST", "/api/ask", {"budget": 300})
+        tid = created["id"]
+        self.call("POST", f"/api/ask/{tid}/question", {"question": "Is the housing tooling late?"})
+        self.wait_for_thread(tid)
+        self.call("POST", f"/api/ask/{tid}/question", {"question": "Who are the project managers?"})
+        state = self.wait_for_thread(tid)
+        asked = self.prompts_with("## Question to the vault")
+        self.assertIn("housing tooling at supplier X is late", asked[0])
+        self.assertIn("project managers are Ana Adler", asked[1])
+        self.assertIn("Tooling.md", state["turns"][0]["new_pages"])
+        self.assertIn("People.md", state["turns"][1]["new_pages"])
+
+    def wait_for_thread(self, thread_id, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            _, state = self.call("GET", f"/api/ask/{thread_id}")
+            if not state["busy"]:
+                return state
+            time.sleep(0.02)
+        self.fail("the thread never answered")
+
+
+class TestRankingQuery(unittest.TestCase):
+    """Spec 5.2: the question being answered now decides what is read; the
+    earlier one only fills in when the new question has no word of its own."""
+
+    def test_a_question_of_its_own_stands_alone(self):
+        self.assertEqual(_ranking_query("Who are the project managers?", ["Is the tooling late?"]),
+                         "Who are the project managers?")
+
+    def test_a_question_that_only_points_back_takes_the_context_with_it(self):
+        self.assertEqual(_ranking_query("And that?", ["Is the tooling late?"]),
+                         "And that?\nIs the tooling late?")
+        self.assertEqual(_ranking_query("", ["Is the tooling late?"]), "\nIs the tooling late?")

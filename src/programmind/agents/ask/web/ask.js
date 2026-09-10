@@ -42,12 +42,12 @@
       // the archive by itself and stays readable there.
       const rows = (data.threads || []).filter((r) => r.status !== "closed");
       box.innerHTML = rows.length ? rows.map((r) => `
-        <div class="thread-row" data-id="${esc(r.id)}">
-          <button type="button" class="thread-open" title="Open this thread">${esc(r.title)}</button>
+        <div class="thread-row ask-row" data-id="${esc(r.id)}" title="Open this thread">
+          <button type="button" class="thread-open">${esc(r.title)}</button>
           <span class="thread-meta">${r.questions} question(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
           <button type="button" class="ghost small-btn thread-delete" title="Delete this thread">Delete</button>
         </div>`).join("") : "<p class='muted small'>No open thread. Ask the first question above; closed threads are in the archive.</p>";
-      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => PM.navigate(`/ask/${b.closest(".thread-row").dataset.id}`)));
+      PM.openOnRowClick(box, (row) => PM.navigate(`/ask/${row.dataset.id}`));
       box.querySelectorAll(".thread-delete").forEach((b) => b.addEventListener("click", async () => {
         const id = b.closest(".thread-row").dataset.id;
         if (!window.confirm("Delete this thread? Its questions and answers are removed; a note written to the vault stays.")) return;
@@ -92,8 +92,10 @@
     const gaps = (t.gaps || []).length ? `<dt>Not in the vault</dt><dd class="gaps"><ul>${t.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></dd>` : "";
     const hint = t.decision_question ? `<p class="hint-board muted">This reads like a decision. <a href="/board" class="to-board">Put it to the Board</a> for an assessment by every swim lane.</p>` : "";
     const parse = t.parse_error ? `<p class="error small">${esc(t.parse_error)}; the text is shown as it came.</p>` : "";
+    const fresh = (t.new_pages || []).length
+      ? `<p class="fresh-pages small">Read from the vault for this question: ${t.new_pages.map(esc).join(" · ")}</p>` : "";
     return `<div class="turn answer"><div class="q">${esc(t.question)}</div><div class="a">${md(t.answer)}</div>${parse}
-      <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${dropped}${hint}</div>`;
+      <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${fresh}${dropped}${hint}</div>`;
   }
 
   function renderThread() {

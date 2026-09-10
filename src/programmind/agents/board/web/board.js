@@ -77,10 +77,10 @@
   function sourcesRows(a) {
     const facts = a.sources || [];
     const net = facts.length
-      ? `<ul class="bullets sources">${facts.map((s) => `<li class="${s.verified ? "ok" : "bad"}"><span class="mark">${s.verified ? "✓" : "!"}</span> ${esc(s.fact)} <span class="note">${esc(s.source || "no note named")}${s.verified ? "" : ` · ${esc(s.note)}`}</span></li>`).join("")}</ul>`
+      ? `<ul class="bullets sources">${facts.map((s) => `<li class="${s.verified ? "ok" : "warn"}"><span class="mark">${s.verified ? "✓" : "?"}</span> ${esc(s.fact)} <span class="note">${esc(s.source || "no note named")}${s.verified ? "" : ` · ${esc(s.note)}`}</span></li>`).join("")}</ul>`
       : "<span class='muted'>nothing taken from the knowledge net</span>";
     const own = a.judgement ? fmt(a.judgement) : "<span class='muted'>none listed</span>";
-    const flags = (a.flags || []).length ? `<dt class="bad">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
+    const flags = (a.flags || []).length ? `<dt class="warn">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
     return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
 
@@ -183,6 +183,8 @@
       const step = Number(button.dataset.step);
       const clickable = step < current ? canBack : step === current ? false : step === current + 1 ? canForward : false;
       button.className = `step${step === current ? " current" : step < current ? " done" : ""}${clickable ? " clickable" : ""}`;
+      button.querySelector(".step-mark").textContent = step < current ? "✓" : String(step + 1);
+      button.setAttribute("aria-current", step === current ? "step" : "false");
       button.disabled = !clickable;
       button.title = step === current ? "Where the topic stands"
         : clickable ? (step < current ? "Go back to this step; everything typed is kept" : "Forward again")
@@ -212,10 +214,17 @@
 
   let lastPhase = null;
 
+  let steppingBack = false;   // true while the browser's own Back is being served
+
   function pushHistory() {
+    // A step of the flow adds an entry, so the browser's Back steps through
+    // it. The step the browser's Back itself caused must not add one: it
+    // would put back the entry just left and the topic could never be left
+    // at all (seen 10 September 2026: Back bounced between two screens).
     const phase = session ? `${session.id}:${session.phase}` : "home";
     if (phase === lastPhase) return;
     lastPhase = phase;
+    if (steppingBack) return;
     try { history.pushState({ phase }, ""); } catch (e) { /* not available */ }
   }
 
@@ -549,8 +558,12 @@
     const rests = (d.rests_on_judgement || []).length
       ? fmt(d.rests_on_judgement)
       : `<span class='muted'>${src.judgement_count ? `${src.judgement_count} statement(s) of the members' own judgement, none named as decisive` : "nothing"}</span>`;
+    // Not confirmed, not wrong (10 September 2026): the model named a page
+    // that was not among the ones sent to that member. The statement may be
+    // right; nothing the board read backs it.
     const bad = (src.unverified || []).length
-      ? `<dt class="bad">Citations that failed the check</dt><dd><ul class="bullets sources">${src.unverified.map((u) => `<li class="bad"><span class="mark">!</span> ${esc(u)}</li>`).join("")}</ul></dd>`
+      ? `<dt class="warn">To check</dt><dd><ul class="bullets sources">${src.unverified.map((u) => `<li class="warn"><span class="mark">?</span> ${esc(u)}</li>`).join("")}</ul>
+         <p class="muted small">These name a page that was not among the ones sent. They may still be right; nothing the board read confirms them.</p></dd>`
       : "";
     return `<div class="sources-block"><dl>
       <dt>From the knowledge net</dt><dd>${net}</dd>
@@ -595,9 +608,11 @@
         <div class="who">${esc(a.member)}${a.applies === false ? ' <span class="na-note">· not affected</span>' : ""}</div>
         ${memberBody(a)}
       </div>`).join("");
+    const fresh = (t.new_pages || []).length
+      ? `<p class="fresh-pages small">Read from the vault for this question: ${t.new_pages.map(esc).join(" · ")}</p>` : "";
     const failed = (t.failed_members || []).length ? `<p class="error small">Failed: ${t.failed_members.map(esc).join(" · ")}</p>` : "";
     const details = answers ? `<details class="turn-members"><summary class="muted small">What each member said</summary>${answers}</details>` : "";
-    return `<div class="turn"><div class="q">${esc(t.question)}</div>${who}${body}${details}${failed}</div>`;
+    return `<div class="turn"><div class="q">${esc(t.question)}</div>${who}${body}${fresh}${details}${failed}</div>`;
   }
 
   function renderResult() {
@@ -819,10 +834,10 @@
       $("screen-result").dataset.phase = "";
       $("turns").dataset.key = "";
       if (session.phase === "result") $("followup").value = draft().followup || "";
-      PM.setPath("/board");
+      PM.setPath("/board", true);      // the /board/<id> entry is replaced, never kept
       lastPhase = null;
       render();
-    } catch (err) { setError("home-error", err.message); PM.setPath("/board"); show("home"); renderSteps(); }
+    } catch (err) { setError("home-error", err.message); PM.setPath("/board", true); show("home"); renderSteps(); }
   }
 
   PM.register({
@@ -834,7 +849,11 @@
     },
     onEnter: () => { lastPhase = null; },
     onLeave: () => { stopPolling(); PM.steps().hidden = true; },
-    onPopState: () => { if (session && $("screen-home").hidden) goBack(); else if (session) goForward(); },
+    onPopState: async () => {
+      if (!session) return;
+      steppingBack = true;
+      try { await ($("screen-home").hidden ? goBack() : goForward()); } finally { steppingBack = false; }
+    },
     boot: () => { $("question").value = store.get("question") || ""; return resumeSession(); },
     stats: () => session,
     statsExtra: knowledgeSplitTable,

@@ -724,11 +724,41 @@ class BoardServer:
             session = self.sessions.setdefault(session.id, session)
         return session
 
-    def _clarify(self, session: Session) -> None:
+    @staticmethod
+    def _clarifier_query(session: Session) -> str:
+        """What the clarifier's knowledge is ranked by (spec 5.2): the
+        question, and everything the rounds so far asked and answered. The
+        clarifier's own question is part of it - "who are the project
+        managers" is what pulls the pages that name them."""
+        parts = [session.question]
+        for round_ in session.rounds:
+            parts.extend(str(q) for q in round_.get("questions") or [])
+            parts.extend(str(a) for a in round_.get("answers") or [] if str(a).strip())
+        return "\n".join(parts)
+
+    def _clarifier_knowledge(self, session: Session) -> bool:
+        """Select the clarifier's block for what is known now. False when the
+        vault cannot be read; the session is failed by then."""
         try:
-            selection = knowledge_mod.gather(self.config, session.question, projects=session.projects)
+            selection = knowledge_mod.gather(self.config, self._clarifier_query(session), projects=session.projects)
         except knowledge_mod.KnowledgeUnavailable as exc:
             session.fail(f"{exc}. Check the knowledge source in Options.")
+            return False
+        with session.lock:
+            session.knowledge = {
+                "vault_path": str(selection.vault_path) if selection.vault_path else None,
+                "project": selection.project or "",
+                "selected": len(selection.notes),
+                "total": selection.total_notes,
+                "tokens": selection.tokens,
+                "truncated": selection.truncated,
+                "notes": selection.relative_paths,
+            }
+            session.knowledge_text = selection.text
+        return True
+
+    def _clarify(self, session: Session) -> None:
+        if not self._clarifier_knowledge(session):
             return
         try:
             board = roles_mod.load_board(self.config)
@@ -744,16 +774,6 @@ class BoardServer:
             session.roles["kpi_members"] = sorted(kpi)
             session.member_meta = roles_mod.member_meta(board.profiles)
             session.members = {member: "pending" for member in board.profiles}
-            session.knowledge = {
-                "vault_path": str(selection.vault_path) if selection.vault_path else None,
-                "project": selection.project or "",
-                "selected": len(selection.notes),
-                "total": selection.total_notes,
-                "tokens": selection.tokens,
-                "truncated": selection.truncated,
-                "notes": selection.relative_paths,
-            }
-            session.knowledge_text = selection.text
         try:
             provider = RecordingProvider(self.provider(), session)
             clarification = clarify_mod.clarify(provider, session.question, session.knowledge_text)
@@ -866,6 +886,8 @@ class BoardServer:
 
     def _clarify_more(self, session: Session) -> None:
         rounds = [(r["questions"], r["answers"]) for r in session.rounds]
+        if not self._clarifier_knowledge(session):    # spec 5.2: pages for what this round asked about
+            return
         try:
             clarification = clarify_mod.clarify(RecordingProvider(self.provider(), session), session.question,
                                                 session.knowledge_text, rounds)
@@ -1141,27 +1163,68 @@ class BoardServer:
                 conduct=conduct, member_data=member_data, project=", ".join(projects),
             )
 
+    def _follow_up_knowledge(self, session: Session, question: str, chosen: list[str]) -> tuple[str, list[str]]:
+        """Pages for the follow-up itself (spec 5.2), not the ones the first
+        question chose. Every member asked again gets a block selected for
+        the new question; the one-call form gets one block of its own. The
+        pages sent earlier stay in ``member_notes``, so a citation from the
+        first round still checks out. Returns the block for the one-call
+        form and the pages this topic had not seen before.
+
+        Python ranks it, never the model: a follow-up must not cost an extra
+        call. A vault that cannot be read is not a reason to refuse the
+        question - the follow-up then runs on what it already has."""
+        conversation = session.conversation
+        budget = session.budget if session.budget is not None else int(
+            _get(self.config, "knowledge.token_budget", knowledge_mod.DEFAULT_TOKEN_BUDGET) or 0)
+        if budget <= 0 and not session.extra:
+            return "", []
+        with session.lock:
+            topic = str(session.inputs.get("topic") or session.question)
+            known = {path for paths in session.member_paths.values() for path in paths}
+            projects = list(session.projects)
+            extra, exclude = list(session.extra), list(session.exclude)
+        query = _ranking_query(question, [topic])
+        fresh: set[str] = set()
+        block = ""
+        try:
+            board = roles_mod.load_board(self.config)
+        except Exception:   # noqa: BLE001 - no profiles: the ranking runs without a member's own words
+            board = None
+        try:
+            if chosen:
+                terms = {m: (role_terms(board.profiles.get(m)) if board is not None else ()) for m in chosen}
+                selections = knowledge_mod.gather_for_members(
+                    self.config, query, terms, token_budget=max(budget, 1), projects=projects,
+                    extra=extra, exclude=exclude)
+                for member, sel in selections.items():
+                    sent = {**sel.sent, **sel.brief_sent}
+                    conversation.member_knowledge[member] = sel.text
+                    conversation.member_delta[member] = "\n\n".join(t for t in (sel.own_text, sel.brief_text) if t)
+                    conversation.member_notes.setdefault(member, {}).update(sent)
+                    if sel.core_text:
+                        conversation.shared_knowledge = sel.core_text
+                    fresh |= set(sel.sent) - known
+                    with session.lock:
+                        session.member_paths[member] = sorted(set(session.member_paths.get(member, [])) | set(sel.sent))
+                conversation.member_data.update(
+                    knowledge_mod.kpi_notes(self.config, chosen, projects=projects))
+            else:
+                sel = knowledge_mod.gather_for_members(
+                    self.config, query, {"": []}, token_budget=max(budget, 1), projects=projects,
+                    extra=extra, exclude=exclude)[""]
+                block = sel.text
+                fresh |= set(sel.sent) - known
+        except Exception:   # noqa: BLE001 - a block that cannot be built is not a reason to refuse the question
+            return block, sorted(fresh)
+        return block, sorted(fresh)
+
     def _follow_up(self, session: Session, question: str, chosen: list[str], follow_mode: str = "individual",
                    index: int = -1) -> None:
-        conversation = session.conversation
-        missing = [m for m in chosen if m not in conversation.member_knowledge]
-        if missing:
-            # A member not asked in the first round gets its knowledge block
-            # and KPI data now (decided 9 September 2026: the whole board is
-            # on the follow-up list).
-            try:
-                board = roles_mod.load_board(self.config)
-                if (session.budget or 0) > 0 or session.extra:
-                    for m, sel in self._member_selections(session, board, missing, session.budget or 0).items():
-                        conversation.member_knowledge[m] = sel.text
-                        conversation.member_notes[m] = {**sel.sent, **sel.brief_sent}
-                        conversation.member_delta[m] = "\n\n".join(t for t in (sel.own_text, sel.brief_text) if t)
-                conversation.member_data.update(knowledge_mod.kpi_notes(self.config, missing, projects=session.projects))
-            except Exception:   # a missing block is not a reason to refuse the question
-                pass
+        block, new_pages = self._follow_up_knowledge(session, question, chosen)
         try:
             turn = ask_follow_up_full(self.config, RecordingProvider(self.provider(), session), session.conversation,
-                                      question, chosen, follow_mode)
+                                      question, chosen, follow_mode, block)
         except Exception as exc:
             with session.lock:
                 if not _pending_turn(session, index):
@@ -1176,6 +1239,7 @@ class BoardServer:
                 return
             session.turns[index] = {
                 "question": question, "answer": turn.answer, "pending": False, "members": chosen, "mode": follow_mode,
+                "new_pages": new_pages,
                 "data": turn.data, "assessments": [asdict(a) for a in turn.assessments],
                 "failed_members": list(turn.failed_members),
             }
@@ -1637,7 +1701,7 @@ class BoardServer:
         """The agent's knowledge: the board's ranking for one nameless
         member, the shared core included, within ``budget``."""
         thread = session.thread
-        query = "\n".join([question] + [t["question"] for t in thread.turns[-2:]])
+        query = _ranking_query(question, [t["question"] for t in thread.turns[-2:]])
         selections = knowledge_mod.gather_for_members(
             self.config, query, {"": []}, token_budget=max(budget, 1), projects=thread.projects,
             extra=list(extra if extra is not None else thread.extra),
@@ -1732,10 +1796,14 @@ class BoardServer:
             if session.cancelled.is_set():
                 session.busy, session.phase, session.pending_question = False, "idle", None
                 return
+            # Which of the pages sent for this question the thread had not
+            # seen before (spec 5.2): every question selects its own.
+            seen = {path for turn in thread.turns for path in turn.get("paths") or []}
             thread.turns.append({
                 "question": question, "answer": answer.answer, "sources": answer.sources, "gaps": answer.gaps,
                 "dropped": answer.dropped, "decision_question": answer.decision_question,
-                "parse_error": answer.parse_error, "paths": paths, "briefs": sorted(briefs), "at": time.time(),
+                "parse_error": answer.parse_error, "paths": paths, "new_pages": sorted(set(paths) - seen),
+                "briefs": sorted(briefs), "at": time.time(),
             })
             session.busy, session.phase, session.pending_question = False, "idle", None
             session.mark("answered")
@@ -1918,6 +1986,21 @@ def _gate_lines(body: str) -> list[str]:
         if cleaned and cleaned not in gates:
             gates.append(cleaned[:120])
     return gates
+
+
+def _ranking_query(question: str, context: list[str]) -> str:
+    """What a selection is ranked by (spec 5.2, 10 September 2026): the
+    question being answered now, and the earlier question or the topic only
+    when this one carries no word of its own ("and who approves that?").
+
+    The ranking counts how often a query word appears in a section, so a
+    long-standing subject in the query outweighs the new question every
+    time: carrying the earlier questions along was why a follow-up kept
+    getting the pages of the first question back."""
+    question = (question or "").strip()
+    if knowledge_mod.query_terms(question):
+        return question
+    return "\n".join([question] + [c for c in context if c and c.strip()])
 
 
 def _record_title(data: dict[str, Any]) -> str:

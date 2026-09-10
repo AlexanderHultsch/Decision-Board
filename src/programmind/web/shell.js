@@ -388,13 +388,25 @@
   const AGENT_NAME = { board: "Board", ask: "Ask the vault" };
 
   function workRow(r, extra) {
-    return `<div class="thread-row ${extra}" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}">
+    // One row, three columns of their own width, so a longer agent name or a
+    // longer date never shifts the titles out of line.
+    return `<div class="thread-row work-row ${extra}" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}" title="Open">
       <span class="agent-tag">${esc(AGENT_NAME[r.kind] || r.kind)}</span>
-      <button type="button" class="thread-open" title="Open">${esc(r.title)}</button>
+      <button type="button" class="thread-open">${esc(r.title)}</button>
       <span class="thread-meta">${r.count} ${esc(r.unit)}(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>`;
   }
 
   function pathOf(row) { return row.dataset.kind === "board" ? `/board/${row.dataset.id}` : `/ask/${row.dataset.id}`; }
+
+  function openOnRowClick(box, path) {
+    // The whole row opens it, not just the title. A button inside the row
+    // that does something else (Delete) keeps its own click.
+    box.querySelectorAll(".thread-row").forEach((row) => row.addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (button && !button.classList.contains("thread-open")) return;
+      path(row);
+    }));
+  }
 
   function renderArchive() {
     const filter = ($("archive-filter").value || "").trim().toLowerCase();
@@ -404,7 +416,7 @@
       : "Nothing closed yet. A topic or a thread moves here when you close it.";
     $("archive-list").innerHTML = rows.map((r) => `${workRow(r, "archive-row")}
       <button type="button" class="ghost small-btn archive-delete" title="Delete this for good">Delete</button></div>`).join("");
-    $("archive-list").querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(pathOf(b.closest(".thread-row")))));
+    openOnRowClick($("archive-list"), (row) => navigate(pathOf(row)));
     $("archive-list").querySelectorAll(".archive-delete").forEach((b) => b.addEventListener("click", async () => {
       const row = b.closest(".thread-row");
       if (!window.confirm("Delete this for good? Its questions and answers are removed; a note written to the vault stays.")) return;
@@ -435,7 +447,7 @@
       const items = data.items || [];
       box.innerHTML = items.length ? items.map((r) => `${workRow(r, "recent-row")}</div>`).join("")
         : "<p class='muted small'>Nothing open. Start with an agent above; closed work is in the archive.</p>";
-      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(pathOf(b.closest(".thread-row")))));
+      openOnRowClick(box, (row) => navigate(pathOf(row)));
     } catch (err) { setError("start-error", err.message); }
   }
 
@@ -460,8 +472,6 @@
   document.addEventListener("click", (e) => { if (!$("menu").contains(e.target)) toggleMenu(false); });
 
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { toggleMenu(false); toggleProjectMenu(false); } });
-
-  $("btn-status").addEventListener("click", () => openStatus(false));
 
   $("btn-status-vault").addEventListener("click", () => openStatus(false));
 
@@ -624,9 +634,13 @@
     return "start";
   }
   function agentFor(route) { return agents.find((a) => a.match(location.pathname) === route && route !== "start") || null; }
-  function setPath(path) {
+  function setPath(path, replace) {
+    // ``replace`` rewrites the entry the browser is on instead of adding one:
+    // an address that only opens something (/board/<id>) must not stay in the
+    // history, or Back lands on it again and reopens what you just left.
     currentRoute = routeOf(path);
-    if (location.pathname !== path) { try { history.pushState({ route: currentRoute }, "", path); } catch (e) { /* not available */ } }
+    if (location.pathname === path) return;
+    try { history[replace ? "replaceState" : "pushState"]({ route: currentRoute }, "", path); } catch (e) { /* not available */ }
   }
   function navigate(path) { setPath(path); renderRoute(); }
   function renderRoute() {
@@ -655,7 +669,7 @@
   window.PM = {
     $, esc, api, store, show, setError, fmt, fmtNum, fmtSec, lines, md, fmtDate,
     register, navigate, setPath, showProposal, openOptions, renderProjectPicker, loadStatus, loadRecent,
-    steps: () => $("step-line"),
+    openOnRowClick, steps: () => $("step-line"),
     route: () => currentRoute,
     projects: () => (chosenProjects || []),
     get config() { return config; },

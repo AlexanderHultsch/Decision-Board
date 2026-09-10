@@ -7,6 +7,7 @@
   --accent: #2563eb;
   --accent-ink: #ffffff;
   --danger: #b91c1c;
+  --warn: #b45309;
   --ok: #15803d;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 8px 24px rgba(16, 24, 40, .06);
   --radius: 14px;
@@ -27,6 +28,7 @@
   --line: #262c34;
   --accent: #3b82f6;
   --danger: #f87171;
+  --warn: #fbbf24;
   --ok: #4ade80;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
   color-scheme: dark;
@@ -40,6 +42,7 @@
     --line: #262c34;
     --accent: #3b82f6;
     --danger: #f87171;
+    --warn: #fbbf24;
     --ok: #4ade80;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
     color-scheme: dark;
@@ -79,7 +82,7 @@ svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-wi
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
 .status-btn .dot { position: absolute; right: 5px; bottom: 5px; border: 2px solid var(--card); width: 11px; height: 11px; }
 .dot.state-green { background: var(--ok); }
-.dot.state-amber { background: #d97706; }
+.dot.state-amber { background: var(--warn); }
 .dot.state-red { background: var(--danger); }
 .dot.state-unknown { background: var(--muted); }
 .status-card { display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 16; width: 22rem; max-width: 92vw; padding: .8rem .95rem; text-align: left;
@@ -113,7 +116,7 @@ svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-wi
 
 /* The archive (decision 10) and the home page's recent work (decision 5). */
 .archive-row .thread-meta { margin-left: auto; }
-.recent-row .agent-tag { flex: none; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: .1rem .45rem; }
+.agent-tag { justify-self: start; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: .1rem .45rem; }
 
 .page { max-width: 1120px; margin: 0 auto; padding: 2.5rem 2rem 4rem; }
 .colophon { max-width: 1120px; margin: 0 auto; padding: 0 2rem 2rem; color: var(--muted); font-size: .8rem; text-align: right; }
@@ -239,7 +242,10 @@ button.ghost { background: transparent; }
 .na-note { color: var(--muted); font-style: italic; }
 /* Source attribution (9 September 2026): what came from the knowledge net, what the model reasoned */
 .sources li .mark { display: inline-block; width: 1.2em; font-weight: 700; }
-.sources li.ok .mark { color: #15803d; }
+.sources li.ok .mark { color: var(--ok); }
+/* Not confirmed is not wrong (10 September 2026): the model named a page that
+   was not among the ones sent, which is a thing to check, not a failure. */
+.sources li.warn .mark, .sources li.warn .note, dt.warn { color: var(--warn); }
 .sources li.bad .mark, .sources li.bad .note, dt.bad { color: var(--danger); }
 .sources li .note { color: var(--muted); font-size: .85rem; }
 .sources-block { margin-top: .9rem; padding-top: .8rem; border-top: 1px dashed var(--line); }
@@ -258,9 +264,11 @@ button.brand:hover .brand-mark { filter: brightness(1.1); }
 .step-mark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none;
   border-radius: 50%; border: 1px solid var(--line); background: var(--card); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .step.done { color: var(--text); }
-.step.done .step-mark { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
-.step.current { color: var(--text); font-weight: 600; border-color: var(--line); background: var(--card); }
-.step.current .step-mark { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.step.done .step-mark { background: color-mix(in srgb, var(--accent) 12%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); font-weight: 700; }
+.step.current { color: var(--text); font-weight: 700; background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.step.current .step-mark { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 700; }
+.step.current .step-name { letter-spacing: .01em; }
 .step.clickable { cursor: pointer; }
 .step.clickable:hover { border-color: var(--accent); color: var(--text); }
 @media (max-width: 560px) { .step-name { display: none; } .step { padding: .35rem .45rem; } .step + .step::before { width: .8rem; } }
@@ -317,7 +325,7 @@ button.brand:hover .brand-mark { filter: brightness(1.1); }
 .stats tr.group td { color: var(--muted); font-size: .8rem; padding-top: .7rem; }
 .stats .err { color: var(--danger); }
 .mode-mark { display: inline-block; font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: .4rem; vertical-align: middle; }
-.flag { color: #b45309; font-size: .85rem; }
+.flag { color: var(--warn); font-size: .85rem; }
 .turn .members { color: var(--muted); font-size: .85rem; margin-bottom: .4rem; }
 .turn dl { display: grid; grid-template-columns: 11rem 1fr; gap: .4rem 1rem; margin: .4rem 0 0; }
 .turn dt { color: var(--muted); font-size: .85rem; }
@@ -365,10 +373,24 @@ button.member-tile.clickable:hover { border-color: currentColor; }
 .project-line { margin: 1rem 0 0; }
 .project-line a { margin-left: .2rem; }
 .thread-list { display: flex; flex-direction: column; gap: .5rem; }
-.thread-row { display: flex; align-items: center; gap: .8rem; padding: .7rem 1rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
-.thread-row .thread-open { flex: 1; text-align: left; background: none; border: 0; padding: 0; color: var(--text); font: inherit; cursor: pointer; }
-.thread-row .thread-open:hover { color: var(--accent); }
-.thread-row .thread-meta { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+/* One row of work: fixed columns, so a longer agent name or date never shifts
+   the titles out of line, and the whole row is one click target. */
+.thread-row { display: grid; align-items: center; gap: .9rem; padding: .7rem 1rem; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color .15s; }
+.work-row { grid-template-columns: 7rem minmax(0, 1fr) 17rem; }
+.work-row.archive-row { grid-template-columns: 7rem minmax(0, 1fr) 17rem 5.5rem; }
+.ask-row { grid-template-columns: minmax(0, 1fr) 17rem 5.5rem; }
+.thread-row:hover { border-color: var(--accent); }
+.thread-row .thread-open { min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: var(--text);
+  font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-row:hover .thread-open { color: var(--accent); }
+.thread-row .thread-meta { color: var(--muted); font-size: .8rem; white-space: nowrap; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; }
+.thread-row .small-btn { justify-self: end; }
+@media (max-width: 900px) {
+  .work-row, .work-row.archive-row, .ask-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .thread-row .thread-meta { grid-column: 1 / -1; text-align: left; white-space: normal; }
+}
 .thread-row .closed-tag { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: .1rem .4rem; }
 .turn.answer .a { white-space: normal; }
 .turn .a p { margin: .4rem 0; }
@@ -380,4 +402,8 @@ button.member-tile.clickable:hover { border-color: currentColor; }
 .turn .sources .why { color: var(--muted); }
 .turn .gaps { color: var(--danger); }
 .turn .hint-board { margin-top: .5rem; font-size: .85rem; }
+/* What this question pulled out of the vault that the topic or thread had
+   not seen before (spec 5.2, 10 September 2026). */
+.fresh-pages { color: var(--muted); margin: .5rem 0 0; padding-left: 1.1rem; position: relative; }
+.fresh-pages::before { content: "+"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
 .btn-link { display: inline-block; text-decoration: none; padding: .6rem 1.05rem; border: 1px solid var(--line); border-radius: 10px; color: var(--text); }
