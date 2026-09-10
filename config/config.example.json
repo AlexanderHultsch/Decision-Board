@@ -30,7 +30,7 @@
   "server": {
     "_comment": "The browser interface listens on 127.0.0.1 only. site_name is the name under .localhost the browser uses (http://<site_name>.localhost:<port>/): every name under .localhost resolves to this machine in Chrome, Edge and Firefox without admin rights, while the server still listens on 127.0.0.1 only.",
     "port": 8765,
-    "site_name": "ai",
+    "site_name": "mind",
     "threads_folder": ""
   },
 

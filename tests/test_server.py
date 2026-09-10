@@ -140,9 +140,10 @@ class TestServerFlow(unittest.TestCase):
         self.fail(f"timed out waiting; last phase {state['phase']} error {state['error']}")
 
     def test_index_and_static_files_are_served(self):
-        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/")
-        with urllib.request.urlopen(request, timeout=10) as response:
-            self.assertIn(b"Program Mind", response.read())
+        for path in ("/", "/board", "/board/abc123", "/ask", "/ask/abc123"):
+            request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                self.assertIn(b"Program Mind", response.read())
         for name in ("shell.js", "style.css", "agents/board/board.js", "agents/ask/ask.js"):
             with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/static/{name}", timeout=10) as response:
                 self.assertEqual(response.status, 200)
@@ -680,10 +681,10 @@ class TestSiteName(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code
 
-    def test_site_name_is_cleaned_and_defaults_to_ai(self):
-        self.assertEqual(site_name({}), "ai")
+    def test_site_name_is_cleaned_and_defaults_to_mind(self):
+        self.assertEqual(site_name({}), "mind")          # spec 11.1, decision 1
         self.assertEqual(site_name({"server": {"site_name": "My Site!"}}), "mysite")
-        self.assertEqual(site_name({"server": {"site_name": "!!"}}), "ai")
+        self.assertEqual(site_name({"server": {"site_name": "!!"}}), "mind")
 
     def test_only_the_named_host_under_localhost_is_accepted(self):
         self.assertEqual(self.raw("GET", "/api/config", {"Host": f"ai.localhost:{self.port}"}), 200)
@@ -857,6 +858,142 @@ class TestAskThreads(unittest.TestCase):
 
     def test_config_carries_the_site_name_the_ask_budget_and_the_vault_name(self):
         _, cfg = self.call("GET", "/api/config")
-        self.assertEqual(cfg["site_name"], "ai")
+        self.assertEqual(cfg["site_name"], "mind")
         self.assertEqual(cfg["ask_budget"], 3000)
         self.assertEqual(cfg["vault_name"], "vault")
+
+
+class TestShellStatus(unittest.TestCase):
+    """Spec 11.1, decision 7: the three status checks, cheap; the test call
+    only on request. Decision 5: the recent open work of every agent."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name) / "vault"
+        self.vault.mkdir()
+        (self.vault / "Tooling.md").write_text("---\ntitle: Tooling\n---\nTooling is late.\n", encoding="utf-8")
+        self.config_path = Path(self.tmp.name) / "config.local.json"
+        self.config = {"provider": {"models": {"board": "fake/m"}},
+                       "knowledge": {"vault_path": str(self.vault), "selection": "python"},
+                       "server": {"threads_folder": str(Path(self.tmp.name) / "threads")}}
+        self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.provider = RoutingFakeProvider()
+        self.httpd, self.board_server = create_http_server(self.config, self.config_path, port=0, provider=self.provider)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.tmp.cleanup()
+
+    def call(self, method, path, body=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=data, method=method,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def test_the_vault_is_amber_without_project_pages_and_green_with_them_and_a_roles_folder(self):
+        status, s = self.call("GET", "/api/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(s["vault"]["state"], "amber")
+        self.assertEqual(s["vault"]["notes"], 1)
+        self.assertIn("no project pages", s["vault"]["detail"])
+        self.assertIn("no roles folder", s["vault"]["detail"])
+        self.assertEqual(s["project"]["state"], "red")            # no project pages at all
+        (self.vault / "Dual DCDC.md").write_text(
+            "---\nkind: project\nsummary: The Gen6 project.\n---\n# Dual DCDC\n\n| Gate | Date |\n|---|---|\n| MG3 | 12 March 2027 |\n| MG7 | SOP Aug 2028 |\n",
+            encoding="utf-8")
+        make_roles(self.vault / "Roles&Responsibilities")
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["vault"]["state"], "green")
+        self.assertEqual(s["vault"]["projects"], 1)
+        self.assertTrue(s["vault"]["roles_folder"].endswith("Roles&Responsibilities"))
+        self.assertIsNotNone(s["vault"]["last_read"])
+        self.assertEqual(s["project"]["state"], "amber")          # nothing chosen: all projects
+        _, s = self.call("GET", "/api/status?projects=Dual%20DCDC")
+        self.assertEqual(s["project"]["state"], "green")
+        page = s["project"]["pages"][0]
+        self.assertEqual(page["title"], "Dual DCDC")
+        self.assertEqual(page["gates"], ["MG3 · 12 March 2027", "MG7 · SOP Aug 2028"])   # the gate baseline, from the page
+        _, s = self.call("GET", "/api/status?projects=Nowhere")
+        self.assertEqual(s["project"]["state"], "amber")
+        self.assertIn("No project page for: Nowhere", s["project"]["detail"])
+
+    def test_the_vault_is_red_when_unset_or_unreachable(self):
+        self.config["knowledge"]["vault_path"] = ""
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["vault"]["state"], "red")
+        self.config["knowledge"]["vault_path"] = str(self.vault / "gone")
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["vault"]["state"], "red")
+        self.assertIn("not found", s["vault"]["detail"])
+
+    def test_the_ai_check_is_cheap_and_the_test_call_settles_it(self):
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "amber")               # a model, no gateway file: unverified
+        self.assertIsNone(s["ai"]["last_call"])
+        self.config["provider"]["models"]["board"] = ""
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "red")
+        self.config["provider"]["models"]["board"] = "fake/m"
+        gateway = Path(self.tmp.name) / "opencode.json"
+        gateway.write_text(json.dumps({"provider": {"azure": {"options": {"apiKey": "secret"}}}, "model": "azure/x"}), encoding="utf-8")
+        self.config["provider"]["opencode"] = {"config_file": str(gateway)}
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "green")
+        self.assertNotIn("secret", json.dumps(s))                 # the key never reaches the page
+        gateway.write_text(json.dumps({"provider": {"azure": {"options": {}}}, "model": "azure/x"}), encoding="utf-8")
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "amber")
+        before = len(self.provider.prompts)
+        status, ai = self.call("POST", "/api/status/ai")             # the confirmed test call
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.provider.prompts), before + 1)      # exactly one call, never on a timer
+        self.assertEqual(ai["state"], "green")
+        self.assertTrue(ai["last_call"]["ok"])
+        self.assertIn("answered in", ai["detail"])
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "green")                   # the settings are unchanged: the call still counts
+        self.assertEqual(len(self.provider.prompts), before + 1)
+        self.config["provider"]["models"]["board"] = "fake/other"
+        _, s = self.call("GET", "/api/status")
+        self.assertEqual(s["ai"]["state"], "amber")                   # new settings: back to the cheap look
+
+    def test_a_failed_test_call_turns_the_icon_red(self):
+        class Broken(AiProvider):
+            def complete(self, task, prompt):
+                raise RuntimeError("gateway said no")
+        self.board_server._provider_override = Broken()
+        _, ai = self.call("POST", "/api/status/ai")
+        self.assertEqual(ai["state"], "red")
+        self.assertIn("gateway said no", ai["detail"])
+
+    def test_the_recent_work_lists_open_threads_and_topics_newest_first(self):
+        _, created = self.call("POST", "/api/ask", {"projects": ["Dual DCDC"]})
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "What is late?"})
+        time.sleep(0.05)
+        _, session = self.call("POST", "/api/sessions", {"question": "Rework or switch?"})
+        _, listed = self.call("GET", "/api/history")
+        items = listed["items"]
+        self.assertEqual([i["kind"] for i in items], ["board", "ask"])
+        self.assertEqual(items[0]["title"], "Rework or switch?")
+        self.assertEqual(items[0]["unit"], "call")
+        self.assertEqual(items[1]["title"], "What is late?")
+        self.assertEqual(items[1]["projects"], ["Dual DCDC"])
+        self.assertEqual(items[1]["unit"], "question")
+        self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
+        _, listed = self.call("GET", "/api/history?state=open")
+        self.assertEqual([i["kind"] for i in listed["items"]], ["board"])
+        _, listed = self.call("GET", "/api/history?state=closed")
+        self.assertEqual([i["kind"] for i in listed["items"]], ["ask"])
+        _, listed = self.call("GET", "/api/history?state=all")
+        self.assertEqual(len(listed["items"]), 2)
+        self.call("POST", f"/api/sessions/{session['id']}/abandon")
+        _, listed = self.call("GET", "/api/history")
+        self.assertEqual(listed["items"], [])

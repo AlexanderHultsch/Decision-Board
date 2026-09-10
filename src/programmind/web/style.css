@@ -56,14 +56,53 @@ p { margin: 0 0 .8rem; }
 a { color: var(--accent); }
 svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-.topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between;
-  padding: .7rem 1.2rem; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--line); }
-.brand { display: flex; align-items: center; gap: .55rem; font-weight: 600; }
-.brand-mark { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center;
-  border-radius: 9px; background: var(--accent); color: var(--accent-ink); }
-.brand-mark svg { width: 28px; height: 28px; transform: translateY(1px); }
-.topbar-right { display: flex; align-items: center; gap: .6rem; }
+/* The shell's top bar (spec 11.1, decision 4): mark and wordmark, project chip, status icons, burger. */
+.topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: .8rem;
+  padding: .55rem 1.2rem; background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line); min-height: 54px; }
+.brand { display: flex; align-items: center; gap: .5rem; font-weight: 600; font-size: 1.02rem; letter-spacing: -.01em; }
+.brand-mark { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center; color: var(--accent); }
+.brand-mark svg { width: 28px; height: 28px; }
+.topbar-right { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+.project-chip { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; padding: .3rem .75rem .3rem .6rem; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); max-width: 34vw; white-space: nowrap; }
+.project-chip span { overflow: hidden; text-overflow: ellipsis; }
+.project-chip svg { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.project-chip:hover { border-color: var(--accent); }
+@media (max-width: 640px) { .wordmark { display: none; } .project-chip { max-width: 40vw; } }
+/* The three status icons (decision 7): a dot in red, amber or green; a card on hover or focus. */
+.status-icons { display: flex; align-items: center; gap: .1rem; }
+.status { position: relative; }
+.status-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 0; background: transparent; color: var(--muted); }
+.status-btn:hover, .status:focus-within .status-btn { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+.status-btn svg { width: 19px; height: 19px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.status-btn .dot { position: absolute; right: 5px; bottom: 5px; border: 2px solid var(--card); width: 11px; height: 11px; }
+.dot.state-green { background: var(--ok); }
+.dot.state-amber { background: #d97706; }
+.dot.state-red { background: var(--danger); }
+.dot.state-unknown { background: var(--muted); }
+.status-card { display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 16; width: 22rem; max-width: 92vw; padding: .8rem .95rem; text-align: left;
+  background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.18); }
+.status:hover .status-card, .status:focus-within .status-card { display: block; }
+.status-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .3rem; }
+.status-detail { margin: 0 0 .4rem; }
+.status-card dl, .status-rows dl { display: grid; grid-template-columns: 6.5rem 1fr; gap: .2rem .6rem; margin: 0 0 .4rem; }
+.status-card dt, .status-rows dt { color: var(--muted); }
+.status-card dd, .status-rows dd { margin: 0; overflow-wrap: anywhere; }
+.status-link { margin: 0; }
+.status-rows { display: flex; flex-direction: column; gap: .6rem; margin: .4rem 0 .8rem; }
+.status-row { padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 10px; }
+.status-test { padding: .6rem .9rem; border-left: 3px solid var(--accent); margin: 0 0 .6rem; }
+.status-test p { margin-bottom: .5rem; }
+/* The burger menu (decision 8): the tools, never the agents. */
+.menu { position: relative; }
+.menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 16; min-width: 13rem; padding: .35rem; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.18); display: flex; flex-direction: column; }
+.menu-list button, .menu-list a { display: block; width: 100%; text-align: left; padding: .5rem .8rem; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-decoration: none; cursor: pointer; }
+.menu-list button:hover, .menu-list a:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.menu-list[hidden] { display: none; }
+/* The home page's recent work (decision 5). */
+.recent-row .agent-tag { flex: none; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: .1rem .45rem; }
 
 .page { max-width: 1120px; margin: 0 auto; padding: 2.5rem 2rem 4rem; }
 .colophon { max-width: 1120px; margin: 0 auto; padding: 0 2rem 2rem; color: var(--muted); font-size: .8rem; text-align: right; }
@@ -113,10 +152,6 @@ button.ghost { background: transparent; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
 .icon-btn svg { width: 20px; height: 20px; }
 
-.chip { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--muted); padding: .25rem .65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--card); max-width: 42vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chip.ok::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
-.chip.bad::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; }
-.chip.none::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .tag { display: inline-block; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; padding: .1rem .45rem; border-radius: 6px; background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); margin-left: .4rem; }
 
 .spinner { width: 36px; height: 36px; margin: 0 auto 1rem; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .9s linear infinite; }
@@ -201,7 +236,8 @@ button.ghost { background: transparent; }
 /* A dropdown without the browser's own chrome: rounded, a chevron, a focus ring. */
 button.brand { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 button.brand:hover .brand-mark { filter: brightness(1.1); }
-.nav-arrows { display: flex; gap: .3rem; margin-left: 1.2rem; }
+.nav-arrows { display: flex; gap: .3rem; }
+.nav-arrows[hidden] { display: none; }
 .nav-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .3rem .6rem; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: .85rem; cursor: pointer; }
 .nav-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .nav-btn:disabled { opacity: .35; cursor: default; }

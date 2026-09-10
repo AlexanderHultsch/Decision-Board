@@ -21,6 +21,9 @@ the one vault note Alex confirms on closing a topic.
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -41,7 +44,7 @@ from programmind.agents.ask import ask as ask_mod
 from programmind.knowledge import picker
 from programmind.agents.board import roles as roles_mod
 from programmind.ai.opencode_client import stop_call
-from programmind.ai.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
+from programmind.ai.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, build_provider
 from programmind.memory.audit import log_run
 from programmind.agents.board.board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
 
@@ -49,6 +52,9 @@ PACKAGE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIR = PACKAGE_DIR / "web"                       # the shell: index.html, shell.js, style.css
 AGENTS_DIR = PACKAGE_DIR / "agents"                 # each agent ships its script under agents/<name>/web/
 DEFAULT_PORT = 8765
+DEFAULT_SITE_NAME = "mind"                         # http://mind.localhost:8765/ (spec 11.1, decision 1)
+STATUS_CHECK_PROMPT = "Reply with the single word OK."   # the confirmed test call of the AI status icon (11.1, decision 7)
+_GATE_LINE = re.compile(r"\bM[GP]\s?\d{1,2}\b", re.I)   # a line of the project page that names a gate or a phase
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -153,10 +159,11 @@ DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on t
 def site_name(config: dict) -> str:
     """The site's name under ``.localhost`` (spec 9.5, decision 21):
     ``server.site_name``, lower-cased and stripped to letters, digits and
-    hyphens; ``"ai"`` by default and when nothing is left."""
+    hyphens; ``"mind"`` by default and when nothing is left (spec 11.1,
+    decision 1, since the shell of 10 September 2026)."""
     raw = str(_get(config, "server.site_name", "") or "").lower()
     cleaned = "".join(ch for ch in raw if ch.isalnum() or ch == "-")
-    return cleaned or "ai"
+    return cleaned or DEFAULT_SITE_NAME
 
 
 def _selection_value(value: Any) -> str:
@@ -233,6 +240,12 @@ class Session:
         self.llm_calls = 0
         self.proposal: memory_writer.MemoryProposal | None = None
         self.written_path: str | None = None
+
+    @property
+    def title(self) -> str:
+        """The topic as the recent-work list names it: the clarified topic, else the question."""
+        topic = str(self.inputs.get("topic") or "").strip() if self.inputs else ""
+        return (topic or self.question.strip())[:120] or "New topic"
 
     def snapshot(self) -> dict[str, Any]:
         """The session as the page sees it. Polled once a second: only the
@@ -428,6 +441,7 @@ class BoardServer:
         self.sessions: dict[str, Session] = {}
         self.asks: dict[str, AskSession] = {}          # open Ask the vault threads, by id
         self.lock = threading.Lock()
+        self.ai_check: dict[str, Any] | None = None    # the last confirmed test call of the AI status icon (spec 11.1, decision 7)
 
     # -- provider and config ------------------------------------------------
 
@@ -1147,6 +1161,173 @@ class BoardServer:
             session.forward = []
             raise ApiError(409, "Nothing to go forward to.")
 
+    # -- the shell (spec section 11): the three status checks, the recent work --
+
+    def status(self, projects: Any = None) -> dict[str, Any]:
+        """The three checks of the top bar (11.1, decision 7): each
+        ``green``, ``amber`` or ``red`` with the detail the hover card shows.
+        Cheap, no model call; the page asks on load and every five minutes."""
+        return {"vault": self._vault_status(), "ai": self._ai_status(), "project": self._project_status(projects),
+                "checked": time.time()}
+
+    def _vault_status(self) -> dict[str, Any]:
+        """Green: the folder is reachable and read. Amber: read, but without
+        project pages or a roles folder. Red: unset or unreachable."""
+        vault_path = _get(self.config, "knowledge.vault_path", "") or ""
+        out: dict[str, Any] = {"state": "red", "path": str(vault_path), "vault_name": self.vault_name(), "notes": 0,
+                               "projects": 0, "roles_folder": None, "last_read": None, "detail": ""}
+        if not vault_path:
+            out["detail"] = "No vault folder set. Open Options and choose the Obsidian vault."
+            return out
+        vault = Path(str(vault_path)).expanduser()
+        try:
+            notes = knowledge_mod.load_vault(vault, skip_subfolders=knowledge_mod._roles_inside(self.config, vault))
+        except knowledge_mod.KnowledgeUnavailable as exc:
+            out["detail"] = str(exc)
+            return out
+        out["notes"] = len(notes)
+        out["last_read"] = time.time()
+        out["projects"] = len(knowledge_mod.project_names(notes))
+        folder, _origin = roles_mod.resolve_folder(self.config)
+        out["roles_folder"] = str(folder) if folder is not None else None
+        missing = []
+        if not out["projects"]:
+            missing.append("no project pages (kind: project)")
+        if folder is None or not folder.is_dir():
+            missing.append("no roles folder")
+        out["state"] = "amber" if missing else "green"
+        out["detail"] = f"{len(notes)} notes read." + (f" But: {'; '.join(missing)}." if missing else "")
+        return out
+
+    def _ai_status(self) -> dict[str, Any]:
+        """Green: OpenCode found, the model string set, the gateway config
+        with a key found (or a private setup, where OpenCode holds the login).
+        Amber: something is set but unverified. Red: missing. A confirmed test
+        call (``ai_check``) settles it either way while the settings it was
+        made with still hold."""
+        model = str(_get(self.config, "provider.models.board", "") or "")
+        config_file = str(_get(self.config, "provider.opencode.config_file", "") or "")
+        profile = str(_get(self.config, "setup.profile", "") or "")
+        binary = shutil.which("opencode") if self._provider_override is None else "(provider given in code)"
+        out: dict[str, Any] = {"state": "red", "model": model, "config_file": config_file, "opencode": binary,
+                               "profile": profile, "detail": "", "last_call": self.ai_check}
+        problems: list[str] = []
+        unverified: list[str] = []
+        if not model:
+            problems.append("no model string set")
+        if not binary:
+            problems.append("opencode not found on PATH")
+        if config_file:
+            problem = opencode_config_problem(config_file)
+            if problem:
+                problems.append(f"the OpenCode configuration file {problem}")
+            elif not _config_file_has_key(config_file):
+                unverified.append("no key visible in the OpenCode configuration file (it may come from OpenCode's own store)")
+        elif profile != "private":
+            unverified.append("no OpenCode configuration file set; OpenCode's own lookup decides the gateway")
+        if problems:
+            out["state"] = "red"
+            out["detail"] = _sentence("; ".join(problems)) + ". Open Options."
+        elif unverified:
+            out["state"] = "amber"
+            out["detail"] = _sentence("; ".join(unverified)) + ". Click the icon to run one test call."
+        else:
+            out["state"] = "green"
+            out["detail"] = "OpenCode found, the model set, the gateway configuration with a key found."
+        check = self.ai_check
+        if check and check.get("model") == model and check.get("config_file") == config_file:
+            # The last real call was made with these settings: it outranks the cheap look.
+            out["state"] = "green" if check.get("ok") else "red"
+            out["detail"] = (f"Test call answered in {check.get('seconds', 0):.1f} s." if check.get("ok")
+                             else f"Test call failed: {check.get('error')}")
+        return out
+
+    def check_ai(self) -> dict[str, Any]:
+        """The confirmed test call (11.1, decision 7): one tiny prompt through
+        the provider, its outcome and time kept for the hover and the status
+        page. Never run on a timer."""
+        model = str(_get(self.config, "provider.models.board", "") or "")
+        config_file = str(_get(self.config, "provider.opencode.config_file", "") or "")
+        started = time.time()
+        record: dict[str, Any] = {"at": started, "model": model, "config_file": config_file, "ok": False,
+                                  "seconds": 0.0, "answer": "", "error": None}
+        try:
+            result = self.provider().complete(TASK_BOARD, STATUS_CHECK_PROMPT)
+            record["ok"] = True
+            record["answer"] = (result.text or "").strip()[:80]
+            record["provider_model"] = f"{result.provider}/{result.model}"
+            record["input_tokens"], record["output_tokens"] = result.input_tokens, result.output_tokens
+        except Exception as exc:   # noqa: BLE001 - whatever failed, the icon must say so
+            record["error"] = str(exc)[:400]
+            result = None
+        record["seconds"] = round(time.time() - started, 2)
+        self.ai_check = record
+        log_run("status-check", audit_folder=_get(self.config, "runtime.audit_folder"),
+                pc_name=_get(self.config, "storage.pc_name", ""), duration_seconds=record["seconds"],
+                counts={"ok": int(record["ok"])}, provider=result.provider if result else None,
+                model=result.model if result else None, tokens=result.total_tokens if result else None)
+        return self._ai_status()
+
+    def _project_status(self, projects: Any = None) -> dict[str, Any]:
+        """Green: a project is chosen (with its gate baseline from the project
+        page). Amber: all projects. Red: the vault has no project pages."""
+        chosen = knowledge_mod._project_list(projects) if projects is not None else knowledge_mod.active_projects(self.config)
+        known = knowledge_mod.list_projects(self.config)
+        out: dict[str, Any] = {"state": "red", "projects": chosen, "known": known, "detail": "", "pages": []}
+        if not known:
+            out["detail"] = "The vault has no project pages (kind: project)."
+            return out
+        if not chosen:
+            out["state"] = "amber"
+            out["detail"] = "All projects: every page of the vault is used. Choose a project on the home page."
+            return out
+        out["state"] = "green"
+        out["detail"] = f"Project: {', '.join(chosen)}."
+        vault = Path(str(_get(self.config, "knowledge.vault_path", ""))).expanduser()
+        try:
+            notes = knowledge_mod.load_vault(vault, skip_subfolders=knowledge_mod._roles_inside(self.config, vault))
+        except knowledge_mod.KnowledgeUnavailable:
+            return out
+        for note in knowledge_mod._pinned(notes, chosen):
+            gates = []
+            for line in note.body.splitlines():
+                if _GATE_LINE.search(line) and not line.lstrip().startswith(("#", "phases:", "---")):
+                    cleaned = re.sub(r"\s*\|\s*", " · ", line.strip().strip("|")).strip(" ·-*")
+                    if cleaned and cleaned not in gates:
+                        gates.append(cleaned[:120])
+                if len(gates) >= 12:
+                    break
+            out["pages"].append({"path": note.relative, "title": note.title, "summary": note.summary, "gates": gates})
+        unknown = [p for p in chosen if p.lower() not in {k.lower() for k in known}]
+        if unknown:
+            out["state"] = "amber"
+            out["detail"] += f" No project page for: {', '.join(unknown)}."
+        return out
+
+    def history(self, state: str = "open") -> list[dict[str, Any]]:
+        """The recent work of every agent, newest first (11.1, decision 5):
+        the threads on disk and the board topics this server holds in memory
+        (their files come with step 3). ``state``: open, closed or all."""
+        rows: list[dict[str, Any]] = []
+        for row in self.thread_store().list():
+            rows.append({"kind": "ask", "id": row["id"], "title": row["title"], "status": row["status"],
+                         "updated": row["updated"], "created": row["created"], "projects": row["projects"],
+                         "count": row["questions"], "unit": "question"})
+        with self.lock:
+            sessions = list(self.sessions.values())
+        for session in sessions:
+            with session.lock:
+                closed = session.phase in ("closed", "written")
+                last = session.marks[-1]["at"] if session.marks else session.started
+                rows.append({"kind": "board", "id": session.id, "title": session.title,
+                             "status": "closed" if closed else "open", "updated": last, "created": session.started,
+                             "projects": list(session.projects), "count": session.llm_calls, "unit": "call",
+                             "phase": session.phase})
+        wanted = {"open": ("open",), "closed": ("closed",)}.get(state, ("open", "closed"))
+        rows = [r for r in rows if r["status"] in wanted]
+        rows.sort(key=lambda r: r["updated"], reverse=True)
+        return rows
+
     # -- Ask the vault (spec section 10) --------------------------------------
 
     def vault_name(self) -> str:
@@ -1493,6 +1674,41 @@ class BoardServer:
             session.phase = "closed"
 
 
+def _sentence(text: str) -> str:
+    """The first letter upper-cased, the rest as written (``capitalize`` would lower-case "OpenCode")."""
+    return text[:1].upper() + text[1:]
+
+
+def _config_file_has_key(path: str) -> bool:
+    """Whether an opencode.json holds a key: any ``apiKey``-like entry with a
+    value, or an ``{env:NAME}`` placeholder whose variable is set. Read
+    only; the value itself never leaves this function."""
+    try:
+        data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    found = False
+
+    def walk(node: Any) -> None:
+        nonlocal found
+        if found:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(value, str) and ("key" in key.lower() or "token" in key.lower()) and value.strip():
+                    match = re.fullmatch(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", value.strip())
+                    if match is None or os.environ.get(match.group(1)):
+                        found = True
+                        return
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return found
+
+
 def pick_folder(initial: str = "", *, kind: str = "folder", title: str = "") -> str | None:
     """Opens the native folder (or, with ``kind="file"``, file) dialog in a
     separate Python process (tkinter is not safe to drive from a server
@@ -1534,7 +1750,7 @@ def pick_folder(initial: str = "", *, kind: str = "folder", title: str = "") -> 
 def make_handler(server: BoardServer):
     """The request handler class bound to one ``BoardServer``: routing only."""
     class Handler(BaseHTTPRequestHandler):
-        server_version = "DecisionBoard/1.0"
+        server_version = "ProgramMind/1.0"
 
         def log_message(self, format: str, *args: Any) -> None:   # noqa: A002 - stdlib signature
             return   # quiet by default; errors surface as JSON responses
@@ -1575,6 +1791,12 @@ def make_handler(server: BoardServer):
                 has_body = (self.headers.get("Content-Length") or "0").strip() not in ("", "0")
                 if has_body and not content_type.startswith("application/json"):
                     raise ApiError(415, "Send JSON.")
+
+        def _query(self) -> dict[str, str]:
+            """The query string as plain strings, the last value of a repeated key winning."""
+            from urllib.parse import parse_qs
+            raw = self.path.split("?", 1)[1] if "?" in self.path else ""
+            return {key: values[-1] for key, values in parse_qs(raw).items() if values}
 
         def _body(self) -> dict[str, Any]:
             try:
@@ -1618,12 +1840,16 @@ def make_handler(server: BoardServer):
             path = self.path.split("?", 1)[0]
             try:
                 self._local_only(post=False)
-                if path in ("/", "/index.html", "/board", "/ask") or path.startswith("/ask/"):
+                if path in ("/", "/index.html", "/board", "/ask") or path.startswith(("/ask/", "/board/")):
                     self._static("index.html")       # one page; the script reads the path (spec 9.5)
                 elif path.startswith("/static/"):
                     self._static(path[len("/static/"):])
                 elif path == "/api/config":
                     self._json(200, server.config_view())
+                elif path == "/api/status":
+                    self._json(200, server.status(self._query().get("projects")))
+                elif path == "/api/history":
+                    self._json(200, {"items": server.history(self._query().get("state", "open"))})
                 elif path.startswith("/api/sessions/"):
                     session = server.get_session(path.split("/")[3])
                     self._json(200, session.snapshot())
@@ -1655,6 +1881,8 @@ def make_handler(server: BoardServer):
                 body = self._body()
                 if path == "/api/config":
                     self._json(200, server.update_config(body))
+                elif path == "/api/status/ai":
+                    self._json(200, server.check_ai())
                 elif path == "/api/pick-folder":
                     chosen = pick_folder(str(body.get("initial") or ""), title=str(body.get("title") or ""))
                     self._json(200, {"path": chosen})
@@ -1746,7 +1974,7 @@ def serve(config: dict, config_path: Path | None, *, port: int = DEFAULT_PORT, o
         return 1
     listening_port = httpd.server_address[1]
     url = f"http://{site_name(config)}.localhost:{listening_port}/"   # spec 9.5: the named address
-    print(f"Decision Board is running at {url}  (Ctrl+C to stop)")
+    print(f"Program Mind is running at {url}  (Ctrl+C to stop)")
     print(f"Also reachable at http://127.0.0.1:{listening_port}/")
     if open_browser:
         import webbrowser

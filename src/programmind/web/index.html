@@ -4,36 +4,68 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Program Mind</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Crect%20width%3D%2224%22%20height%3D%2224%22%20rx%3D%226%22%20fill%3D%22%232563eb%22%2F%3E%3Cg%20transform%3D%22translate%2812%2012.4%29%20scale%280.98%29%20translate%28-12%20-12.4%29%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%225.5%22%20r%3D%222.2%22%2F%3E%3Ccircle%20cx%3D%225.5%22%20cy%3D%227%22%20r%3D%221.9%22%2F%3E%3Ccircle%20cx%3D%2218.5%22%20cy%3D%227%22%20r%3D%221.9%22%2F%3E%3Cpath%20d%3D%22M8.6%2012.2a3.4%203.4%200%200%201%206.8%200%22%2F%3E%3Cpath%20d%3D%22M2.5%2013a3%203%200%200%201%204.6-2.2M21.5%2013a3%203%200%200%200-4.6-2.2%22%2F%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2218%22%20r%3D%222%22%2F%3E%3Cpath%20d%3D%22M12%2014.6v1.2M12%2020.2v1.2M8.6%2018h1.2M14.2%2018h1.2M9.6%2015.6l.9.9M13.5%2019.5l.9.9M14.4%2015.6l-.9.9M10.5%2019.5l-.9.9%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20color%3D%22%232563eb%22%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%205L5%2018M12%205l7%2013M5%2018h14M12%205v7M5%2018l7-6M19%2018l-7-6%22%2F%3E%3C%2Fg%3E%3Cg%20fill%3D%22currentColor%22%20stroke%3D%22none%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%225%22%20r%3D%222.5%22%2F%3E%3Ccircle%20cx%3D%225%22%20cy%3D%2218%22%20r%3D%222.5%22%2F%3E%3Ccircle%20cx%3D%2219%22%20cy%3D%2218%22%20r%3D%222.5%22%2F%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%222.5%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header class="topbar">
-  <button class="brand" id="btn-brand" type="button" title="Start page">
-    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2.2"/><circle cx="5.5" cy="7" r="1.9"/><circle cx="18.5" cy="7" r="1.9"/><path d="M8.6 12.2a3.4 3.4 0 0 1 6.8 0"/><path d="M2.5 13a3 3 0 0 1 4.6-2.2M21.5 13a3 3 0 0 0-4.6-2.2"/><circle cx="12" cy="18" r="2"/><path d="M12 14.6v1.2M12 20.2v1.2M8.6 18h1.2M14.2 18h1.2M9.6 15.6l.9.9M13.5 19.5l.9.9M14.4 15.6l-.9.9M10.5 19.5l-.9.9"/></svg></span>
-    <span>Program Mind</span>
+  <button class="brand" id="btn-brand" type="button" title="Home">
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5L5 18M12 5l7 13M5 18h14M12 5v7M5 18l7-6M19 18l-7-6"/></g><g fill="currentColor" stroke="none"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><circle cx="12" cy="12" r="2.5"/></g></svg></span>
+    <span class="wordmark">Program Mind</span>
   </button>
-  <nav class="nav-arrows" aria-label="Steps">
+  <button class="project-chip" id="project-chip" type="button" title="The project every agent works on. Click to change it on the home page.">
+    <svg viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg>
+    <span id="project-chip-label">All projects</span>
+  </button>
+  <nav class="nav-arrows" id="nav-arrows" aria-label="Steps" hidden>
     <button id="btn-nav-back" class="nav-btn" type="button" title="Back one step (stops the board if it is working)" disabled><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><span>Back</span></button>
     <button id="btn-nav-forward" class="nav-btn" type="button" title="Forward again" disabled><span>Forward</span><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
   </nav>
   <div class="topbar-right">
-    <span id="knowledge-chip" class="chip" title="Knowledge source"></span>
-    <button id="btn-stats" class="icon-btn" title="Statistics: tokens and time for this topic" aria-label="Statistics">
-      <svg viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M6 17v-5M11 17V7M16 17v-8M21 17V4"/></svg>
-    </button>
-    <button id="btn-options" class="icon-btn" title="Options" aria-label="Options">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-    </button>
+    <div class="status-icons" id="status-icons" aria-label="Status">
+      <div class="status" id="status-vault">
+        <button type="button" class="status-btn" id="btn-status-vault" aria-label="Vault status" title="Vault">
+          <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/><path d="M9 7h7"/></svg>
+          <span class="dot" id="dot-vault"></span>
+        </button>
+        <div class="status-card" id="card-vault" role="tooltip"></div>
+      </div>
+      <div class="status" id="status-ai">
+        <button type="button" class="status-btn" id="btn-status-ai" aria-label="AI status" title="AI">
+          <svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>
+          <span class="dot" id="dot-ai"></span>
+        </button>
+        <div class="status-card" id="card-ai" role="tooltip"></div>
+      </div>
+      <div class="status" id="status-project">
+        <button type="button" class="status-btn" id="btn-status-project" aria-label="Project status" title="Project">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/></svg>
+          <span class="dot" id="dot-project"></span>
+        </button>
+        <div class="status-card" id="card-project" role="tooltip"></div>
+      </div>
+    </div>
+    <div class="menu" id="menu">
+      <button id="btn-menu" class="icon-btn" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div id="menu-list" class="menu-list" role="menu" hidden>
+        <button id="btn-options" type="button" role="menuitem">Options</button>
+        <button id="btn-stats" type="button" role="menuitem">Statistics</button>
+        <button id="btn-status" type="button" role="menuitem">Status details</button>
+        <a id="link-obsidian" role="menuitem" href="#" hidden>Open vault in Obsidian</a>
+        <a id="link-bug" role="menuitem" href="https://github.com/AlexanderHultsch/program-mind/issues" target="_blank" rel="noopener">Report a bug</a>
+      </div>
+    </div>
   </div>
 </header>
 
 <main id="app" class="page">
 
-  <!-- Start page (spec 9.5): the project once, one tile per use case -->
+  <!-- Home page (spec 11.1, decision 5): the project once, one card per agent, the recent open work -->
   <section id="screen-start" class="screen" hidden>
     <h1 id="greeting" class="greeting">Good day.</h1>
-    <p class="lede">Choose the project, then what you want to do. The project carries into every use case.</p>
+    <p class="lede">Choose the project, then an agent. Every agent works on your vault and carries the project with it.</p>
     <div class="row">
       <div class="picker" id="project-picker">
         <button type="button" class="picker-btn" id="btn-projects" aria-haspopup="listbox" aria-expanded="false">
@@ -47,6 +79,7 @@
       </div>
       <span id="home-hint" class="muted small"></span>
     </div>
+    <p class="eyebrow">Agents</p>
     <div class="tiles">
       <a class="tile" href="/board" id="tile-board">
         <span class="tile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 7 -3"/></svg></span>
@@ -59,6 +92,8 @@
         <span class="tile-text muted">Any question, answered from the vault by one agent, with the pages it used and what it could not find. Ask back as often as you like.</span>
       </a>
     </div>
+    <p class="eyebrow">Open work <span class="muted small">newest first · closed work moves to the archive</span></p>
+    <div id="recent-list" class="thread-list"></div>
     <p id="site-address" class="muted small"></p>
     <p id="start-error" class="error" hidden></p>
   </section>
@@ -319,6 +354,26 @@
     <p id="stats-summary" class="muted small"></p>
     <div id="stats-body" class="stats"></div>
     <div class="row end"><button id="btn-stats-close" type="button" class="ghost">Close</button></div>
+  </div>
+</div>
+<div id="status-dialog" class="modal" hidden>
+  <div class="modal-card wide">
+    <h2>Status</h2>
+    <p class="muted small">Three checks, made when the page loads and every five minutes. None of them calls the model; the test call below does, once, when you ask for it.</p>
+    <div id="status-body" class="status-rows"></div>
+    <div id="status-test" class="status-test" hidden>
+      <p class="muted small">One tiny call goes through the gateway to the model, like any other call. Run it?</p>
+      <div class="row"><button type="button" class="primary small-btn" id="btn-status-test-yes">Yes, run one test call</button><button type="button" class="ghost small-btn" id="btn-status-test-no">Not now</button></div>
+    </div>
+    <p id="status-error" class="error small" hidden></p>
+    <div class="row between">
+      <span id="status-checked" class="muted small"></span>
+      <div class="row">
+        <button id="btn-status-test" type="button" class="ghost">Test the model</button>
+        <button id="btn-status-refresh" type="button" class="ghost">Refresh</button>
+        <button id="btn-status-close" type="button" class="primary">Close</button>
+      </div>
+    </div>
   </div>
 </div>
 <footer class="colophon">© Alexander Hultsch</footer>

@@ -751,10 +751,30 @@
     discard: async () => { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); },
   };
 
+  async function openTopic(id) {
+    // A topic from the home page's recent work (spec 11.1, decision 5): the
+    // server still holds it; the address becomes /board once it is open.
+    stopPolling();
+    try {
+      const data = await api("GET", `/api/sessions/${id}`);
+      session = data;
+      openMembers.clear();
+      $("screen-result").dataset.phase = "";
+      $("turns").dataset.key = "";
+      if (session.phase === "result") $("followup").value = draft().followup || "";
+      PM.setPath("/board");
+      lastPhase = null;
+      render();
+    } catch (err) { setError("home-error", err.message); PM.setPath("/board"); show("home"); renderNav(); }
+  }
+
   PM.register({
     id: "board",
-    match: (pathname) => (pathname === "/board" ? "board" : null),
-    render: () => { if (session) render(); else { show("home"); renderNav(); } },
+    match: (pathname) => (pathname === "/board" ? "board" : pathname.startsWith("/board/") ? "board-topic" : null),
+    render: (route) => {
+      if (route === "board-topic") return openTopic(location.pathname.split("/")[2]);
+      if (session) render(); else { show("home"); renderNav(); }
+    },
     onEnter: () => { lastPhase = null; },
     onLeave: () => { stopPolling(); renderNav(); },
     onPopState: () => { if (session && $("screen-home").hidden) goBack(); else if (session) goForward(); },

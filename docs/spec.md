@@ -552,6 +552,34 @@ still defaults to `ai` until the shell (step 2) lands. The vault property
 `Part of Decision Board AI` keeps its name: it is the vault's convention,
 not the tool's.
 
+**Built, step 2 (10 September 2026).** The shell: the top bar with the
+node-graph mark (the same as the tab icon), the wordmark as the home button,
+the project chip (click: home, with the picker open), the three status icons
+and the burger menu; the home page with the picker, one card per agent and
+the open work of every agent (newest first, with agent, title, date and
+count; one click reopens a thread at `/ask/<id>` or a topic at
+`/board/<id>`, which becomes `/board` once open). `GET /api/status` runs the
+three checks; the page asks on load and every five minutes, and once more
+after Options are saved or the project is changed, both user actions.
+Hovering an icon shows the card with the detail and the link; clicking the
+vault or the AI icon opens Status details, clicking the project icon goes
+home. The AI icon's card offers the test call: it runs only after a yes on
+the status page (`POST /api/status/ai`, one call, logged as `status-check`
+in the audit trail) and its outcome outranks the cheap look for as long as
+the model string and the gateway file are unchanged. The gateway check reads
+the opencode.json for a key-like entry or an `{env:NAME}` placeholder whose
+variable is set; the value itself never reaches the page. The project card
+shows the project page's summary and every line of it that names a gate or
+a phase, as the gate baseline. `GET /api/history?state=open|closed|all`
+lists the threads on disk and the board topics the server holds in memory;
+the topic files come with step 3. The site name defaults to `mind`. The "N
+notes" chip is gone; Options and Statistics sit in the menu next to Status
+details, Open vault in Obsidian and Report a bug; Archive, Privacy and About
+come with steps 3 and 4. The step arrows stay in the top bar, shown on the
+board only, until the step line (step 3) replaces them. The browser walk
+covers the icons, the menu, the status page with the test call and the
+reopening from the home page.
+
 ### 11.2 Reuse
 
 Everything behind the API stays: sessions, threads, the knowledge

@@ -44,12 +44,15 @@ Then start the site:
 python scripts/run.py serve
 ```
 
-It listens on `127.0.0.1` only and opens `http://ai.localhost:8765/` in your
-browser (`http://localhost:8765/` works too; the name is `server.site_name`,
-and any name under `.localhost` resolves to your own machine without admin
-rights). The start page holds the project picker and one tile per agent.
-Open Options (the gear) to change the knowledge source, the model, the token
-budget, the audit folder or the theme.
+It listens on `127.0.0.1` only and opens `http://mind.localhost:8765/` in
+your browser (`http://localhost:8765/` works too; the name is
+`server.site_name`, and any name under `.localhost` resolves to your own
+machine without admin rights). The home page holds the project picker, one
+card per agent and the open work of every agent. The top bar shows the
+project and three status lights (vault, AI, project; hover for the detail);
+the menu at the right holds Options, Statistics, Status details, the vault in
+Obsidian and the link to report a bug. Options changes the knowledge source,
+the model, the token budget, the audit folder or the theme.
 
 The command line is still there for the board:
 

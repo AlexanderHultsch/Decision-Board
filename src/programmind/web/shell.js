@@ -1,7 +1,8 @@
-/* Program Mind - the shell. Vanilla JS, no build step. Owns the top bar, the
-   options, the statistics and proposal dialogs, the project picker, the
-   routes and the start page; every agent registers itself with PM and owns
-   its own screens (restructuring of 10 September 2026, spec section 11). */
+/* Program Mind - the shell (spec section 11). Vanilla JS, no build step.
+   Owns the top bar (mark, project chip, status icons, burger menu), the
+   options, statistics, status and proposal dialogs, the project picker, the
+   routes and the home page with the recent work; every agent registers
+   itself with PM and owns its own screens (10 September 2026). */
 (function () {
   "use strict";
 
@@ -72,28 +73,25 @@
   }
   // A pick-list of members: a labelled checkbox per member, all ticked at first.
 
-  function renderKnowledgeChip() {
-    const chip = $("knowledge-chip");
+  function renderHints() {
+    // The one line under the picker and under each agent's question box (the "N notes" chip went with the shell, spec 11.1, decision 13).
     const status = config.knowledge_status;
-    chip.className = "chip";
-    if (!status.configured) { chip.classList.add("none"); chip.textContent = "No knowledge source"; }
-    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes`; }
-    else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
-    // The path is a tooltip, not a label (9 September 2026): hover to see it.
-    chip.title = status.error || (config.vault_path ? `Knowledge source: ${config.vault_path}` : "Set a vault folder in Options");
     const problem = !config.model ? '<span class="error">No model configured. Open Options.</span>'
-      : !status.configured ? "No knowledge source set. The board answers from your question alone."
+      : !status.configured ? "No knowledge source set. The agents answer from your question alone."
       : !status.ok ? `<span class="error">${esc(status.error)}</span>` : "";
     $("home-hint").innerHTML = problem || `${status.notes} notes in the vault.`;
     $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
     $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question, one call.`;
-    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "ai")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
+    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "mind")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
+    const obsidian = $("link-obsidian");
+    obsidian.hidden = !config.vault_name;
+    obsidian.href = config.vault_name ? `obsidian://open?vault=${encodeURIComponent(config.vault_name)}` : "#";
   }
 
   async function loadConfig() {
     config = await api("GET", "/api/config");
     applyTheme(config.theme);
-    renderKnowledgeChip();
+    renderHints();
     renderProjectPicker();
   }
 
@@ -112,7 +110,7 @@
   }
 
   function renderProjectChips() {
-    ["board-project", "ask-project", "thread-project"].forEach((id) => { if ($(id)) $(id).textContent = projectLabel(); });
+    ["board-project", "ask-project", "thread-project", "project-chip-label"].forEach((id) => { if ($(id)) $(id).textContent = projectLabel(); });
   }
 
   function renderProjectPicker() {
@@ -132,6 +130,7 @@
       }
       store.set("projects", chosenProjects);
       renderProjectPicker();
+      loadStatus();                      // the project check follows the choice (a user action, not the timer)
     }));
     $("btn-projects").disabled = names.length === 0;
     if (names.length === 0) $("projects-label").textContent = "No project pages in the vault";
@@ -176,8 +175,10 @@
         theme: $("opt-theme").value,
       });
       applyTheme(config.theme);
-      renderKnowledgeChip();
+      renderHints();
+      renderProjectPicker();
       $("options-dialog").hidden = true;
+      loadStatus();                      // the settings changed: a fresh look, not a timer tick
     } catch (err) { setError("options-error", err.message); }
   }
 
@@ -252,6 +253,142 @@
     try { return new Date(seconds * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }); } catch (e) { return ""; }
   }
 
+
+  // -- the status icons (spec 11.1, decision 7): three checks, on load and every five minutes --
+
+  const STATUS_MINUTES = 5;
+  let status = null;
+  let statusTimer = null;
+  const STATE_WORDS = { green: "OK", amber: "Check", red: "Problem" };
+
+  function stateClass(item) { return item ? `state-${item.state}` : "state-unknown"; }
+
+  async function loadStatus() {
+    try {
+      const q = (chosenProjects || []).length ? `?projects=${encodeURIComponent(chosenProjects.join(","))}` : "";
+      status = await api("GET", `/api/status${q}`);
+    } catch (err) {
+      status = { error: err.message, vault: { state: "red", detail: err.message }, ai: { state: "red", detail: err.message }, project: { state: "red", detail: err.message } };
+    }
+    renderStatus();
+    if (!$("status-dialog").hidden) renderStatusDialog();
+  }
+
+  function startStatusTimer() {
+    if (statusTimer) clearInterval(statusTimer);
+    statusTimer = setInterval(loadStatus, STATUS_MINUTES * 60 * 1000);   // never more often than this
+  }
+
+  function vaultCard(v) {
+    const rows = [];
+    if (v.path) rows.push(`<dt>Folder</dt><dd>${esc(v.path)}</dd>`);
+    if (v.state !== "red") rows.push(`<dt>Notes</dt><dd>${fmtNum(v.notes)} · ${v.projects} project page(s)</dd>`);
+    if (v.roles_folder) rows.push(`<dt>Roles</dt><dd>${esc(v.roles_folder)}</dd>`);
+    if (v.last_read) rows.push(`<dt>Last read</dt><dd>${esc(fmtDate(v.last_read))}</dd>`);
+    const link = v.vault_name && v.state !== "red" ? `<a href="obsidian://open?vault=${encodeURIComponent(v.vault_name)}">Open in Obsidian</a>` : `<a href="#" data-open="options">Open Options</a>`;
+    return { title: "Vault", rows, link };
+  }
+
+  function aiCard(a) {
+    const rows = [`<dt>Model</dt><dd>${esc(a.model || "not set")}</dd>`,
+      `<dt>OpenCode</dt><dd>${esc(a.opencode || "not found on PATH")}</dd>`,
+      `<dt>Gateway file</dt><dd>${esc(a.config_file || (a.profile === "private" ? "none (private setup)" : "not set"))}</dd>`];
+    const c = a.last_call;
+    if (c) rows.push(`<dt>Test call</dt><dd>${c.ok ? `answered "${esc(c.answer)}" in ${esc(fmtSec(c.seconds))}` : `failed: ${esc(c.error)}`} · ${esc(fmtDate(c.at))}</dd>`);
+    else rows.push(`<dt>Test call</dt><dd>none yet · click the icon to run one</dd>`);
+    return { title: "AI", rows, link: `<a href="#" data-open="options">Open Options</a>` };
+  }
+
+  function projectCard(pr) {
+    const rows = [];
+    (pr.pages || []).forEach((page) => {
+      rows.push(`<dt>${esc(page.title)}</dt><dd>${esc(page.path)}${page.summary ? `<br><span class="muted">${esc(page.summary)}</span>` : ""}</dd>`);
+      if (page.gates && page.gates.length) rows.push(`<dt>Gates</dt><dd>${page.gates.map(esc).join("<br>")}</dd>`);
+    });
+    if (pr.state !== "red" && !(pr.projects || []).length) rows.push(`<dt>Known</dt><dd>${(pr.known || []).map(esc).join(", ") || "none"}</dd>`);
+    return { title: "Project", rows, link: `<a href="/" data-open="home">Choose on the home page</a>` };
+  }
+
+  function cardHtml(name, item, card) {
+    const heading = `<div class="status-head"><span class="dot state-${esc(item.state)}"></span><strong>${esc(card.title)}</strong><span class="muted small">${esc(STATE_WORDS[item.state] || "")}</span></div>`;
+    return `${heading}<p class="small status-detail">${esc(item.detail || "")}</p>${card.rows.length ? `<dl class="small">${card.rows.join("")}</dl>` : ""}<p class="small status-link">${card.link}</p>`;
+  }
+
+  function renderStatus() {
+    const cards = { vault: vaultCard, ai: aiCard, project: projectCard };
+    ["vault", "ai", "project"].forEach((name) => {
+      const item = (status && status[name]) || { state: "unknown", detail: "Not checked yet." };
+      $(`dot-${name}`).className = `dot ${stateClass(item)}`;
+      $(`btn-status-${name}`).title = `${cards[name](item).title}: ${item.detail || ""}`;
+      $(`card-${name}`).innerHTML = cardHtml(name, item, cards[name](item));
+    });
+    document.querySelectorAll(".status-card a[data-open], #status-body a[data-open]").forEach((a) => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (a.dataset.open === "options") openOptions(); else navigate("/");
+      $("status-dialog").hidden = true;
+    }));
+  }
+
+  // -- the status page in the menu: the three checks written out, refresh, the test call --
+
+  function renderStatusDialog() {
+    const cards = { vault: vaultCard, ai: aiCard, project: projectCard };
+    $("status-body").innerHTML = ["vault", "ai", "project"].map((name) => {
+      const item = (status && status[name]) || { state: "unknown", detail: "Not checked yet." };
+      return `<div class="status-row">${cardHtml(name, item, cards[name](item))}</div>`;
+    }).join("");
+    $("status-checked").textContent = status && status.checked ? `Checked ${fmtDate(status.checked)} · again in ${STATUS_MINUTES} minutes` : "";
+    renderStatus();
+  }
+
+  function openStatus(askTest) {
+    setError("status-error", "");
+    $("status-test").hidden = !askTest;
+    renderStatusDialog();
+    $("status-dialog").hidden = false;
+  }
+
+  async function runAiTest() {
+    const btn = $("btn-status-test-yes");
+    btn.disabled = true; btn.textContent = "Calling…";
+    try {
+      const ai = await api("POST", "/api/status/ai");
+      if (status) status.ai = ai;
+      $("status-test").hidden = true;
+      renderStatusDialog();
+    } catch (err) { setError("status-error", err.message); }
+    btn.disabled = false; btn.textContent = "Yes, run one test call";
+  }
+
+  // -- the burger menu (decision 8): the tools, not the agents --
+
+  function toggleMenu(open) {
+    const list = $("menu-list");
+    list.hidden = open === undefined ? !list.hidden : !open;
+    $("btn-menu").setAttribute("aria-expanded", String(!list.hidden));
+  }
+
+  // -- the home page (decision 5): the recent open work of every agent --
+
+  async function loadRecent() {
+    const box = $("recent-list");
+    try {
+      const data = await api("GET", "/api/history?state=open");
+      const items = data.items || [];
+      const agentName = { board: "Board", ask: "Ask the vault" };
+      box.innerHTML = items.length ? items.map((r) => `
+        <div class="thread-row recent-row" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}">
+          <span class="agent-tag">${esc(agentName[r.kind] || r.kind)}</span>
+          <button type="button" class="thread-open" title="Open">${esc(r.title)}</button>
+          <span class="thread-meta">${r.count} ${esc(r.unit)}(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
+        </div>`).join("") : "<p class='muted small'>Nothing open. Start with an agent above.</p>";
+      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => {
+        const row = b.closest(".recent-row");
+        navigate(row.dataset.kind === "board" ? `/board/${row.dataset.id}` : `/ask/${row.dataset.id}`);
+      }));
+    } catch (err) { setError("start-error", err.message); }
+  }
+
   $("greeting").textContent = greeting();
 
   $("btn-stats").addEventListener("click", openStats);
@@ -263,6 +400,34 @@
   $("btn-discard").addEventListener("click", discardMemory);
 
   $("btn-brand").addEventListener("click", () => navigate("/"));
+
+  $("project-chip").addEventListener("click", (e) => { e.stopPropagation(); navigate("/"); toggleProjectMenu(true); });
+
+  $("btn-menu").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
+
+  $("menu-list").addEventListener("click", () => toggleMenu(false));
+
+  document.addEventListener("click", (e) => { if (!$("menu").contains(e.target)) toggleMenu(false); });
+
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { toggleMenu(false); toggleProjectMenu(false); } });
+
+  $("btn-status").addEventListener("click", () => openStatus(false));
+
+  $("btn-status-vault").addEventListener("click", () => openStatus(false));
+
+  $("btn-status-ai").addEventListener("click", () => openStatus(true));
+
+  $("btn-status-project").addEventListener("click", () => navigate("/"));
+
+  $("btn-status-close").addEventListener("click", () => { $("status-dialog").hidden = true; });
+
+  $("btn-status-refresh").addEventListener("click", loadStatus);
+
+  $("btn-status-test").addEventListener("click", () => { $("status-test").hidden = false; });
+
+  $("btn-status-test-no").addEventListener("click", () => { $("status-test").hidden = true; });
+
+  $("btn-status-test-yes").addEventListener("click", runAiTest);
 
   document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
 
@@ -410,7 +575,8 @@
     const agent = agentFor(currentRoute);
     agents.forEach((a) => { if (a !== agent && a.onLeave) a.onLeave(); });
     renderProjectChips();
-    if (!agent) { show("start"); return; }
+    $("nav-arrows").hidden = !(agent && agent.id === "board");   // the arrows stay for the board until its step line (spec 11.3, step 3)
+    if (!agent) { show("start"); loadRecent(); return; }
     if (agent.onEnter) agent.onEnter();
     agent.render(currentRoute);
   }
@@ -424,7 +590,7 @@
 
   window.PM = {
     $, esc, api, store, show, setError, fmt, fmtNum, fmtSec, lines, md, fmtDate,
-    register, navigate, setPath, showProposal, openOptions, renderProjectPicker,
+    register, navigate, setPath, showProposal, openOptions, renderProjectPicker, loadStatus, loadRecent,
     route: () => currentRoute,
     projects: () => (chosenProjects || []),
     get config() { return config; },
@@ -435,7 +601,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     loadConfig()
       .then(() => Promise.all(agents.map((a) => (a.boot ? a.boot() : null))))
-      .then(() => renderRoute())
+      .then(() => { renderRoute(); loadStatus(); startStatusTimer(); })
       .catch((err) => { $("home-hint").textContent = err.message; show("start"); });
   });
 })();

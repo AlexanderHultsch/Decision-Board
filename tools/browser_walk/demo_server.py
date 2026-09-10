@@ -23,7 +23,7 @@ config_path = tmp / "config.local.json"
 (vault / "Projects" / "Dual DCDC.md").write_text("---\nkind: project\nprojects: [Dual DCDC]\n---\n# Dual DCDC\n\nSOP Aug 2028, customer Mercedes-Benz.\n")
 (vault / "Projects" / "Sister.md").write_text("---\nkind: project\nprojects: [Sister]\n---\n# Sister\n\nA sister project with its own housing.\n")
 (vault / "Lessons learned.md").write_text("# Lessons learned\n\n## Connector qualification\n\n" + ("The connector vendor change needed a second PPAP round. " * 30) + "\n\n## EMC chamber booking\n\n" + ("Book the EMC chamber twelve weeks ahead of DV. " * 30) + "\n\n## Firmware release notes\n\n" + ("Release notes must name the calibration set. " * 30) + "\n")
-config = {"provider": {"models": {"board": "opencode/big-pickle"}}, "knowledge": {"vault_path": str(vault), "token_budget": 6000, "project": "Dual DCDC"}, "runtime": {"audit_folder": str(tmp / "audit")}, "server": {"threads_folder": str(tmp / "threads"), "site_name": "ai"}, "ask": {"token_budget": 12000}}
+config = {"provider": {"models": {"board": "opencode/big-pickle"}}, "knowledge": {"vault_path": str(vault), "token_budget": 6000, "project": "Dual DCDC"}, "runtime": {"audit_folder": str(tmp / "audit")}, "server": {"threads_folder": str(tmp / "threads")}, "ask": {"token_budget": 12000}}
 config_path.write_text(json.dumps(config))
 
 class Slow(AiProvider):
