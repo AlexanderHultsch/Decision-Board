@@ -387,6 +387,41 @@ class TestMetaPages(unittest.TestCase):
             self.assertEqual(knowledge.section_id(sq), f"Abbreviations.md#{knowledge._ABBREV_HEADING}")
 
 
+class TestReviewFixes(unittest.TestCase):
+    """Review of 10 September 2026: candidates in rank order, the synthetic
+    core section excludable by id, rank and core ids on the selection."""
+
+    def test_candidates_follow_the_rank_not_the_page_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            many = "".join(f"\n## Part {i}\n\n" + "Filler text without the words. " * 12 + "\n" for i in range(12))
+            (vault / "Flood.md").write_text(f"---\nkind: process\n---\n# Flood\n\n## Definition\n\nHousing tooling supplier is late.\n{many}", encoding="utf-8")
+            for i in range(4):
+                (vault / f"Page{i}.md").write_text(f"---\nkind: process\n---\n# Page{i}\n\n## Definition\n\nHousing tooling supplier late again {i}.\n", encoding="utf-8")
+            config = {"knowledge": {"vault_path": str(vault)}}
+            rows = knowledge.candidates(config, "Is the housing tooling supplier late?", {"Mechanical": ["tooling"]}, limit=6)["Mechanical"]
+        ids = [r["id"] for r in rows]
+        self.assertEqual(len(ids), 6)
+        # The five matching sections come first, from five pages; the flood page's filler parts do not push them out.
+        self.assertEqual(set(ids[:5]), {"Flood.md#Definition", "Page0.md", "Page1.md", "Page2.md", "Page3.md"})
+
+    def test_the_abbreviation_rows_can_be_excluded_by_their_id_and_the_selection_names_its_core(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "Abbreviations.md").write_text(
+                "---\nkind: reference\n---\n# Abbreviations\n\n| Abbreviation | Full form | Description |\n| --- | --- | --- |\n"
+                "| DV | Design Verification | tests |\n", encoding="utf-8")
+            (vault / "DV.md").write_text("---\nkind: process\n---\n# DV testing\n\nThe DV tests.\n", encoding="utf-8")
+            notes = knowledge.load_vault(vault)
+            sid = f"Abbreviations.md#{knowledge._ABBREV_HEADING}"
+            with_rows = knowledge.select_sections(notes, "Are the DV tests done?", 3000)
+            self.assertIn(sid, with_rows.core_ids)
+            self.assertEqual([knowledge.section_id(s) for s in with_rows.ranked][0], sid)
+            without = knowledge.select_sections(notes, "Are the DV tests done?", 3000, exclude=[sid])
+            self.assertNotIn(knowledge._ABBREV_HEADING, without.text)
+            self.assertEqual(without.core_ids, set())
+
+
 class TestPicker(unittest.TestCase):
     def test_only_candidate_ids_survive_and_a_bad_answer_keeps_python_in_force(self):
         from decisionboard import picker

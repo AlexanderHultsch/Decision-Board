@@ -194,6 +194,28 @@ class TestSetProperty(unittest.TestCase):
             self.assertEqual(enrich.propose(reloaded, SummaryProvider()).changes, [])   # idempotent
 
 
+class TestReviewFixes(unittest.TestCase):
+    """Review of 10 September 2026: KPI dates untouched, the marker once,
+    the old summary not shown to the model."""
+
+    def test_a_kpi_page_keeps_its_date_and_an_echoed_marker_is_not_doubled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "Gates.md").write_text("---\nkind: kpi\nupdated: 2026-07-01\n---\n# Gates\n\nMG4 on 2026-11-01.\n", encoding="utf-8")
+            (vault / "Note.md").write_text('---\nkind: note\nsummary: "AI summary, not official. Old text."\nupdated: 2026-07-01\n---\n# Note\n\nNew text.\n', encoding="utf-8")
+            notes = knowledge.load_vault(vault)
+            provider = SummaryProvider(answer=json.dumps({"Gates.md": "AI summary, not official. Gate dates.",
+                                                          "Note.md": "AI summary, not official. AI summary, not official. New."}))
+            proposal = enrich.propose(notes, provider, refresh=True)
+            self.assertNotIn("Old text", provider.prompts[0])          # the page, not its previous summary
+            values = {c.path: c.value for c in proposal.changes if c.key == "summary"}
+            self.assertEqual(values["Gates.md"], "AI summary, not official. Gate dates.")
+            self.assertEqual(values["Note.md"], "AI summary, not official. New.")
+            enrich.apply(vault, proposal, "2026-09-10")
+            self.assertEqual(knowledge._front_matter((vault / "Gates.md").read_text(encoding="utf-8"))["updated"], "2026-07-01")
+            self.assertEqual(knowledge._front_matter((vault / "Note.md").read_text(encoding="utf-8"))["updated"], "2026-09-10")
+
+
 class TestEvaluate(unittest.TestCase):
     def test_hit_rate_counts_pages_that_reach_a_member_in_full_or_as_one_line(self):
         with tempfile.TemporaryDirectory() as tmp:

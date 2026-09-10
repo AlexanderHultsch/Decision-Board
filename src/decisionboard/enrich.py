@@ -104,6 +104,8 @@ def propose(notes: list[Note], provider: AiProvider | None, *, summaries: bool =
                 for note in batch:
                     text = written.get(note.relative)
                     if text:
+                        while text.lower().startswith(SUMMARY_PREFIX.lower()):
+                            text = text[len(SUMMARY_PREFIX):].strip()          # the model echoed the marker: once is enough
                         proposal.changes.append(Change(note.relative, "summary", f"{SUMMARY_PREFIX} {text}", note.summary))
                     else:
                         proposal.problems.append(f"{note.relative}: the model returned no summary")
@@ -113,7 +115,7 @@ def propose(notes: list[Note], provider: AiProvider | None, *, summaries: bool =
 def _summaries(provider: AiProvider, batch: list[Note]) -> dict[str, str]:
     lines = [load_prompt("summaries"), "", "## Pages", ""]
     for note in batch:
-        body = note.body[:SUMMARY_CHARS]
+        body = re.sub(r"^summary:.*\n", "", note.body, count=1, flags=re.M)[:SUMMARY_CHARS]   # the old summary is not the page
         lines += [f"### {note.relative}", "", body, ""]
     result = provider.complete(TASK_BOARD, "\n".join(lines))
     try:
@@ -179,7 +181,7 @@ def set_property(text: str, key: str, value: Any) -> str:
 
 def apply(vault: Path, proposal: Proposal, today: str) -> list[Path]:
     """Write the proposal into the vault, one file at a time, ``updated``
-    set on every page touched. Returns the files written."""
+    set on every page touched except KPI pages. Returns the files written."""
     by_path: dict[str, list[Change]] = {}
     for change in proposal.changes:
         by_path.setdefault(change.path, []).append(change)
@@ -189,7 +191,10 @@ def apply(vault: Path, proposal: Proposal, today: str) -> list[Path]:
         text = path.read_text(encoding="utf-8-sig")
         for change in changes:
             text = set_property(text, change.key, change.value)
-        text = set_property(text, "updated", today)
+        if _front_matter(text).get("kind") != "kpi":
+            # On a KPI page ``updated`` is the date of the numbers, which a
+            # summary does not refresh; the board reads it for staleness.
+            text = set_property(text, "updated", today)
         path.write_text(text, encoding="utf-8")
         written.append(path)
     return written

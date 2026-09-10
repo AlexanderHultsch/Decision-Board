@@ -611,10 +611,25 @@ class TestKnowledgePick(TestServerFlow):
             self.assertIn("members", state["pick_error"])
             _, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
             self.assertEqual(est["picked_by"][CLASSIC[0]], "python")
-            self.assertEqual(est["calls"], 4)                    # a failed pick is redone: pick, two members, synthesis
+            self.assertEqual(est["calls"], 3)                    # a failed pick is not redone: two members, synthesis
             self.assertIn("Tooling.md", est["members"][CLASSIC[0]])
         finally:
             self.provider.pick_answer = None
+
+    def test_new_inputs_make_a_new_pick_and_a_running_pick_is_counted_once(self):
+        sid = self._to_confirm("ai")
+        state = self.wait_for(sid, lambda s: s["pick_state"] in ("done", "failed"))
+        self.assertEqual(state["pick_state"], "done")
+        picks_before = len([p for p in self.provider.prompts if "## Candidate sections" in p])
+        _, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
+        self.assertEqual(est["calls"], 3)                        # the pick is done: not counted again
+        # Back to the questions, answer again: the confirm screen has new inputs and picks again.
+        self.call("POST", f"/api/sessions/{sid}/back")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": ["changed answer"], "final": True})
+        state = self.wait_for(sid, lambda s: s["phase"] == "confirm" and s["pick_state"] in ("done", "failed"))
+        self.assertEqual(state["pick_state"], "done")
+        self.assertEqual(len([p for p in self.provider.prompts if "## Candidate sections" in p]), picks_before + 1)
+        self.assertIn("changed answer", [p for p in self.provider.prompts if "## Candidate sections" in p][-1])
 
     def test_python_only_makes_no_pick_call(self):
         sid = self._to_confirm("python")

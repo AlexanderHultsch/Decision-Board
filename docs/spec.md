@@ -255,6 +255,20 @@ than half the budget (and at least 1,500 tokens) is not sent whole unless
 picked by hand, since the abbreviations table and the task table of the
 process overview had been taking four fifths of every member's block.
 
+**Measured 10 September 2026** on the enriched vault (40 pages, 8 members,
+five questions, slider 6,000, Python selection), old code against new: a
+member received 2.1 sections from 2.0 pages before, 13.2 sections from 9.0
+pages in full plus 8.3 pages as one line after, for 6,759 instead of 5,998
+tokens (the one-liners ride on top). Combined mode sends 45,300 knowledge
+tokens per question instead of 54,100 by sending the core once. The
+review of the same day fixed: a pick made for earlier inputs was reused
+after Back, a stopped pick could block the next one, the remembered
+dropdown choice started a pick nobody polled, the candidate list followed
+page order instead of rank, the abbreviation rows could not be unticked,
+a failed pick was counted as a call the run never made, the estimate
+rebuilt the candidates on every keystroke, `enrich` stamped KPI dates and
+could double the summary marker.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that

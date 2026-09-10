@@ -445,7 +445,10 @@
     // a choice that differs from the session's starts (or skips) the pick.
     const remembered = store.get("selection") || session.selection || config.selection || "ai";
     setSelection(remembered);
-    if (remembered !== session.selection) api("POST", `/api/sessions/${session.id}/pick`, { selection: remembered }).then((s2) => { session = s2; updatePickStatus(); }).catch(() => {});
+    if (remembered !== session.selection) api("POST", `/api/sessions/${session.id}/pick`, { selection: remembered }).then((s2) => {
+      session = s2; updatePickStatus();
+      if (needsPolling(session) && !pollTimer) startPolling();      // the pick just started: watch it land
+    }).catch(() => {});
     $("selection-mode").onchange = async () => {
       const value = selectionOf();
       store.set("selection", value);

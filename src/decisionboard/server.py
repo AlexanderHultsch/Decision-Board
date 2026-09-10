@@ -144,14 +144,6 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on the gateway on 9 September 2026
 
 
-def _core_of(selection) -> list:
-    """The sections of a selection that sit in its shared core, read back
-    from the core text's labels."""
-    labels = {line[4:].strip() for line in selection.core_text.splitlines() if line.startswith("### ")}
-    return [sec for sec in selection.sections
-            if (sec.relative + (f" - {sec.heading}" if sec.heading else "")) in labels]
-
-
 def _selection_value(value: Any) -> str:
     """``"python"`` when asked for, else ``"ai"`` (the default, decided 10 September 2026)."""
     return "python" if str(value or "").strip().lower() == "python" else "ai"
@@ -217,6 +209,8 @@ class Session:
         self.pick_state = "idle"                          # idle, running, done, failed
         self.pick_error: str | None = None
         self.pick_dropped = 0                             # ids the model named that were not candidates
+        self.pick_id = 0                                  # which pick is current; an older pick's late result is dropped
+        self.pick_prompt_chars = 0                        # size of the running pick's prompt, for the estimate
         self.knowledge_split: dict[str, dict[str, int]] = {}   # member -> core/own/brief tokens of the last run
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
@@ -574,16 +568,20 @@ class BoardServer:
         }
         session.phase = "confirm"
         session.mark("confirm")
-        if session.selection == "ai" and session.pick_state in ("idle", "failed"):
-            self._start_pick(session)
+        if session.selection == "ai":
+            self._start_pick(session)      # the inputs are new: a pick made for earlier inputs is stale
 
     def _start_pick(self, session: Session) -> None:
         """Under the session lock: the AI-assisted pick runs in the background
-        while Alex reads the confirm screen (spec 5.1)."""
+        while Alex reads the confirm screen (spec 5.1). A pick still running
+        for earlier inputs is superseded: its result is dropped when it
+        lands (``pick_id``)."""
+        session.pick_id += 1
         session.pick_state = "running"
         session.pick_error = None
         session.picks = None
-        self._spawn(session, self._pick, session)
+        session.pick_prompt_chars = 0
+        self._spawn(session, self._pick, session, session.pick_id)
 
     def pick(self, session: Session, body: dict[str, Any]) -> None:
         """The page asks for the pick: after switching the dropdown to AI
@@ -600,22 +598,28 @@ class BoardServer:
                 return
             self._start_pick(session)
 
-    def _pick(self, session: Session) -> None:
+    def _pick(self, session: Session, pick_id: int) -> None:
         query = f"{session.question}\n{session.inputs.get('topic', '')}\n{session.inputs.get('context', '')}"
         try:
             board = roles_mod.load_board(self.config)
             terms = {m: role_terms(role) for m, role in board.profiles.items()}
             cands = knowledge_mod.candidates(self.config, query, terms, projects=session.projects)
             lines = {m: (role.perspective or role.title) for m, role in board.profiles.items()}
+            with session.lock:
+                if session.pick_id == pick_id:
+                    session.pick_prompt_chars = len(picker.pick_prompt(query, lines, cands))
             result = picker.pick(RecordingProvider(self.provider(), session), query, lines, cands)
         except Exception as exc:
             if session.cancelled.is_set():
                 return
             with session.lock:
-                session.pick_state = "failed"
-                session.pick_error = f"{exc}"[:200]
+                if session.pick_id == pick_id:
+                    session.pick_state = "failed"
+                    session.pick_error = f"{exc}"[:200]
             return
         with session.lock:
+            if session.pick_id != pick_id:
+                return                    # a newer pick is current; this one answered stale inputs
             session.llm_calls += 1
             session.pick_dropped = result.dropped
             if result.ok:
@@ -941,11 +945,12 @@ class BoardServer:
                              project=", ".join(session.projects),
                              member_knowledge=blocks["knowledge"], mode=mode,
                              shared_knowledge=blocks["shared"], member_delta=blocks["delta"])
-        if selection == "ai" and pick_state != "done":
-            # The pick call is still to come: count it, at the size of its prompt.
-            terms = {m: role_terms(board.profiles.get(m)) for m in board.profiles}
-            cands = knowledge_mod.candidates(self.config, f"{session.question}\n{topic}", terms, projects=session.projects)
-            sizes.insert(0, ("knowledge pick", len(picker.pick_prompt(topic, {m: "" for m in board.profiles}, cands))))
+        if selection == "ai" and pick_state == "running":
+            # The pick call is in flight: count it at the size of its prompt
+            # (stored when it started). A failed pick is not redone: the run
+            # keeps the Python ranking, so no call is counted for it.
+            with session.lock:
+                sizes.insert(0, ("knowledge pick", session.pick_prompt_chars))
         overhead, learned_from = session.overhead_per_call()
         per_call = [{"label": label, "tokens": knowledge_mod.estimate_tokens_for(chars) + overhead} for label, chars in sizes]
         return {
@@ -967,7 +972,7 @@ class BoardServer:
             "sections": {m: [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
                               "tokens": knowledge_mod.estimate_tokens(sec.body),
                               "forced": knowledge_mod.section_id(sec) in extra or sec.relative in extra,
-                              "core": sec in sel.sections[:0] or knowledge_mod.section_id(sec) in {knowledge_mod.section_id(c) for c in _core_of(sel)},
+                              "core": knowledge_mod.section_id(sec) in sel.core_ids,
                               "reason": sel.reasons.get(knowledge_mod.section_id(sec), "")}
                              for sec in sel.sections]
                          for m, sel in selections.items()},
@@ -995,6 +1000,8 @@ class BoardServer:
         if phase == "clarifying":
             session.stop_work()
             with session.lock:
+                if session.pick_state == "running":
+                    session.pick_state, session.pick_id = "idle", session.pick_id + 1   # the stopped pick never lands
                 if session.rounds:
                     _restore_last_round(session)
                     session.forward = []

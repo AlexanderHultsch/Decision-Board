@@ -110,6 +110,8 @@ class KnowledgeSelection:
     brief_sent: dict[str, str] = field(default_factory=dict)   # page -> the line sent, for citation checks
     reasons: dict[str, str] = field(default_factory=dict)   # section id -> why the model picked it (AI-assisted selection)
     picked_by: str = "python"                             # "python" or "model"
+    ranked: list[Section] = field(default_factory=list)   # the sent sections in rank order (``sections`` is grouped per page)
+    core_ids: set[str] = field(default_factory=set)       # ids of the sent sections that sit in the shared core
 
     @property
     def relative_paths(self) -> list[str]:
@@ -593,7 +595,7 @@ def select_sections(
     prepared: "_Prepared | None" = None, member: str = "", phases: tuple[str, ...] | None = None,
     core: list[Section] | None = None, preferred: list[str] | tuple[str, ...] = (),
     brief_first: list[str] | tuple[str, ...] = (), reasons: dict[str, str] | None = None,
-    projects: list[str] | None = None,
+    projects: list[str] | None = None, terms: list[str] | None = None,
 ) -> KnowledgeSelection:
     """Rank every section of every note against the question - and, for a
     member's own block, against ``extra_terms`` (the member's targets,
@@ -612,7 +614,7 @@ def select_sections(
     ``BRIEF_PAGES`` further pages go in as one line each (the page's
     ``summary``), within ``BRIEF_CAP_TOKENS`` on top. ``pinned`` notes are
     accepted for older callers and become part of the core."""
-    terms = expand_terms(query_terms(question), question, notes)
+    terms = list(terms) if terms is not None else expand_terms(query_terms(question), question, notes)   # once per question when the caller has them
     member_terms = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
     forced = {str(x) for x in extra}
     banned = {str(x) for x in exclude}
@@ -626,8 +628,8 @@ def select_sections(
     all_sections = [section for section in prep.sections
                     if section_id(section) not in banned and section.relative not in banned
                     and (not is_meta(section.note) or section_id(section) in forced or section.relative in forced)]
-    all_sections += [section for section in core
-                     if section.index >= _ABBREV_INDEX and section.relative not in banned]   # built for this question, not in the vault
+    all_sections += [section for section in core if section.index >= _ABBREV_INDEX      # built for this question, not in the vault
+                     and section.relative not in banned and section_id(section) not in banned]
     member_key = member.strip().lower()
 
     def is_forced(section: Section) -> bool:
@@ -723,6 +725,8 @@ def select_sections(
     # Sections of one note stay together, in the note's own order, under the
     # note's first appearance in the ranking - per tier: a page's Definition
     # in the core does not pull its Coaching into the core.
+    selection.ranked = [section for section, _c, _t in chosen]
+    selection.core_ids = {section_id(section) for section, _c, tier in chosen if tier == "core"}
     by_note: dict[tuple[str, str], list[tuple[Section, str]]] = {}
     order: dict[str, list[str]] = {"core": [], "own": []}
     for section, chunk, tier in chosen:
@@ -883,13 +887,14 @@ def gather_for_members(
     prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
     phases = question_phases(question)
     core = core_sections(prepared, notes, chosen, phases, question) if prepared is not None else []
+    expanded = expand_terms(query_terms(question), question, notes) if prepared is not None else []
     for member, terms in member_terms.items():
         if vault is None:
             result[member] = KnowledgeSelection(vault_path=None)
             continue
         pick = (picks or {}).get(member) or {}
         selection = select_sections(notes, question, budget, extra_terms=tuple(terms), extra=extra, exclude=exclude,
-                                    prepared=prepared, member=member, phases=phases, core=core, projects=chosen,
+                                    prepared=prepared, member=member, phases=phases, core=core, projects=chosen, terms=expanded,
                                     preferred=tuple(pick.get("full") or ()), brief_first=tuple(pick.get("brief") or ()),
                                     reasons=dict(pick.get("reasons") or {}))
         selection.vault_path = vault
@@ -913,13 +918,14 @@ def candidates(config: dict, question: str, member_terms: dict[str, list[str] | 
     phases = question_phases(question)
     core = core_sections(prepared, notes, chosen, phases, question)
     core_ids = {section_id(s) for s in core}
+    expanded = expand_terms(query_terms(question), question, notes)
     result: dict[str, list[dict[str, Any]]] = {}
     for member, terms in member_terms.items():
         # A very large budget: the ranking decides, the packing takes everything that fits.
         selection = select_sections(notes, question, 10 ** 7, extra_terms=tuple(terms), prepared=prepared,
-                                    member=member, phases=phases, core=core, projects=chosen)
+                                    member=member, phases=phases, core=core, projects=chosen, terms=expanded)
         rows = []
-        for section in selection.sections:
+        for section in selection.ranked:          # rank order, not the per-page order of ``sections``
             sid = section_id(section)
             if sid in core_ids:
                 continue          # the core goes to every member anyway
