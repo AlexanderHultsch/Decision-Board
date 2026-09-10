@@ -9,7 +9,7 @@
 </head>
 <body>
 <header class="topbar">
-  <button class="brand" id="btn-brand" type="button" title="New question">
+  <button class="brand" id="btn-brand" type="button" title="Start page">
     <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2.2"/><circle cx="5.5" cy="7" r="1.9"/><circle cx="18.5" cy="7" r="1.9"/><path d="M8.6 12.2a3.4 3.4 0 0 1 6.8 0"/><path d="M2.5 13a3 3 0 0 1 4.6-2.2M21.5 13a3 3 0 0 0-4.6-2.2"/><circle cx="12" cy="18" r="2"/><path d="M12 14.6v1.2M12 20.2v1.2M8.6 18h1.2M14.2 18h1.2M9.6 15.6l.9.9M13.5 19.5l.9.9M14.4 15.6l-.9.9M10.5 19.5l-.9.9"/></svg></span>
     <span>Decision Board</span>
   </button>
@@ -30,30 +30,107 @@
 
 <main id="app" class="page">
 
-  <!-- Home -->
-  <section id="screen-home" class="screen">
+  <!-- Start page (spec 9.5): the project once, one tile per use case -->
+  <section id="screen-start" class="screen" hidden>
     <h1 id="greeting" class="greeting">Good day.</h1>
-    <p class="lede">What should the board decide? Describe the situation in your own words. The board will ask what it needs to know before it answers.</p>
+    <p class="lede">Choose the project, then what you want to do. The project carries into every use case.</p>
+    <div class="row">
+      <div class="picker" id="project-picker">
+        <button type="button" class="picker-btn" id="btn-projects" aria-haspopup="listbox" aria-expanded="false">
+          <span class="picker-label muted small">Project</span><span id="projects-label">All projects</span>
+          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="picker-menu" id="projects-menu" hidden>
+          <div id="projects-list"></div>
+          <div class="picker-foot"><button type="button" class="ghost small-btn" id="btn-projects-default">Save as default</button></div>
+        </div>
+      </div>
+      <span id="home-hint" class="muted small"></span>
+    </div>
+    <div class="tiles">
+      <a class="tile" href="/board" id="tile-board">
+        <span class="tile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 7 -3"/></svg></span>
+        <span class="tile-title">Board</span>
+        <span class="tile-text muted">A decision, assessed by every swim lane in isolation and consolidated into one direction. Asks what it needs to know first.</span>
+      </a>
+      <a class="tile" href="/ask" id="tile-ask">
+        <span class="tile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M9 9h6M9 12h4"/></svg></span>
+        <span class="tile-title">Ask the vault</span>
+        <span class="tile-text muted">Any question, answered from the vault by one agent, with the pages it used and what it could not find. Ask back as often as you like.</span>
+      </a>
+    </div>
+    <p id="site-address" class="muted small"></p>
+    <p id="start-error" class="error" hidden></p>
+  </section>
+
+  <!-- Board home -->
+  <section id="screen-home" class="screen" hidden>
+    <p class="project-line muted small">Board · <span id="board-project"></span> <a href="/" class="change-project">change</a></p>
+    <h1 class="greeting">What should the board decide?</h1>
+    <p class="lede">Describe the situation in your own words. The board will ask what it needs to know before it answers.</p>
     <form id="ask-form" class="ask">
       <textarea id="question" rows="5" placeholder="For example: We must choose between reworking the Gen6 housing tooling or switching supplier. Budget is tight and the SOP date cannot move."></textarea>
       <div class="row between">
-        <div class="row">
-          <div class="picker" id="project-picker">
-            <button type="button" class="picker-btn" id="btn-projects" aria-haspopup="listbox" aria-expanded="false">
-              <span class="picker-label muted small">Project</span><span id="projects-label">All projects</span>
-              <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
-            <div class="picker-menu" id="projects-menu" hidden>
-              <div id="projects-list"></div>
-              <div class="picker-foot"><button type="button" class="ghost small-btn" id="btn-projects-default">Save as default</button></div>
-            </div>
-          </div>
-          <span id="home-hint" class="muted small"></span>
-        </div>
+        <span id="board-hint" class="muted small"></span>
         <button type="submit" class="primary">Prepare the question</button>
       </div>
     </form>
     <p id="home-error" class="error" hidden></p>
+  </section>
+
+  <!-- Ask the vault (spec 10): the threads and a new one -->
+  <section id="screen-ask" class="screen" hidden>
+    <p class="project-line muted small">Ask the vault · <span id="ask-project"></span> <a href="/" class="change-project">change</a></p>
+    <h1 class="greeting">Ask the vault</h1>
+    <p class="lede">Any question about the process, the project, the roles or the numbers. One agent reads the vault and answers with the pages it used. Ask back as often as you like; a thread stays open until you close it.</p>
+    <form id="ask-new-form" class="ask">
+      <textarea id="ask-question" rows="4" placeholder="For example: What has to be ready for the design freeze, and who approves it?"></textarea>
+      <div class="row between">
+        <span id="ask-hint" class="muted small"></span>
+        <button type="submit" class="primary" id="btn-ask-new">Ask</button>
+      </div>
+    </form>
+    <p id="ask-error" class="error" hidden></p>
+    <p class="eyebrow">Threads <span class="muted small">newest first · a closed thread stays readable</span></p>
+    <div id="thread-list" class="thread-list"></div>
+  </section>
+
+  <!-- One thread -->
+  <section id="screen-thread" class="screen" hidden>
+    <p class="project-line muted small">Ask the vault · <span id="thread-project"></span> · <a href="/ask" id="link-threads">all threads</a></p>
+    <h2 id="thread-title"></h2>
+    <p id="thread-state" class="muted small"></p>
+    <div id="thread-turns" class="stack"></div>
+    <div id="thread-pending" class="card centered" hidden>
+      <div class="spinner"></div>
+      <p id="thread-pending-text" class="muted">Reading the vault and answering…</p>
+      <button type="button" class="ghost small-btn" id="btn-thread-stop">Stop</button>
+    </div>
+    <form id="thread-form" class="ask compact">
+      <textarea id="thread-question" rows="3" placeholder="Ask back, or ask the next question…"></textarea>
+      <p class="eyebrow">Knowledge for this question <button type="button" class="info-btn" id="btn-ask-budget-info" title="What does the slider cap?" aria-label="What does the slider cap?">i</button></p>
+      <div class="budget-row">
+        <input id="ask-budget" type="range" min="0" max="40000" step="500" value="12000" aria-label="Knowledge tokens for this question">
+        <span id="ask-budget-value" class="budget-value">12,000 tokens</span>
+      </div>
+      <div id="ask-budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections sent in full for this question - the shared core (project page, phase and gate definitions, the abbreviations the question uses, the tasks active in the phase the question names) and the best-ranked sections for the question's words.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the KPI notes of the project with their age, the sections you add below, and the earlier questions and answers of this thread.<br><span class="muted">One call per question, whatever the slider says. The Python ranking chooses; there is no pick call here.</span></div>
+      <p id="ask-estimate" class="estimate muted small">Estimating…</p>
+      <details id="ask-estimate-detail" class="estimate-detail"><summary class="muted small">What the agent would receive, and what to add or leave out</summary>
+        <div id="ask-estimate-notes"></div>
+        <p class="eyebrow">Add <span class="muted small">sent whole, on top of the slider</span></p>
+        <input id="ask-outline-filter" type="text" class="outline-filter" placeholder="Filter notes and sections…">
+        <div id="ask-outline" class="outline"></div>
+      </details>
+      <div class="row between">
+        <button id="btn-thread-close" type="button" class="ghost">Close thread</button>
+        <button type="submit" class="primary" id="btn-thread-ask">Ask</button>
+      </div>
+    </form>
+    <div id="thread-closed" class="card" hidden>
+      <p class="muted" id="thread-closed-text">This thread is closed. It stays here to read; it takes no further questions.</p>
+      <div class="row"><a class="ghost btn-link" href="/ask" id="btn-thread-new">New thread</a></div>
+    </div>
+    <p id="thread-error" class="error" hidden></p>
   </section>
 
   <!-- Clarifying -->
@@ -256,6 +333,19 @@
       <button id="btn-close-cancel" type="button" class="ghost">Cancel</button>
       <button id="btn-close-no" type="button" class="ghost">Close without writing</button>
       <button id="btn-close-yes" type="button" class="primary">Yes, propose a note</button>
+    </div>
+  </div>
+</div>
+
+<div id="thread-close-dialog" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Close this thread</h2>
+    <p class="muted">A closed thread stays readable but takes no further questions. Do you want a note in your vault with what was found? You will see the note and where it goes before anything is written.</p>
+    <p id="thread-close-error" class="error small" hidden></p>
+    <div class="row end">
+      <button id="btn-thread-close-cancel" type="button" class="ghost">Keep it open</button>
+      <button id="btn-thread-close-no" type="button" class="ghost">Close without a note</button>
+      <button id="btn-thread-close-yes" type="button" class="primary">Close and propose a note</button>
     </div>
   </div>
 </div>

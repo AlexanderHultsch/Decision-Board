@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
-from decisionboard.server import create_http_server  # noqa: E402
+from decisionboard.server import create_http_server, site_name  # noqa: E402
 from decisionboard import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
@@ -35,6 +35,11 @@ CLEAR = json.dumps({"topic": "Rework or switch", "context": "SOP is fixed. Budge
                     "constraints": ["SOP cannot move"], "questions": [], "clear": True})
 FOLLOW_UP = json.dumps({"answer": "- Because time is the decisive criterion.", "reasons": ["Hardware: DV date"],
                         "recommendation_now": "Rework, unchanged.", "disagreements": []})
+# Ask the vault (spec 10): one source that was sent, one that was not - Python must drop the second.
+ASK = json.dumps({"answer": "- Tooling is late.",
+                  "sources": [{"path": "Tooling.md", "heading": "", "why": "says so"},
+                              {"path": "Invented.md", "heading": "", "why": "made up"}],
+                  "gaps": ["the new date"], "decision_question": False})
 
 
 class RoutingFakeProvider(AiProvider):
@@ -45,11 +50,16 @@ class RoutingFakeProvider(AiProvider):
         self.prompts: list[str] = []
         self.lock = threading.Lock()
         self.pick_answer: str | None = None     # a fixed answer to the pick prompt, for the fallback test
+        self.delay = 0.0                        # seconds every call sleeps, for the "busy" tests
 
     def complete(self, task: str, prompt: str) -> AiResult:
         with self.lock:
             self.prompts.append(prompt)
-        if "## Candidate sections" in prompt:
+        if self.delay:
+            time.sleep(self.delay)
+        if "## Question to the vault" in prompt:
+            text = ASK
+        elif "## Candidate sections" in prompt:
             if self.pick_answer is not None:
                 text = self.pick_answer
             else:
@@ -638,3 +648,213 @@ class TestKnowledgePick(TestServerFlow):
         _, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
         self.assertEqual(est["calls"], 3)
         self.assertNotIn("knowledge pick", [p["label"] for p in est["per_call"]])
+
+
+class TestSiteName(unittest.TestCase):
+    """Spec 9.5, decision 21: the site is named under .localhost, and only
+    that one name is accepted next to localhost and 127.0.0.1."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"vault_path": ""},
+                      "server": {"site_name": "ai"}}
+        cls.httpd, cls.board_server = create_http_server(cls.config, None, port=0, provider=RoutingFakeProvider())
+        cls.port = cls.httpd.server_address[1]
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.tmp.cleanup()
+
+    def raw(self, method, path, headers, body=b""):
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=body or None, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def test_site_name_is_cleaned_and_defaults_to_ai(self):
+        self.assertEqual(site_name({}), "ai")
+        self.assertEqual(site_name({"server": {"site_name": "My Site!"}}), "mysite")
+        self.assertEqual(site_name({"server": {"site_name": "!!"}}), "ai")
+
+    def test_only_the_named_host_under_localhost_is_accepted(self):
+        self.assertEqual(self.raw("GET", "/api/config", {"Host": f"ai.localhost:{self.port}"}), 200)
+        self.assertEqual(self.raw("GET", "/api/config", {"Host": f"evil.localhost:{self.port}"}), 403)
+        self.assertEqual(self.raw("GET", "/api/config", {"Host": f"ai.localhost:{self.port + 1}"}), 403)
+
+    def test_only_the_named_origin_under_localhost_is_accepted(self):
+        json_headers = {"Host": f"ai.localhost:{self.port}", "Content-Type": "application/json"}
+        self.assertEqual(self.raw("POST", "/api/sessions", {**json_headers, "Origin": f"http://ai.localhost:{self.port}"},
+                                  b'{"question": "x"}'), 201)
+        self.assertEqual(self.raw("POST", "/api/sessions", {**json_headers, "Origin": f"http://evil.localhost:{self.port}"},
+                                  b'{"question": "x"}'), 403)
+
+
+class TestAskThreads(unittest.TestCase):
+    """Ask the vault (spec 10) through the API: threads, questions with
+    sources checked by Python, the estimate, close with and without a
+    note, delete, and a thread that survives a restart."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.vault = Path(cls.tmp.name) / "vault"
+        cls.vault.mkdir()
+        (cls.vault / "Tooling.md").write_text("---\ntitle: Tooling\ntags: [tooling]\n---\nTooling is late.\n", encoding="utf-8")
+        make_roles(cls.vault / "Roles&Responsibilities")
+        cls.threads = Path(cls.tmp.name) / "threads"
+        cls.config_path = Path(cls.tmp.name) / "config.local.json"
+        cls.config = {"provider": {"models": {"board": "fake/m"}},
+                      "knowledge": {"vault_path": str(cls.vault), "token_budget": 6000, "selection": "python"},
+                      "server": {"threads_folder": str(cls.threads)}, "ask": {"token_budget": 3000}}
+        cls.config_path.write_text(json.dumps(cls.config), encoding="utf-8")
+        cls.provider = RoutingFakeProvider()
+        cls.httpd, cls.board_server = create_http_server(cls.config, cls.config_path, port=0, provider=cls.provider)
+        cls.port = cls.httpd.server_address[1]
+        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        cls.tmp.cleanup()
+
+    call = TestServerFlow.call
+    wait_for = TestServerFlow.wait_for
+
+    def _wait(self, thread_id):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            _, state = self.call("GET", f"/api/ask/{thread_id}")
+            if not state["busy"] and state["phase"] not in ("asking", "proposing"):
+                return state
+            time.sleep(0.05)
+        raise AssertionError("thread still busy")
+
+    def test_a_new_thread_is_listed_and_answers_with_checked_sources(self):
+        first_prompt = len(self.provider.prompts)
+        status, created = self.call("POST", "/api/ask", {"projects": []})
+        self.assertEqual(status, 201)
+        self.assertEqual(created["kind"], "ask")
+        self.assertEqual(created["status"], "open")
+        self.assertEqual(created["budget"], 3000)
+        self.assertEqual(created["turns"], [])
+        _, listed = self.call("GET", "/api/ask")
+        row = next(r for r in listed["threads"] if r["id"] == created["id"])
+        self.assertEqual((row["questions"], row["title"]), (0, "New thread"))
+        status, state = self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Is the tooling late?"})
+        self.assertEqual(status, 200)
+        self.assertIn(state["phase"], ("asking", "idle"))
+        state = self._wait(created["id"])
+        self.assertEqual(len(state["turns"]), 1)
+        turn = state["turns"][0]
+        self.assertEqual(turn["answer"], "- Tooling is late.")
+        self.assertEqual([s["path"] for s in turn["sources"]], ["Tooling.md"])   # the invented one is dropped
+        self.assertEqual(turn["dropped"], 1)
+        self.assertEqual(turn["gaps"], ["the new date"])
+        self.assertEqual(turn["paths"], ["Tooling.md"])
+        self.assertEqual([c["step"] for c in state["stats"]["calls"]], ["ask the vault"])
+        self.assertEqual(state["llm_calls"], 1)
+        prompt = [p for p in self.provider.prompts[first_prompt:] if "## Question to the vault" in p][0]
+        self.assertIn("Tooling is late.", prompt)
+        self.assertNotIn("## Earlier in this thread", prompt)
+        # The second question carries the first turn.
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "And who fixes it?"})
+        state = self._wait(created["id"])
+        self.assertEqual(len(state["turns"]), 2)
+        prompt = [p for p in self.provider.prompts[first_prompt:] if "## Question to the vault" in p][-1]
+        self.assertIn("## Earlier in this thread", prompt)
+        self.assertIn("Q: Is the tooling late?\nA: - Tooling is late.", prompt)
+        _, listed = self.call("GET", "/api/ask")
+        row = next(r for r in listed["threads"] if r["id"] == created["id"])
+        self.assertEqual((row["questions"], row["title"]), (2, "Is the tooling late?"))
+        # The estimate: one call, the sections it would receive.
+        _, est = self.call("POST", f"/api/ask/{created['id']}/estimate", {"question": "x", "budget": 3000})
+        self.assertEqual(est["calls"], 1)
+        self.assertEqual(est["per_call"][0]["label"], "ask the vault")
+        self.assertIn("Tooling.md", [s["path"] for s in est["sections"]])
+        self.assertGreater(est["tokens_in"], 0)
+
+    def test_a_busy_thread_refuses_a_second_question(self):
+        self.provider.delay = 0.6
+        try:
+            _, created = self.call("POST", "/api/ask", {})
+            self.call("POST", f"/api/ask/{created['id']}/question", {"question": "One?"})
+            status, body = self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Two?"})
+            self.assertEqual(status, 409)
+            self.assertIn("Wait", body["error"])
+            status, _ = self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
+            self.assertEqual(status, 409)
+        finally:
+            self.provider.delay = 0.0
+        self._wait(created["id"])
+
+    def test_close_without_a_note_and_a_closed_thread_takes_no_question(self):
+        _, created = self.call("POST", "/api/ask", {})
+        status, _ = self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
+        self.assertEqual(status, 409)                       # nothing asked yet
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Late?"})
+        self._wait(created["id"])
+        status, state = self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
+        self.assertEqual((status, state["status"]), (200, "closed"))
+        status, body = self.call("POST", f"/api/ask/{created['id']}/question", {"question": "More?"})
+        self.assertEqual(status, 409)
+        self.assertIn("closed", body["error"])
+        _, listed = self.call("GET", "/api/ask")
+        self.assertEqual(next(r for r in listed["threads"] if r["id"] == created["id"])["status"], "closed")
+
+    def test_close_with_a_note_proposes_and_writes_through_the_memory_step(self):
+        _, created = self.call("POST", "/api/ask", {})
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Late?"})
+        self._wait(created["id"])
+        status, state = self.call("POST", f"/api/ask/{created['id']}/close", {"remember": True})
+        self.assertEqual(status, 200)
+        self.assertIn(state["phase"], ("proposing", "proposal"))
+        state = self._wait(created["id"])
+        self.assertEqual(state["phase"], "proposal")
+        self.assertTrue(state["proposal"]["path"])
+        self.assertEqual(state["status"], "closed")
+        status, state = self.call("POST", f"/api/ask/{created['id']}/memory", {"body": "# Note\n\nkept"})
+        self.assertEqual(status, 200)
+        self.assertEqual(state["phase"], "written")
+        self.assertTrue(Path(state["written_path"]).exists())
+        self.assertTrue(Path(state["written_path"]).resolve().is_relative_to(self.vault.resolve()))
+        on_disk = json.loads((self.threads / f"{created['id']}.json").read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["written_path"], state["written_path"])
+
+    def test_delete_removes_the_file_and_a_thread_survives_a_restart(self):
+        _, created = self.call("POST", "/api/ask", {})
+        self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Late?"})
+        self._wait(created["id"])
+        # A second server on the same config reads the thread from disk.
+        httpd, _server = create_http_server(self.config, self.config_path, port=0, provider=self.provider)
+        try:
+            other = threading.Thread(target=httpd.serve_forever, daemon=True)
+            other.start()
+            request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/api/ask/{created['id']}")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(len(data["turns"]), 1)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        status, body = self.call("DELETE", f"/api/ask/{created['id']}")
+        self.assertEqual((status, body["deleted"]), (200, True))
+        self.assertFalse((self.threads / f"{created['id']}.json").exists())
+        status, _ = self.call("GET", f"/api/ask/{created['id']}")
+        self.assertEqual(status, 404)
+        status, _ = self.call("DELETE", f"/api/ask/{created['id']}")
+        self.assertEqual(status, 404)
+
+    def test_config_carries_the_site_name_the_ask_budget_and_the_vault_name(self):
+        _, cfg = self.call("GET", "/api/config")
+        self.assertEqual(cfg["site_name"], "ai")
+        self.assertEqual(cfg["ask_budget"], 3000)
+        self.assertEqual(cfg["vault_name"], "vault")

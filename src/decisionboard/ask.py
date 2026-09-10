@@ -1,0 +1,273 @@
+"""Ask the vault (spec section 10, decided 10 September 2026): one agent,
+no board members, that answers any question from the Obsidian vault and
+says where the answer comes from.
+
+The knowledge block is the board's (``knowledge.gather_for_members`` with
+one nameless member); the call is one call; the thread keeps every question
+and answer so the next question can refer to them. Python does what it can
+(AP-1): it assembles the prompt, parses the JSON, keeps only the sources
+that were actually sent, and stores the thread as one JSON file outside
+the vault. Nothing here writes into the vault; the memory step of the board
+does that, after a yes.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from .agent.prompts import load_prompt
+from .agent.provider import TASK_BOARD, AiProvider, AiResult
+from .knowledge import (
+    KPI_STALE_DAYS, KPI_TOKEN_CAP, _CHARS_PER_TOKEN, _config_value, _freshness, _project_list, _roles_inside,
+    active_projects, for_project, load_vault,
+)
+
+MARKER = "## Question to the vault"       # the line the statistics recognise an ask call by
+DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: twice a member's, there is only one call
+MAX_HISTORY_CHARS = 12000                 # of earlier questions and answers carried into a call
+MAX_ANSWER_CHARS = 8000
+
+
+@dataclass
+class Answer:
+    answer: str
+    sources: list[dict[str, str]] = field(default_factory=list)   # path, heading, why - only what was sent
+    gaps: list[str] = field(default_factory=list)
+    dropped: int = 0                                               # sources named that were not sent
+    decision_question: bool = False
+    ai_result: AiResult | None = None
+    parse_error: str | None = None
+
+
+def ask_prompt(question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
+               project: str = "") -> str:
+    """The one prompt: instructions, the thread so far, the question, the
+    knowledge block, the KPI notes."""
+    lines = [load_prompt("ask"), ""]
+    if project:
+        lines += [f"Project: {project}", ""]
+    if history:
+        lines += ["## Earlier in this thread", ""]
+        budget = MAX_HISTORY_CHARS
+        kept: list[str] = []
+        for asked, answered in reversed(history):        # the latest turns survive when the thread is long
+            chunk = f"Q: {asked.strip()}\nA: {answered.strip()}"
+            if len(chunk) > budget and kept:
+                break
+            kept.append(chunk[:budget])
+            budget -= len(chunk)
+        lines += list(reversed(kept)) + [""]
+    lines += [MARKER, "", question.strip(), ""]
+    if kpi_text:
+        lines += ["## KPI notes of the project", "", kpi_text, ""]
+    if knowledge_text:
+        lines += [knowledge_text, ""]
+    return "\n".join(lines)
+
+
+def _note_key(path: str) -> str:
+    name = path.replace("\\", "/").strip().strip("[]").lower()
+    return name[:-3] if name.endswith(".md") else name
+
+
+def parse_answer(text: str, sent: dict[str, str], briefs: dict[str, str] | None = None) -> Answer:
+    """The model's JSON with Python's guarantees applied: only sources
+    that were sent (in full, or as a one-line summary) survive, by path or
+    by file name; a heading survives only when the page's sent text
+    carries it; the rest is dropped and counted."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = None
+    if not isinstance(data, dict):
+        return Answer(answer=text.strip()[:MAX_ANSWER_CHARS], parse_error="the answer did not parse as JSON")
+    by_key: dict[str, str] = {}
+    names: dict[str, int] = {}
+    known = dict(sent)
+    for path in (briefs or {}):
+        known.setdefault(path, "")
+    for path in known:
+        key = _note_key(path)
+        by_key[key] = path
+        name = key.rsplit("/", 1)[-1]
+        names[name] = names.get(name, 0) + 1
+    for path in known:
+        name = _note_key(path).rsplit("/", 1)[-1]
+        if names[name] == 1:
+            by_key.setdefault(name, path)
+    sources: list[dict[str, str]] = []
+    dropped = 0
+    seen: set[tuple[str, str]] = set()
+    for item in data.get("sources") or []:
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        named = str(item.get("path") or "")
+        path = by_key.get(_note_key(named)) or by_key.get(_note_key(named).rsplit("/", 1)[-1])
+        if not path:
+            dropped += 1
+            continue
+        heading = str(item.get("heading") or "").strip()
+        body = sent.get(path, "")
+        if heading and not re.search(r"^#+\s*" + re.escape(heading) + r"\s*$", body, flags=re.I | re.M):
+            heading = ""
+        if (path, heading) in seen:
+            continue
+        seen.add((path, heading))
+        sources.append({"path": path, "heading": heading, "why": str(item.get("why") or "").strip()[:200],
+                        "brief": path not in sent})
+    gaps = data.get("gaps")
+    if isinstance(gaps, str):
+        gaps = [g.strip("- ").strip() for g in gaps.splitlines()]
+    gaps = [str(g).strip() for g in (gaps or []) if str(g).strip()][:10]
+    return Answer(answer=str(data.get("answer") or "").strip()[:MAX_ANSWER_CHARS], sources=sources, gaps=gaps,
+                  dropped=dropped, decision_question=bool(data.get("decision_question")))
+
+
+def ask(provider: AiProvider, question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
+        sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "") -> Answer:
+    """One call. Raises whatever the provider raises."""
+    ai_result = provider.complete(TASK_BOARD, ask_prompt(question, knowledge_text, kpi_text, history, project))
+    answer = parse_answer(ai_result.text, sent, briefs)
+    answer.ai_result = ai_result
+    return answer
+
+
+def project_kpi_text(config: dict, projects=None, *, today: date | None = None) -> str:
+    """Every KPI note of the chosen project(s), whole, with its freshness
+    line, within ``KPI_TOKEN_CAP`` - the agent has no swim lane, so it gets
+    them all."""
+    vault_path = _config_value(config, "knowledge.vault_path")
+    if not vault_path:
+        return ""
+    vault = Path(str(vault_path)).expanduser()
+    chosen = _project_list(projects) if projects is not None else active_projects(config)
+    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), chosen) if n.kind == "kpi"]
+    stale_days = int(_config_value(config, "knowledge.kpi_stale_days") or KPI_STALE_DAYS)
+    day = today or date.today()
+    limit = KPI_TOKEN_CAP * _CHARS_PER_TOKEN
+    kept: list[str] = []
+    used = 0
+    for note in notes:
+        chunk = f"### {note.relative}\n{_freshness(note, day, stale_days)}\n\n{note.body.strip()}"
+        if used + len(chunk) > limit and kept:
+            break
+        kept.append(chunk[:limit])
+        used += len(chunk)
+    text = "\n\n".join(kept)
+    if len(notes) > len(kept):
+        text += f"\n\n[{len(notes) - len(kept)} further KPI note(s) omitted: over the KPI budget]"
+    return text
+
+
+# -- threads ------------------------------------------------------------------
+
+@dataclass
+class Thread:
+    """One conversation with the vault, kept until Alex closes it and
+    readable after that. Stored as one JSON file, never in the vault."""
+    id: str
+    projects: list[str] = field(default_factory=list)
+    budget: int = DEFAULT_TOKEN_BUDGET
+    status: str = "open"                                   # open, closed
+    turns: list[dict[str, Any]] = field(default_factory=list)   # question, answer, sources, gaps, dropped, paths, briefs, at
+    calls: list[dict[str, Any]] = field(default_factory=list)   # the statistics rows
+    created: float = field(default_factory=time.time)
+    updated: float = field(default_factory=time.time)
+    written_path: str | None = None                        # the vault note written at the close, if any
+    extra: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+
+    @property
+    def title(self) -> str:
+        return (self.turns[0]["question"] if self.turns else "").strip()[:120] or "New thread"
+
+    def history(self) -> list[tuple[str, str]]:
+        return [(t["question"], t["answer"]) for t in self.turns if t.get("answer")]
+
+    def summary(self) -> dict[str, Any]:
+        return {"id": self.id, "title": self.title, "status": self.status, "questions": len(self.turns),
+                "projects": list(self.projects), "created": self.created, "updated": self.updated}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "projects": list(self.projects), "budget": self.budget, "status": self.status,
+                "turns": self.turns, "calls": self.calls, "created": self.created, "updated": self.updated,
+                "written_path": self.written_path, "extra": list(self.extra), "exclude": list(self.exclude)}
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> "Thread":
+        thread = Thread(id=str(data.get("id") or uuid.uuid4().hex[:12]))
+        thread.projects = [str(p) for p in data.get("projects") or []]
+        thread.budget = int(data.get("budget") or DEFAULT_TOKEN_BUDGET)
+        thread.status = "closed" if data.get("status") == "closed" else "open"
+        thread.turns = [t for t in data.get("turns") or [] if isinstance(t, dict)]
+        thread.calls = [c for c in data.get("calls") or [] if isinstance(c, dict)]
+        thread.created = float(data.get("created") or time.time())
+        thread.updated = float(data.get("updated") or thread.created)
+        thread.written_path = data.get("written_path")
+        thread.extra = [str(x) for x in data.get("extra") or []]
+        thread.exclude = [str(x) for x in data.get("exclude") or []]
+        return thread
+
+
+_ID = re.compile(r"^[a-z0-9]{6,32}$")
+
+
+class ThreadStore:
+    """One JSON file per thread in ``folder``; the folder is created on the
+    first write. A file that does not parse is skipped, never deleted."""
+
+    def __init__(self, folder: Path | str) -> None:
+        self.folder = Path(folder)
+
+    def _path(self, thread_id: str) -> Path:
+        if not _ID.match(thread_id):
+            raise ValueError(f"bad thread id: {thread_id!r}")
+        return self.folder / f"{thread_id}.json"
+
+    def new(self, projects: list[str] | None = None, budget: int | None = None) -> Thread:
+        return Thread(id=uuid.uuid4().hex[:12], projects=list(projects or []), budget=int(budget or DEFAULT_TOKEN_BUDGET))
+
+    def save(self, thread: Thread) -> Path:
+        thread.updated = time.time()
+        self.folder.mkdir(parents=True, exist_ok=True)
+        path = self._path(thread.id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(thread.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(path)
+        return path
+
+    def load(self, thread_id: str) -> Thread | None:
+        path = self._path(thread_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return Thread.from_dict(data) if isinstance(data, dict) else None
+
+    def delete(self, thread_id: str) -> bool:
+        path = self._path(thread_id)
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
+    def list(self) -> list[dict[str, Any]]:
+        """Newest first."""
+        threads: list[Thread] = []
+        if not self.folder.is_dir():
+            return []
+        for path in self.folder.glob("*.json"):
+            thread = self.load(path.stem) if _ID.match(path.stem) else None
+            if thread is not None:
+                threads.append(thread)
+        threads.sort(key=lambda t: t.updated, reverse=True)
+        return [t.summary() for t in threads]

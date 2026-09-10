@@ -172,11 +172,13 @@
     else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
     // The path is a tooltip, not a label (9 September 2026): hover to see it.
     chip.title = status.error || (config.vault_path ? `Knowledge source: ${config.vault_path}` : "Set a vault folder in Options");
-    const hint = $("home-hint");
-    if (!config.model) hint.innerHTML = '<span class="error">No model configured. Open Options.</span>';
-    else if (!status.configured) hint.textContent = "No knowledge source set. The board answers from your question alone.";
-    else if (!status.ok) hint.innerHTML = `<span class="error">${esc(status.error)}</span>`;
-    else hint.textContent = `Reads up to ${config.token_budget} tokens of notes from your vault per call.`;
+    const problem = !config.model ? '<span class="error">No model configured. Open Options.</span>'
+      : !status.configured ? "No knowledge source set. The board answers from your question alone."
+      : !status.ok ? `<span class="error">${esc(status.error)}</span>` : "";
+    $("home-hint").innerHTML = problem || `${status.notes} notes in the vault.`;
+    $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
+    $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question, one call.`;
+    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "ai")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
   }
 
   async function loadConfig() {
@@ -193,9 +195,17 @@
   function defaultProjects() {
     return String(config.project || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
   }
+  function projectLabel() {
+    return !chosenProjects || chosenProjects.length === 0 ? "All projects" : chosenProjects.length === 1 ? chosenProjects[0] : `${chosenProjects.length} projects`;
+  }
+  function renderProjectChips() {
+    ["board-project", "ask-project", "thread-project"].forEach((id) => { if ($(id)) $(id).textContent = projectLabel(); });
+  }
   function renderProjectPicker() {
     const names = (config.projects || []).slice();
-    if (chosenProjects === null) chosenProjects = defaultProjects();
+    // Chosen once on the start page, remembered in the browser, carried into every use case (spec 9.5).
+    if (chosenProjects === null) chosenProjects = Array.isArray(store.get("projects")) ? store.get("projects") : defaultProjects();
+    renderProjectChips();
     chosenProjects.forEach((p) => { if (!names.some((n) => n.toLowerCase() === p.toLowerCase())) names.push(p); });
     const all = chosenProjects.length === 0;
     $("projects-list").innerHTML = `<label class="all"><input type="checkbox" value="" ${all ? "checked" : ""}> All projects</label>` +
@@ -206,6 +216,7 @@
       else {
         chosenProjects = Array.from($("projects-list").querySelectorAll("input")).filter((b) => b.value && b.checked).map((b) => b.value);
       }
+      store.set("projects", chosenProjects);
       renderProjectPicker();
     }));
     $("btn-projects").disabled = names.length === 0;
@@ -334,6 +345,7 @@
   }
 
   function renderNav() {
+    if (currentRoute !== "board") { $("btn-nav-back").disabled = true; $("btn-nav-forward").disabled = true; return; }
     const nav = (session && session.nav) || { back: false, forward: false };
     const onHome = !$("screen-home").hidden;
     $("btn-nav-back").disabled = !session || onHome || !nav.back && !["questions"].includes(session.phase);
@@ -349,6 +361,7 @@
   }
 
   function render() {
+    if (currentRoute !== "board") return;
     if (!session) { show("home"); renderNav(); return; }
     store.set("session", session.id);
     if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
@@ -797,10 +810,12 @@
     } catch (err) { setError("close-error", err.message); }
   }
 
-  function renderProposal() {
+  let memoryTarget = "board";        // whose proposal the write and discard buttons act on: "board" or "ask"
+  function renderProposal(proposal, vaultPath) {
     if (!$("screen-proposal").hidden) return;
-    const p = session.proposal;
-    $("prop-vault").value = session.knowledge.vault_path || "";
+    const p = proposal || session.proposal;
+    memoryTarget = proposal ? "ask" : "board";
+    $("prop-vault").value = vaultPath != null ? vaultPath : (session.knowledge.vault_path || "");
     $("prop-path").value = p.path;
     $("prop-title").value = p.title;
     $("prop-tags").value = p.tags.join(", ");
@@ -817,13 +832,17 @@
       tags: $("prop-tags").value.split(",").map((t) => t.trim()).filter(Boolean),
       body: $("prop-body").value,
     };
-    try { session = await api("POST", `/api/sessions/${session.id}/memory`, body); render(); }
-    catch (err) { setError("proposal-error", err.message); }
+    try {
+      if (memoryTarget === "ask") { thread = await api("POST", `/api/ask/${thread.id}/memory`, body); renderThread(); }
+      else { session = await api("POST", `/api/sessions/${session.id}/memory`, body); render(); }
+    } catch (err) { setError("proposal-error", err.message); }
   }
 
   async function discardMemory() {
-    try { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); }
-    catch (err) { setError("proposal-error", err.message); }
+    try {
+      if (memoryTarget === "ask") { thread = await api("POST", `/api/ask/${thread.id}/discard-memory`); renderThread(); }
+      else { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); }
+    } catch (err) { setError("proposal-error", err.message); }
   }
 
   // -- statistics: tokens and time per step (9 September 2026) ----------------
@@ -855,9 +874,10 @@
 
   function openStats() {
     const dialog = $("stats-dialog");
-    const stats = session && session.stats;
+    const source = currentRoute === "thread" ? thread : session;
+    const stats = source && source.stats;
     if (!stats || !stats.calls.length) {
-      $("stats-summary").textContent = session ? "No model call yet for this topic." : "Start a topic; the statistics fill in as the board works.";
+      $("stats-summary").textContent = source ? "No model call yet." : "Start a topic or a thread; the statistics fill in as the model works.";
       $("stats-body").innerHTML = "";
       dialog.hidden = false;
       return;
@@ -898,7 +918,7 @@
 
   // Knowledge tokens per member of the last run, by tier (spec 5.1).
   function knowledgeSplitTable() {
-    const split = (session && session.knowledge_split) || {};
+    const split = (currentRoute === "board" && session && session.knowledge_split) || {};
     const names = Object.keys(split);
     if (!names.length) return "";
     const rows = names.map((m) => `<tr><td>${esc(m)}</td><td class="num">${fmtNum(split[m].core)}</td><td class="num">${fmtNum(split[m].own)}</td><td class="num">${fmtNum(split[m].brief)}</td></tr>`).join("");
@@ -930,7 +950,8 @@
     $("question").value = keepQuestion ? question : "";
     store.set("question", $("question").value);
     $("followup").value = "";
-    show("home");
+    setPath("/board");
+    show("home"); renderNav();
     $("question").focus();
   }
 
@@ -943,13 +964,237 @@
       const data = await api("GET", `/api/sessions/${id}`);
       if (["closed", "written"].includes(data.phase)) { forgetSession(); return false; }
       session = data;
-      render();
       if (session.phase === "result") $("followup").value = draft().followup || "";
       return true;
     } catch (e) {
       store.del("session");
       return false;
     }
+  }
+
+  // -- routes (spec 9.5): one page, the path decides the screen -------------
+
+  let currentRoute = "start";
+  function routeOf(pathname) {
+    if (pathname === "/board") return "board";
+    if (pathname === "/ask") return "ask";
+    if (pathname.startsWith("/ask/")) return "thread";
+    return "start";
+  }
+  function setPath(path) {
+    currentRoute = routeOf(path);
+    if (location.pathname !== path) { try { history.pushState({ route: currentRoute }, "", path); } catch (e) { /* not available */ } }
+  }
+  function navigate(path) { setPath(path); renderRoute(); }
+  function renderRoute() {
+    currentRoute = routeOf(location.pathname);
+    lastPhase = null;
+    if (currentRoute !== "thread") stopThreadPolling();
+    if (currentRoute !== "board") stopPolling();
+    renderProjectChips();
+    if (currentRoute === "start") { show("start"); renderNav(); return; }
+    if (currentRoute === "board") { if (session) render(); else { show("home"); renderNav(); } return; }
+    if (currentRoute === "ask") { show("ask"); renderNav(); loadThreads(); return; }
+    openThread(location.pathname.split("/")[2]);
+  }
+
+  // -- Ask the vault (spec 10) ------------------------------------------------
+
+  let thread = null;                 // the open thread's snapshot
+  let threadPollTimer = null;
+  let askPicks = { extra: [], exclude: [] };
+  let askOutlineCache = null;
+  let askEstimateTimer = null;
+  let askEstimateSeq = 0;
+  function stopThreadPolling() { if (threadPollTimer) { clearInterval(threadPollTimer); threadPollTimer = null; } }
+  function startThreadPolling() {
+    stopThreadPolling();
+    threadPollTimer = setInterval(async () => {
+      if (!thread || currentRoute !== "thread") return stopThreadPolling();
+      try { thread = await api("GET", `/api/ask/${thread.id}`); renderThread(); }
+      catch (err) { stopThreadPolling(); setError("thread-error", err.message); }
+    }, 1000);
+  }
+  // A small Markdown: paragraphs, bullet and numbered lists, bold, code. Escaped first.
+  function md(text) {
+    const blocks = String(text || "").replace(/\r/g, "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+    return blocks.map((b) => {
+      const rows = b.split("\n").map((r) => r.trim()).filter(Boolean);
+      if (rows.every((r) => /^[-*•]\s+/.test(r))) return `<ul>${rows.map((r) => `<li>${inline(r.replace(/^[-*•]\s+/, ""))}</li>`).join("")}</ul>`;
+      if (rows.every((r) => /^\d+[.)]\s+/.test(r))) return `<ol>${rows.map((r) => `<li>${inline(r.replace(/^\d+[.)]\s+/, ""))}</li>`).join("")}</ol>`;
+      if (rows.length === 1 && /^#{1,6}\s+/.test(rows[0])) return `<p><strong>${inline(rows[0].replace(/^#{1,6}\s+/, ""))}</strong></p>`;
+      return `<p>${rows.map(inline).join("<br>")}</p>`;
+    }).join("");
+  }
+  function obsidianLink(path) {
+    const file = path.replace(/\.md$/i, "");
+    return `obsidian://open?vault=${encodeURIComponent(config.vault_name || "")}&file=${encodeURIComponent(file)}`;
+  }
+  function fmtDate(seconds) {
+    try { return new Date(seconds * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }); } catch (e) { return ""; }
+  }
+  async function loadThreads() {
+    const box = $("thread-list");
+    try {
+      const data = await api("GET", "/api/ask");
+      const rows = data.threads || [];
+      box.innerHTML = rows.length ? rows.map((r) => `
+        <div class="thread-row" data-id="${esc(r.id)}">
+          <button type="button" class="thread-open" title="Open this thread">${esc(r.title)}</button>
+          ${r.status === "closed" ? '<span class="closed-tag">closed</span>' : ""}
+          <span class="thread-meta">${r.questions} question(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
+          <button type="button" class="ghost small-btn thread-delete" title="Delete this thread">Delete</button>
+        </div>`).join("") : "<p class='muted small'>No threads yet. Ask the first question above.</p>";
+      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(`/ask/${b.closest(".thread-row").dataset.id}`)));
+      box.querySelectorAll(".thread-delete").forEach((b) => b.addEventListener("click", async () => {
+        const id = b.closest(".thread-row").dataset.id;
+        if (!window.confirm("Delete this thread? Its questions and answers are removed; a note written to the vault stays.")) return;
+        try { await api("DELETE", `/api/ask/${id}`); loadThreads(); } catch (err) { setError("ask-error", err.message); }
+      }));
+    } catch (err) { setError("ask-error", err.message); }
+  }
+  async function newThread(event) {
+    event.preventDefault();
+    const question = $("ask-question").value.trim();
+    if (!question) return;
+    setError("ask-error", "");
+    $("btn-ask-new").disabled = true;
+    try {
+      const created = await api("POST", "/api/ask", { projects: chosenProjects || [], budget: config.ask_budget });
+      thread = await api("POST", `/api/ask/${created.id}/question`, { question });
+      store.del("ask-question");
+      $("ask-question").value = "";
+      setPath(`/ask/${thread.id}`);
+      askPicks = { extra: [], exclude: [] }; askOutlineCache = null;
+      renderThread();
+    } catch (err) { setError("ask-error", err.message); }
+    $("btn-ask-new").disabled = false;
+  }
+  async function openThread(id) {
+    try {
+      thread = await api("GET", `/api/ask/${id}`);
+      askPicks = { extra: thread.extra || [], exclude: thread.exclude || [] }; askOutlineCache = null;
+      $("thread-question").value = store.get(`thread-draft:${id}`) || "";
+      $("ask-budget").value = thread.budget != null ? thread.budget : config.ask_budget;
+      renderThread();
+    } catch (err) { setError("ask-error", err.message); navigate("/ask"); }
+  }
+  function renderTurnCard(t) {
+    const sources = (t.sources || []).length
+      ? `<ul>${t.sources.map((s) => `<li><a href="${obsidianLink(s.path)}" title="Open in Obsidian">${esc(s.path)}</a>${s.heading ? ` · ${esc(s.heading)}` : ""}${s.brief ? ' <span class="brief-tag" title="Only its one-line summary was sent">summary only</span>' : ""}${s.why ? ` <span class="why">${esc(s.why)}</span>` : ""}</li>`).join("")}</ul>`
+      : "<span class='muted'>no page named</span>";
+    const dropped = t.dropped ? `<p class="muted small">${t.dropped} source(s) the model named were not among the pages sent and were dropped.</p>` : "";
+    const gaps = (t.gaps || []).length ? `<dt>Not in the vault</dt><dd class="gaps"><ul>${t.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></dd>` : "";
+    const hint = t.decision_question ? `<p class="hint-board muted">This reads like a decision. <a href="/board" class="to-board">Put it to the Board</a> for an assessment by every swim lane.</p>` : "";
+    const parse = t.parse_error ? `<p class="error small">${esc(t.parse_error)}; the text is shown as it came.</p>` : "";
+    return `<div class="turn answer"><div class="q">${esc(t.question)}</div><div class="a">${md(t.answer)}</div>${parse}
+      <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${dropped}${hint}</div>`;
+  }
+  function renderThread() {
+    if (!thread) return;
+    const closed = thread.status === "closed";
+    if (thread.phase === "proposing") { show("proposing"); startThreadPolling(); return; }
+    if (thread.phase === "proposal" && thread.proposal) { stopThreadPolling(); renderProposal(thread.proposal, config.vault_path || ""); return; }
+    $("thread-title").textContent = thread.title || "New thread";
+    const calls = (thread.stats && thread.stats.calls || []).length;
+    $("thread-state").textContent = `${(thread.turns || []).length} question(s) · ${calls} model call(s)` + (closed ? " · closed" : " · open until you close it");
+    const key = `${thread.id}:${(thread.turns || []).length}:${thread.busy}:${thread.status}:${thread.phase}`;
+    if ($("thread-turns").dataset.key !== key) {
+      $("thread-turns").dataset.key = key;
+      $("thread-turns").innerHTML = (thread.turns || []).map(renderTurnCard).join("");
+      $("thread-turns").querySelectorAll("a.to-board").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate("/board"); }));
+    }
+    $("thread-pending").hidden = !thread.busy;
+    if (thread.busy) $("thread-pending-text").textContent = `Reading the vault and answering: ${thread.pending_question || ""}`;
+    $("thread-form").hidden = closed || thread.busy;
+    $("thread-closed").hidden = !closed || thread.busy;
+    if (closed) {
+      $("thread-closed-text").textContent = thread.written_path
+        ? `This thread is closed. A note was written to your vault: ${thread.written_path}`
+        : "This thread is closed. It stays here to read; it takes no further questions.";
+    }
+    setError("thread-error", thread.error || "");
+    show("thread"); renderNav();
+    if (thread.busy) startThreadPolling(); else { stopThreadPolling(); if (!closed) requestAskEstimate(); }
+  }
+  async function askInThread(event) {
+    event.preventDefault();
+    const question = $("thread-question").value.trim();
+    if (!question || !thread) return;
+    setError("thread-error", "");
+    try {
+      thread = await api("POST", `/api/ask/${thread.id}/question`, { question, budget: Number($("ask-budget").value), extra: askPicks.extra, exclude: askPicks.exclude });
+      $("thread-question").value = "";
+      store.del(`thread-draft:${thread.id}`);
+      renderThread();
+    } catch (err) { setError("thread-error", err.message); }
+  }
+  async function stopThread() {
+    if (!thread) return;
+    try { thread = await api("POST", `/api/ask/${thread.id}/stop`); renderThread(); } catch (err) { setError("thread-error", err.message); }
+  }
+  async function closeThread(remember) {
+    if (!thread) return;
+    try {
+      thread = await api("POST", `/api/ask/${thread.id}/close`, { remember });
+      $("thread-close-dialog").hidden = true;
+      renderThread();
+    } catch (err) { setError("thread-close-error", err.message); }
+  }
+  function renderAskSections(e) {
+    const row = (s) => `
+      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`;
+    const briefRow = (b) => `
+      <li><input type="checkbox" data-id="${esc(b.path)}" ${askPicks.exclude.includes(b.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(b.path)} <span class="brief-tag" title="One line, not the page">summary</span>${b.summary ? `<span class="reason">${esc(b.summary)}</span>` : ""}</li>`;
+    const full = (e.sections || []).length ? `<p class="tier">In full <span class="muted small">${fmtNum(e.knowledge_tokens)} tokens · KPI notes ${fmtNum(e.kpi_tokens)} tokens</span></p><ul class="sec-list">${e.sections.map(row).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>";
+    const brief = (e.briefs || []).length ? `<p class="tier">As one line each</p><ul class="sec-list">${e.briefs.map(briefRow).join("")}</ul>` : "";
+    $("ask-estimate-notes").innerHTML = full + brief;
+    $("ask-estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      const id = box.dataset.id;
+      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
+      if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
+      requestAskEstimate();
+    }));
+  }
+  function renderAskOutline() {
+    const filter = ($("ask-outline-filter").value || "").toLowerCase();
+    const rows = (askOutlineCache || []).map((note) => {
+      const secs = note.sections.filter((s) => !filter || note.path.toLowerCase().includes(filter) || (s.heading || "").toLowerCase().includes(filter));
+      if (!secs.length) return "";
+      return `<div class="note"><div class="note-title">${esc(note.path)}</div>${secs.map((s) => `
+        <label><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.extra.includes(s.id) ? "checked" : ""}> ${esc(s.heading || "(whole note)")}<span class="tok">${fmtNum(s.tokens)}</span></label>`).join("")}</div>`;
+    }).join("");
+    $("ask-outline").innerHTML = rows || "<span class='muted small'>Nothing matches.</span>";
+    $("ask-outline").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
+      const id = box.dataset.id;
+      askPicks.extra = askPicks.extra.filter((x) => x !== id);
+      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
+      if (box.checked) askPicks.extra.push(id);
+      requestAskEstimate();
+    }));
+  }
+  function requestAskEstimate() {
+    if (askEstimateTimer) clearTimeout(askEstimateTimer);
+    askEstimateTimer = setTimeout(async () => {
+      if (!thread || currentRoute !== "thread" || $("thread-form").hidden) return;
+      const seq = ++askEstimateSeq;
+      $("ask-budget-value").textContent = `${fmtNum(Number($("ask-budget").value))} tokens`;
+      try {
+        const e = await api("POST", `/api/ask/${thread.id}/estimate`, {
+          question: $("thread-question").value, budget: Number($("ask-budget").value),
+          extra: askPicks.extra, exclude: askPicks.exclude, outline: !askOutlineCache,
+        });
+        if (seq !== askEstimateSeq) return;
+        const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} learned from ${e.overhead_learned_from} real call(s) of this thread` : `overhead of ${fmtNum(e.overhead_per_call)} assumed until the first real call`;
+        const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
+        $("ask-estimate").innerHTML = `<strong>1 model call</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, the call count is exact`;
+        renderAskSections(e);
+        if (e.outline) { askOutlineCache = e.outline; renderAskOutline(); }
+      } catch (err) {
+        if (seq === askEstimateSeq) $("ask-estimate").textContent = `No estimate: ${err.message}`;
+      }
+    }, 250);
   }
 
   // -- wiring -------------------------------------------------------------
@@ -982,7 +1227,22 @@
   $("btn-discard").addEventListener("click", discardMemory);
   $("btn-new").addEventListener("click", () => newTopic(false));
   $("btn-error-home").addEventListener("click", () => newTopic(true));
-  $("btn-brand").addEventListener("click", () => newTopic(false));
+  $("btn-brand").addEventListener("click", () => navigate("/"));
+  document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
+  $("ask-new-form").addEventListener("submit", newThread);
+  $("ask-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) newThread(e); });
+  $("ask-question").addEventListener("input", () => store.set("ask-question", $("ask-question").value));
+  $("thread-form").addEventListener("submit", askInThread);
+  $("thread-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) askInThread(e); });
+  $("thread-question").addEventListener("input", () => { if (thread) store.set(`thread-draft:${thread.id}`, $("thread-question").value); requestAskEstimate(); });
+  $("ask-budget").addEventListener("input", requestAskEstimate);
+  $("btn-ask-budget-info").addEventListener("click", () => { $("ask-budget-info").hidden = !$("ask-budget-info").hidden; });
+  $("ask-outline-filter").addEventListener("input", renderAskOutline);
+  $("btn-thread-stop").addEventListener("click", stopThread);
+  $("btn-thread-close").addEventListener("click", () => { setError("thread-close-error", ""); $("thread-close-dialog").hidden = false; });
+  $("btn-thread-close-cancel").addEventListener("click", () => { $("thread-close-dialog").hidden = true; });
+  $("btn-thread-close-no").addEventListener("click", () => closeThread(false));
+  $("btn-thread-close-yes").addEventListener("click", () => closeThread(true));
   $("btn-projects").addEventListener("click", () => toggleProjectMenu());
   document.addEventListener("click", (e) => { if (!$("project-picker").contains(e.target)) toggleProjectMenu(false); });
   $("btn-projects-default").addEventListener("click", async () => {
@@ -993,7 +1253,10 @@
   $("btn-nav-back").addEventListener("click", goBack);
   $("btn-nav-forward").addEventListener("click", goForward);
   window.addEventListener("popstate", () => {
-    // The browser's own Back: one step back in the topic, not out of the page.
+    // The browser's own Back: between the use cases by path; inside the
+    // board, one step back in the topic, not out of the page.
+    if (routeOf(location.pathname) !== currentRoute) { renderRoute(); return; }
+    if (currentRoute !== "board") return;
     if (session && $("screen-home").hidden) goBack(); else if (session) goForward();
   });
   $("btn-error-back").addEventListener("click", goBack);
@@ -1010,8 +1273,9 @@
   document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
   $("question").value = store.get("question") || "";
+  $("ask-question").value = store.get("ask-question") || "";
   loadConfig()
     .then(() => resumeSession())
-    .then((resumed) => { if (!resumed) show("home"); })
-    .catch((err) => { $("home-hint").textContent = err.message; show("home"); });
+    .then(() => renderRoute())
+    .catch((err) => { $("home-hint").textContent = err.message; show("start"); });
 })();

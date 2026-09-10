@@ -37,10 +37,12 @@ from .agent.opencode_client import opencode_config_problem
 from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
+from . import ask as ask_mod
 from . import picker
 from . import roles as roles_mod
 from .agent.opencode_client import stop_call
 from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
+from .audit import log_run
 from .board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -86,6 +88,8 @@ def _call_label(prompt: str, phase: str) -> tuple[str, str]:
     member call, the member. Deterministic, no model involved."""
     if picker.MARKER in prompt:
         return ("knowledge pick", "")
+    if ask_mod.MARKER in prompt:
+        return ("ask the vault", "")
     if "## Question from Alex" in prompt:
         return ("clarifier", "")
     if "## Vault outline" in prompt:
@@ -142,6 +146,15 @@ MAX_BUDGET = 12000                # the slider's top: knowledge tokens per membe
 MAX_BODY_BYTES = 4 * 1024 * 1024  # a request body larger than this is refused
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on the gateway on 9 September 2026
+
+
+def site_name(config: dict) -> str:
+    """The site's name under ``.localhost`` (spec 9.5, decision 21):
+    ``server.site_name``, lower-cased and stripped to letters, digits and
+    hyphens; ``"ai"`` by default and when nothing is left."""
+    raw = str(_get(config, "server.site_name", "") or "").lower()
+    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch == "-")
+    return cleaned or "ai"
 
 
 def _selection_value(value: Any) -> str:
@@ -335,6 +348,74 @@ class Session:
         return max(0, deltas[len(deltas) // 2]), len(deltas)
 
 
+class AskSession:
+    """One open thread of Ask the vault (spec section 10) while the server
+    runs: the thread itself (persisted after every change), the running
+    call, the memory step. Duck-typed to what ``RecordingProvider`` needs
+    from a ``Session``: ``lock``, ``phase``, ``cancelled``,
+    ``active_threads``, ``record_call``."""
+
+    def __init__(self, thread: "ask_mod.Thread") -> None:
+        self.thread = thread
+        self.lock = threading.RLock()
+        self.cancelled = threading.Event()
+        self.active_threads: set[int] = set()
+        self.phase = "idle"                 # idle, asking, proposing, proposal, written
+        self.busy = False
+        self.error: str | None = None
+        self.pending_question: str | None = None
+        self.proposal: memory_writer.MemoryProposal | None = None
+        self.marks: list[dict[str, Any]] = []
+        self.started = time.time()
+
+    def mark(self, phase: str) -> None:
+        self.marks.append({"phase": phase, "at": time.time()})
+
+    def record_call(self, step: str, member: str, input_tokens: int | None, output_tokens: int | None,
+                    seconds: float, error: str | None = None, estimated: int | None = None) -> None:
+        with self.lock:
+            self.thread.calls.append({
+                "n": len(self.thread.calls) + 1, "step": step, "member": member, "phase": self.phase,
+                "input_tokens": input_tokens, "output_tokens": output_tokens, "seconds": round(seconds, 1),
+                "estimated": estimated, "error": error, "at": time.time(),
+            })
+
+    def overhead_per_call(self) -> tuple[int, int]:
+        with self.lock:
+            deltas = sorted(c["input_tokens"] - c["estimated"] for c in self.thread.calls
+                            if c.get("input_tokens") is not None and c.get("estimated") is not None)
+        if not deltas:
+            return DEFAULT_CALL_OVERHEAD, 0
+        return max(0, deltas[len(deltas) // 2]), len(deltas)
+
+    def stop_work(self) -> int:
+        self.cancelled.set()
+        with self.lock:
+            threads = list(self.active_threads)
+        return sum(1 for tid in threads if stop_call(tid))
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            thread = self.thread
+            proposal = None
+            if self.proposal is not None:
+                proposal = {"path": self.proposal.path, "title": self.proposal.title, "tags": list(self.proposal.tags),
+                            "body": self.proposal.body, "mode": self.proposal.mode, "parse_error": self.proposal.parse_error,
+                            "preview": memory_writer.preview(self.proposal)}
+            return {
+                "id": thread.id, "kind": "ask", "title": thread.title, "status": thread.status,
+                "phase": self.phase, "busy": self.busy, "error": self.error,
+                "pending_question": self.pending_question,
+                "projects": list(thread.projects), "budget": thread.budget,
+                "extra": list(thread.extra), "exclude": list(thread.exclude),
+                "turns": deepcopy(thread.turns),
+                "llm_calls": len([c for c in thread.calls if not c.get("error")]),
+                "stats": {"calls": list(thread.calls), "marks": list(self.marks), "started": self.started},
+                "proposal": proposal, "written_path": thread.written_path,
+                "created": thread.created, "updated": thread.updated,
+            }
+
+
 class BoardServer:
     """State and behaviour behind the API; the HTTP handler only routes."""
 
@@ -343,6 +424,7 @@ class BoardServer:
         self.config_path = config_path
         self._provider_override = provider
         self.sessions: dict[str, Session] = {}
+        self.asks: dict[str, AskSession] = {}          # open Ask the vault threads, by id
         self.lock = threading.Lock()
 
     # -- provider and config ------------------------------------------------
@@ -382,6 +464,9 @@ class BoardServer:
             "opencode_config": _get(self.config, "provider.opencode.config_file", "") or "",
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "selection": _selection_value(_get(self.config, "knowledge.selection")),
+            "site_name": site_name(self.config),
+            "ask_budget": int(_get(self.config, "ask.token_budget", ask_mod.DEFAULT_TOKEN_BUDGET) or ask_mod.DEFAULT_TOKEN_BUDGET),
+            "vault_name": self.vault_name(),
             "knowledge_status": status,
             "roles_folder": _get(self.config, "knowledge.roles_folder", "") or "",
             "roles_status": self._roles_status(),
@@ -1060,6 +1145,275 @@ class BoardServer:
             session.forward = []
             raise ApiError(409, "Nothing to go forward to.")
 
+    # -- Ask the vault (spec section 10) --------------------------------------
+
+    def vault_name(self) -> str:
+        """The Obsidian vault name the page links to (``obsidian://open``):
+        ``knowledge.vault_name``, else the vault folder's name."""
+        configured = _get(self.config, "knowledge.vault_name", "")
+        if configured:
+            return str(configured)
+        vault_path = _get(self.config, "knowledge.vault_path", "")
+        return Path(str(vault_path)).expanduser().name if vault_path else ""
+
+    def thread_store(self) -> "ask_mod.ThreadStore":
+        configured = _get(self.config, "server.threads_folder", "")
+        if configured:
+            folder = Path(str(configured)).expanduser()
+        else:
+            base = self.config_path.parent if self.config_path else Path.cwd() / "config"
+            folder = base / "threads"
+        return ask_mod.ThreadStore(folder)
+
+    def list_threads(self) -> list[dict[str, Any]]:
+        rows = self.thread_store().list()
+        with self.lock:
+            live = {tid: a for tid, a in self.asks.items()}
+        for row in rows:
+            session = live.get(row["id"])
+            row["busy"] = bool(session and session.busy)
+        return rows
+
+    def new_thread(self, projects: Any = None, budget: Any = None) -> AskSession:
+        projects_list = knowledge_mod._project_list(projects) if projects is not None else knowledge_mod.active_projects(self.config)
+        default_budget = int(_get(self.config, "ask.token_budget", ask_mod.DEFAULT_TOKEN_BUDGET) or ask_mod.DEFAULT_TOKEN_BUDGET)
+        try:
+            chosen_budget = int(budget) if budget not in (None, "") else default_budget
+        except (TypeError, ValueError):
+            chosen_budget = default_budget
+        store = self.thread_store()
+        thread = store.new(projects_list, max(0, min(chosen_budget, 40000)))
+        try:
+            store.save(thread)
+        except OSError as exc:
+            raise ApiError(500, f"Cannot write the thread file: {exc}")
+        session = AskSession(thread)
+        with self.lock:
+            self.asks[thread.id] = session
+        return session
+
+    def get_thread(self, thread_id: str) -> AskSession:
+        with self.lock:
+            session = self.asks.get(thread_id)
+        if session is not None:
+            return session
+        try:
+            thread = self.thread_store().load(thread_id)
+        except ValueError:
+            raise ApiError(404, "unknown thread")
+        if thread is None:
+            raise ApiError(404, "unknown thread")
+        session = AskSession(thread)
+        with self.lock:
+            session = self.asks.setdefault(thread_id, session)
+        return session
+
+    def delete_thread(self, thread_id: str) -> None:
+        with self.lock:
+            session = self.asks.pop(thread_id, None)
+        if session is not None and session.busy:
+            session.stop_work()
+        try:
+            found = self.thread_store().delete(thread_id)
+        except ValueError:
+            raise ApiError(404, "unknown thread")
+        if not found and session is None:
+            raise ApiError(404, "unknown thread")
+
+    def _save_thread(self, session: AskSession) -> None:
+        try:
+            self.thread_store().save(session.thread)
+        except OSError as exc:
+            session.error = f"The thread could not be saved: {exc}"
+
+    def _ask_selection(self, session: AskSession, question: str, budget: int,
+                       extra: list[str] | None = None, exclude: list[str] | None = None):
+        """The agent's knowledge: the board's ranking for one nameless
+        member, the shared core included, within ``budget``."""
+        thread = session.thread
+        query = "\n".join([question] + [t["question"] for t in thread.turns[-2:]])
+        selections = knowledge_mod.gather_for_members(
+            self.config, query, {"": []}, token_budget=max(budget, 1), projects=thread.projects,
+            extra=list(extra if extra is not None else thread.extra),
+            exclude=list(exclude if exclude is not None else thread.exclude))
+        return selections[""]
+
+    def ask_estimate(self, session: AskSession, body: dict[str, Any]) -> dict[str, Any]:
+        """One call: the prompt with the thread so far, the question, the
+        KPI notes and the knowledge block; plus the section list."""
+        thread = session.thread
+        question = str(body.get("question") or "").strip() or "(the next question)"
+        budget = int(body.get("budget") if body.get("budget") not in (None, "") else thread.budget)
+        extra = [str(x) for x in body.get("extra") or []] if "extra" in body else None
+        exclude = [str(x) for x in body.get("exclude") or []] if "exclude" in body else None
+        if not _get(self.config, "knowledge.vault_path"):
+            sel = None
+            text, kpi_text = "", ""
+        else:
+            try:
+                sel = self._ask_selection(session, question, budget, extra, exclude)
+                kpi_text = ask_mod.project_kpi_text(self.config, thread.projects)
+            except knowledge_mod.KnowledgeUnavailable as exc:
+                raise ApiError(409, str(exc))
+            text = sel.text
+        prompt = ask_mod.ask_prompt(question, text, kpi_text, thread.history(), ", ".join(thread.projects))
+        overhead, learned_from = session.overhead_per_call()
+        tokens = knowledge_mod.estimate_tokens(prompt) + overhead
+        return {
+            "calls": 1, "tokens_in": tokens, "per_call": [{"label": "ask the vault", "tokens": tokens}],
+            "overhead_per_call": overhead, "overhead_learned_from": learned_from, "budget": budget,
+            "knowledge_tokens": sel.tokens if sel else 0, "brief_tokens": sel.brief_tokens if sel else 0,
+            "kpi_tokens": knowledge_mod.estimate_tokens(kpi_text) if kpi_text else 0,
+            "briefs": [{"path": n.relative, "summary": n.summary} for n in sel.briefs] if sel else [],
+            "sections": [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
+                          "tokens": knowledge_mod.estimate_tokens(sec.body),
+                          "forced": knowledge_mod.section_id(sec) in (extra or thread.extra) or sec.relative in (extra or thread.extra),
+                          "core": knowledge_mod.section_id(sec) in sel.core_ids}
+                         for sec in sel.sections] if sel else [],
+            "forced_tokens": sel.forced_tokens if sel else 0,
+            "outline": knowledge_mod.outline(self.config, thread.projects) if body.get("outline") else None,
+        }
+
+    def ask_question(self, session: AskSession, body: dict[str, Any]) -> None:
+        question = str(body.get("question") or "").strip()
+        if not question:
+            raise ApiError(400, "Type a question first.")
+        with session.lock:
+            if session.thread.status == "closed":
+                raise ApiError(409, "This thread is closed. Start a new one.")
+            if session.busy:
+                raise ApiError(409, "Wait for the answer before asking the next question.")
+            if body.get("budget") not in (None, ""):
+                try:
+                    session.thread.budget = max(0, min(int(body["budget"]), 40000))
+                except (TypeError, ValueError):
+                    pass
+            if "extra" in body:
+                session.thread.extra = [str(x) for x in body.get("extra") or []]
+            if "exclude" in body:
+                session.thread.exclude = [str(x) for x in body.get("exclude") or []]
+            session.cancelled.clear()
+            session.busy = True
+            session.error = None
+            session.phase = "asking"
+            session.pending_question = question
+            session.mark("asked")
+        self._spawn(session, self._ask, session, question)
+
+    def _ask(self, session: AskSession, question: str) -> None:
+        thread = session.thread
+        started = time.monotonic()
+        try:
+            if _get(self.config, "knowledge.vault_path"):
+                sel = self._ask_selection(session, question, thread.budget)
+                kpi_text = ask_mod.project_kpi_text(self.config, thread.projects)
+                text, sent, briefs = sel.text, dict(sel.sent), dict(sel.brief_sent)
+                paths = sorted(sel.sent)
+            else:
+                text, kpi_text, sent, briefs, paths = "", "", {}, {}, []
+            answer = ask_mod.ask(RecordingProvider(self.provider(), session), question, text, kpi_text,
+                                 thread.history(), sent, briefs, ", ".join(thread.projects))
+        except Exception as exc:
+            if session.cancelled.is_set():
+                with session.lock:
+                    session.busy, session.phase, session.pending_question = False, "idle", None
+                return
+            with session.lock:
+                session.busy, session.phase, session.pending_question = False, "idle", None
+                session.error = f"The call failed: {exc}"
+            return
+        with session.lock:
+            if session.cancelled.is_set():
+                session.busy, session.phase, session.pending_question = False, "idle", None
+                return
+            thread.turns.append({
+                "question": question, "answer": answer.answer, "sources": answer.sources, "gaps": answer.gaps,
+                "dropped": answer.dropped, "decision_question": answer.decision_question,
+                "parse_error": answer.parse_error, "paths": paths, "briefs": sorted(briefs), "at": time.time(),
+            })
+            session.busy, session.phase, session.pending_question = False, "idle", None
+            session.mark("answered")
+            self._save_thread(session)
+        ai_result = answer.ai_result
+        log_run("ask", audit_folder=_get(self.config, "runtime.audit_folder"), pc_name=_get(self.config, "storage.pc_name", ""),
+                duration_seconds=time.monotonic() - started,
+                counts={"questions": len(thread.turns), "sources": len(answer.sources), "gaps": len(answer.gaps),
+                        "dropped_sources": answer.dropped},
+                provider=ai_result.provider if ai_result else None, model=ai_result.model if ai_result else None,
+                tokens=ai_result.total_tokens if ai_result else None)
+
+    def ask_stop(self, session: AskSession) -> None:
+        """Stop the running call; the question stays typed, nothing is recorded."""
+        session.stop_work()
+        with session.lock:
+            session.busy, session.phase, session.pending_question = False, "idle", None
+            session.mark("stopped")
+
+    def ask_close(self, session: AskSession, remember: bool) -> None:
+        """Close the thread (the page asked for confirmation first); with
+        ``remember`` the board's memory proposal is started for it."""
+        with session.lock:
+            if session.busy:
+                raise ApiError(409, "Wait for the answer before closing.")
+            if not session.thread.turns:
+                raise ApiError(409, "Nothing was asked yet - delete the thread instead.")
+            session.thread.status = "closed"
+            session.mark("closed")
+            self._save_thread(session)
+            if not remember:
+                return
+            if not _get(self.config, "knowledge.vault_path"):
+                raise ApiError(400, "No knowledge source is configured - set the vault folder in Options first.")
+            session.cancelled.clear()
+            session.phase = "proposing"
+            session.busy = True
+        self._spawn(session, self._ask_propose, session)
+
+    def _ask_propose(self, session: AskSession) -> None:
+        thread = session.thread
+        turns = [(t["question"], t["answer"]) for t in thread.turns]
+        try:
+            proposal = memory_writer.propose(
+                RecordingProvider(self.provider(), session), Path(str(_get(self.config, "knowledge.vault_path"))).expanduser(),
+                topic=thread.title, inputs={"context": "A thread of Ask the vault: questions answered from the vault."},
+                synthesis=turns[-1][1] if turns else "", turns=turns[:-1])
+        except Exception as exc:
+            with session.lock:
+                session.phase, session.busy = "idle", False
+                session.error = f"Could not propose a memory entry: {exc}"
+            return
+        with session.lock:
+            session.proposal = proposal
+            session.phase, session.busy = "proposal", False
+            session.error = None
+
+    def ask_write_memory(self, session: AskSession, edited: dict[str, Any]) -> Path:
+        with session.lock:
+            if session.phase != "proposal" or session.proposal is None:
+                raise ApiError(409, "There is no memory proposal to write.")
+            proposal = session.proposal
+            proposal.path = str(edited.get("path") or proposal.path)
+            proposal.title = str(edited.get("title") or proposal.title).strip() or session.thread.title
+            if "tags" in edited:
+                proposal.tags = [str(x).strip().lstrip("#") for x in edited["tags"] if str(x).strip()]
+            if "body" in edited:
+                proposal.body = str(edited["body"])
+            if not proposal.body.strip():
+                raise ApiError(400, "The note body must not be empty.")
+            try:
+                target = memory_writer.write_note(Path(str(_get(self.config, "knowledge.vault_path"))).expanduser(), proposal)
+            except OSError as exc:
+                raise ApiError(500, f"Could not write the note: {exc}")
+            session.thread.written_path = str(target)
+            session.phase = "written"
+            self._save_thread(session)
+            return target
+
+    def ask_discard_memory(self, session: AskSession) -> None:
+        with session.lock:
+            session.proposal = None
+            session.phase = "idle"
+
     def abandon(self, session: Session) -> None:
         """Leave the topic: stop any running call and close it without a note."""
         session.stop_work()
@@ -1207,11 +1561,12 @@ def make_handler(server: BoardServer):
             hostname, _, host_port = host.rpartition(":") if not host.startswith("[") or "]:" in host else (host, "", "")
             if not host_port:
                 hostname, host_port = host, "80"
-            if hostname.strip("[]") not in _LOCAL_HOSTS or host_port != str(port):
+            named_host = f"{site_name(server.config)}.localhost"   # the one name under .localhost (spec 9.5)
+            if hostname.strip("[]") not in _LOCAL_HOSTS | {named_host} or host_port != str(port):
                 raise ApiError(403, "This server answers only its own page on this machine.")
             if post:
                 origin = (self.headers.get("Origin") or "").strip().lower()
-                allowed = {f"http://{h}:{port}" for h in ("127.0.0.1", "localhost", "[::1]")}
+                allowed = {f"http://{h}:{port}" for h in ("127.0.0.1", "localhost", "[::1]", named_host)}
                 if origin and origin not in allowed:
                     raise ApiError(403, "Cross-origin requests are not accepted.")
                 content_type = (self.headers.get("Content-Type") or "").lower()
@@ -1254,8 +1609,8 @@ def make_handler(server: BoardServer):
             path = self.path.split("?", 1)[0]
             try:
                 self._local_only(post=False)
-                if path in ("/", "/index.html"):
-                    self._static("index.html")
+                if path in ("/", "/index.html", "/board", "/ask") or path.startswith("/ask/"):
+                    self._static("index.html")       # one page; the script reads the path (spec 9.5)
                 elif path.startswith("/static/"):
                     self._static(path[len("/static/"):])
                 elif path == "/api/config":
@@ -1263,6 +1618,22 @@ def make_handler(server: BoardServer):
                 elif path.startswith("/api/sessions/"):
                     session = server.get_session(path.split("/")[3])
                     self._json(200, session.snapshot())
+                elif path == "/api/ask":
+                    self._json(200, {"threads": server.list_threads()})
+                elif path.startswith("/api/ask/"):
+                    self._json(200, server.get_thread(path.split("/")[3]).snapshot())
+                else:
+                    self._json(404, {"error": "not found"})
+            except ApiError as exc:
+                self._json(exc.status, {"error": exc.message})
+
+        def do_DELETE(self) -> None:   # noqa: N802 - stdlib naming
+            path = self.path.split("?", 1)[0]
+            try:
+                self._local_only(post=True)
+                if path.startswith("/api/ask/"):
+                    server.delete_thread(path.split("/")[3])
+                    self._json(200, {"deleted": True})
                 else:
                     self._json(404, {"error": "not found"})
             except ApiError as exc:
@@ -1316,6 +1687,28 @@ def make_handler(server: BoardServer):
                     else:
                         raise ApiError(404, "unknown action")
                     self._json(200, session.snapshot())
+                elif path == "/api/ask":
+                    self._json(201, server.new_thread(body.get("projects"), body.get("budget")).snapshot())
+                elif path.startswith("/api/ask/"):
+                    parts = path.split("/")
+                    thread = server.get_thread(parts[3])
+                    action = parts[4] if len(parts) > 4 else ""
+                    if action == "question":
+                        server.ask_question(thread, body)
+                    elif action == "estimate":
+                        self._json(200, server.ask_estimate(thread, body))
+                        return
+                    elif action == "stop":
+                        server.ask_stop(thread)
+                    elif action == "close":
+                        server.ask_close(thread, bool(body.get("remember")))
+                    elif action == "memory":
+                        server.ask_write_memory(thread, body)
+                    elif action == "discard-memory":
+                        server.ask_discard_memory(thread)
+                    else:
+                        raise ApiError(404, "unknown action")
+                    self._json(200, thread.snapshot())
                 else:
                     self._json(404, {"error": "not found"})
             except ApiError as exc:
@@ -1342,8 +1735,10 @@ def serve(config: dict, config_path: Path | None, *, port: int = DEFAULT_PORT, o
     except OSError as exc:
         print(f"Cannot listen on 127.0.0.1:{port}: {exc}", file=sys.stderr)
         return 1
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+    listening_port = httpd.server_address[1]
+    url = f"http://{site_name(config)}.localhost:{listening_port}/"   # spec 9.5: the named address
     print(f"Decision Board is running at {url}  (Ctrl+C to stop)")
+    print(f"Also reachable at http://127.0.0.1:{listening_port}/")
     if open_browser:
         import webbrowser
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 PROMPT_NAMES: tuple[str, ...] = (
+    "ask",
     "board_combined",
     "board_members",
     "board_synthesis",

@@ -10,6 +10,10 @@ memory/
 # The default audit folder the setup wizard proposes
 audit/
 
+# Ask the vault threads (spec 10): conversations with the vault, never committed
+config/threads/
+threads/
+
 # Secrets — never commit
 .env
 .env.*
