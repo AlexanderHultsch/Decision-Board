@@ -188,7 +188,8 @@ clarifier and member calls.
 
 ### 5.1 Knowledge selection, second generation
 
-**Decided 10 September 2026, to be built.** Goal: better answers through
+**Decided 10 September 2026, built the same day in `knowledge.py`, `picker.py`,
+`enrich.py`, `evaluate.py`, `board.py`, `server.py` and `web/`.** Goal: better answers through
 more *relevant* knowledge per token and wider coverage, with Alex in
 control of how much the model decides and how many tokens go out. Time is
 not a constraint; cost is watched, not a bottleneck.
@@ -232,6 +233,19 @@ judged by a number, not by feel.
 phases and sub-headings; shared core and summaries tier; the pick call
 with dropdown, picks screen and statistics; the evaluation set from the
 start.
+
+**As built, where it differs from the table.** The `summaries` command is
+`board enrich`: it proposes `phases` (from the task table), `aliases` (the
+bracketed abbreviation in the title and the task table's name) and the
+summaries in one pass, prints them, and writes only with `--write` after a
+yes; `--refresh` rewrites every summary, `--no-summaries` skips the model.
+The candidate list per member is 40 sections, the pick returns at most 8 in
+full and 20 as one line per member, and the picks screen shows the picks
+with the reason in small text; a pick that did not parse shows the banner
+and the Python ranking. `board eval-knowledge --selection ai|python`
+prints the hit rate per question and in total; the per-step figure is
+read from the statistics split (core, own, summaries) of a run. The set
+holds three example questions until Alex supplies the ten real ones.
 
 ## 6. Audit trail
 

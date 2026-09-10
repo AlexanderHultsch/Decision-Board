@@ -144,6 +144,62 @@ def cmd_board(config: dict) -> int:
     return 0
 
 
+def cmd_enrich(config: dict, args: argparse.Namespace) -> int:
+    """``phases`` and ``aliases`` on the task pages, a ``summary`` on every
+    page (spec 5.1). Proposes first; writes only with --write after a yes."""
+    from datetime import date
+    from . import enrich, knowledge
+    from .agent.provider import build_provider
+
+    vault_path = _get(config, "knowledge.vault_path")
+    if not vault_path:
+        print("No knowledge source configured (knowledge.vault_path).", file=sys.stderr)
+        return 1
+    vault = Path(str(vault_path)).expanduser()
+    try:
+        notes = knowledge.load_vault(vault)
+    except knowledge.KnowledgeUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    provider = None if args.no_summaries else build_provider(config)
+    proposal = enrich.propose(notes, provider, summaries=not args.no_summaries, refresh=args.refresh)
+    print(enrich.describe(proposal))
+    if not proposal.changes:
+        return 0
+    if not args.write:
+        print(f"\n{len(proposal.changes)} change(s) proposed. Run again with --write to write them.")
+        return 0
+    if not args.yes:
+        answer = input(f"Write these {len(proposal.changes)} change(s) into the vault? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Nothing written.")
+            return 0
+    written = enrich.apply(vault, proposal, date.today().isoformat())
+    print(f"Written: {len(written)} page(s).")
+    return 0
+
+
+def cmd_eval_knowledge(config: dict, args: argparse.Namespace) -> int:
+    """Hit rate of the knowledge selection over the evaluation set (spec 5.1)."""
+    from . import evaluate
+    from .agent.provider import build_provider
+
+    path = Path(args.file) if args.file else evaluate.DEFAULT_SET
+    try:
+        questions = evaluate.load_set(path)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot read the evaluation set {path}: {exc}", file=sys.stderr)
+        return 1
+    provider = build_provider(config) if args.selection == "ai" else None
+    try:
+        outcomes = evaluate.evaluate(config, questions, selection=args.selection, provider=provider, budget=args.budget)
+    except Exception as exc:    # noqa: BLE001 - a report, not a run
+        print(f"Evaluation failed: {exc}", file=sys.stderr)
+        return 1
+    print(evaluate.report(outcomes, args.selection))
+    return 0
+
+
 def cmd_serve(config: dict, args: argparse.Namespace) -> int:
     from .server import serve
 
@@ -173,6 +229,15 @@ def build_parser() -> argparse.ArgumentParser:
                               help="port on 127.0.0.1 (default: server.port from the config, else 8765)")
     serve_parser.add_argument("--no-browser", action="store_true",
                               help="do not open the default browser after starting")
+    enrich_parser = subparsers.add_parser("enrich", help="phases, aliases and AI summaries on the vault pages (spec 5.1)")
+    enrich_parser.add_argument("--write", action="store_true", help="write the proposals (after a yes)")
+    enrich_parser.add_argument("--yes", action="store_true", help="do not ask before writing")
+    enrich_parser.add_argument("--no-summaries", action="store_true", help="phases and aliases only, no model call")
+    enrich_parser.add_argument("--refresh", action="store_true", help="rewrite every summary, not only the missing ones")
+    eval_parser = subparsers.add_parser("eval-knowledge", help="hit rate of the knowledge selection over the evaluation set")
+    eval_parser.add_argument("--file", default=None, help="the question set (default: tests/knowledge_eval/questions.json)")
+    eval_parser.add_argument("--selection", choices=("python", "ai"), default="python")
+    eval_parser.add_argument("--budget", type=int, default=None, help="knowledge tokens per member (default: the configured budget)")
     return parser
 
 
@@ -184,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.port is None:
             args.port = int(_get(config, "server.port", 8765))
         return cmd_serve(config, args)
+    if args.command == "enrich":
+        return cmd_enrich(config, args)
+    if args.command == "eval-knowledge":
+        return cmd_eval_knowledge(config, args)
     return COMMANDS[args.command](config)
 
 

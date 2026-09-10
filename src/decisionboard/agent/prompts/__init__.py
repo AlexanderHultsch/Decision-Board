@@ -25,6 +25,7 @@ PROMPT_NAMES: tuple[str, ...] = (
     "clarifier",
     "knowledge_pick",
     "memory_proposal",
+    "summaries",
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parent

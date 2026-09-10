@@ -1,0 +1,17 @@
+[
+  {
+    "_comment": "Example set. Replace with ten real questions from the programme; every page named must exist in the vault.",
+    "question": "Should we kick off the serial housing supplier for the Dual DCDC project now, given the supplier is not yet mature and the customer demands immediate sourcing?",
+    "expected": ["Process/VPDS/VPDS_Tasks/VPDS_Supplier Sourcing and Kick Off.md", "Process/VPDS/VPDS_Tasks/VPDS_Design Freeze.md", "Process/VPDS/VPDS_Tasks/VPDS_Supplier Readiness and PPAP.md"],
+    "members": {"Manufacturing": ["Process/VPDS/VPDS_Tasks/VPDS_Site Launch Readiness Review.md"], "Mechanical": ["Process/VPDS/VPDS_Tasks/VPDS_Design Freeze.md"]}
+  },
+  {
+    "question": "Can we pass MG4 with the DV tests still open on the housing?",
+    "expected": ["Process/VPDS/VPDS_Tasks/VPDS_Design Verification Testing.md", "Process/VPDS/VPDS_Tasks/VPDS_Maturity Gate Reviews (MP1 to MP7).md", "KPIs/Dual DCDC - Maturity Gates.md"]
+  },
+  {
+    "question": "The customer asks for a PPAP two months earlier. What does that do to the plant and the timing plan?",
+    "expected": ["Process/VPDS/VPDS_Tasks/VPDS_Customer Part Approval (PPAP).md", "Process/VPDS/VPDS_Tasks/VPDS_Project Timing Plan.md"],
+    "members": {"Manufacturing": ["Process/VPDS/VPDS_Tasks/VPDS_Customer Part Approval (PPAP).md"]}
+  }
+]
