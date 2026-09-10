@@ -285,3 +285,12 @@ button.member-tile.clickable:hover { border-color: currentColor; }
 .direction-tile .card-head { display: flex; align-items: center; gap: .8rem; width: 100%; }
 .direction-tile .card-head .spinner.small { margin-left: auto; }
 .direction-tile.pending #synthesis-body, .direction-tile.running #synthesis-body { display: none; }
+
+/* Knowledge selection (spec 5.1, 10 September 2026) */
+.estimate-detail .sec-list .reason { display: block; flex-basis: 100%; color: var(--muted); font-size: .78rem; margin: -.1rem 0 .15rem 1.7rem; }
+.estimate-detail .sec-list li { flex-wrap: wrap; }
+.estimate-detail .sec-list .core-tag, .estimate-detail .sec-list .brief-tag { font-size: .72rem; padding: 0 .4rem; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.estimate-detail .tier { color: var(--muted); font-size: .78rem; margin: .4rem 0 .1rem; text-transform: uppercase; letter-spacing: .04em; }
+.picks-actions { margin: .5rem 0 .2rem; gap: .5rem; }
+.banner { padding: .5rem .8rem; border-left: 3px solid #d97706; background: color-mix(in srgb, #d97706 10%, transparent); border-radius: 6px; margin: 0 0 .6rem; }
+.stats .split td.num { font-variant-numeric: tabular-nums; }

@@ -37,6 +37,7 @@ from .agent.opencode_client import opencode_config_problem
 from . import clarify as clarify_mod
 from . import knowledge as knowledge_mod
 from . import memory_writer
+from . import picker
 from . import roles as roles_mod
 from .agent.opencode_client import stop_call
 from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
@@ -83,6 +84,8 @@ def _call_label(prompt: str, phase: str) -> tuple[str, str]:
     """What a model call was for, read from the markers each prompt builder
     puts in (the same markers the tests route on): a step name and, for a
     member call, the member. Deterministic, no model involved."""
+    if picker.MARKER in prompt:
+        return ("knowledge pick", "")
     if "## Question from Alex" in prompt:
         return ("clarifier", "")
     if "## Vault outline" in prompt:
@@ -141,6 +144,19 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on the gateway on 9 September 2026
 
 
+def _core_of(selection) -> list:
+    """The sections of a selection that sit in its shared core, read back
+    from the core text's labels."""
+    labels = {line[4:].strip() for line in selection.core_text.splitlines() if line.startswith("### ")}
+    return [sec for sec in selection.sections
+            if (sec.relative + (f" - {sec.heading}" if sec.heading else "")) in labels]
+
+
+def _selection_value(value: Any) -> str:
+    """``"python"`` when asked for, else ``"ai"`` (the default, decided 10 September 2026)."""
+    return "python" if str(value or "").strip().lower() == "python" else "ai"
+
+
 def _restore_last_round(session: "Session") -> None:
     """Under the session lock: back to the last round of questions with its
     answers. The clarifier may have replaced the questions before failing;
@@ -193,7 +209,15 @@ class Session:
         self.partial: dict[str, dict[str, Any]] = {}      # answers already in while the others think
         self.mode = "individual"                          # "individual" or "combined" (decided 9 September 2026)
         self.budget: int | None = None                    # knowledge tokens per member for this topic (the slider)
-        self.member_notes: dict[str, dict[str, str]] = {} # member -> note path -> text sent
+        self.member_notes: dict[str, dict[str, str]] = {} # member -> note path -> text sent, full pages and brief lines
+        self.member_paths: dict[str, list[str]] = {}      # member -> the pages sent in full
+        # Spec 5.1 (decided 10 September 2026): how the knowledge is chosen.
+        self.selection = "ai"                             # "ai": the model picks from Python's candidates; "python": Python alone
+        self.picks: dict[str, dict[str, Any]] | None = None   # the model's picks per member, once made
+        self.pick_state = "idle"                          # idle, running, done, failed
+        self.pick_error: str | None = None
+        self.pick_dropped = 0                             # ids the model named that were not candidates
+        self.knowledge_split: dict[str, dict[str, int]] = {}   # member -> core/own/brief tokens of the last run
         self.result: dict[str, Any] | None = None
         self.conversation: BoardConversation | None = None
         self.turns: list[dict[str, str]] = []
@@ -249,7 +273,13 @@ class Session:
                 "projects": self.projects,
                 "extra": self.extra,
                 "exclude": self.exclude,
-                "member_knowledge_paths": {m: sorted(paths) for m, paths in self.member_notes.items()},
+                "member_knowledge_paths": {m: sorted(paths) for m, paths in self.member_paths.items()},
+                "selection": self.selection,
+                "pick_state": self.pick_state,
+                "pick_error": self.pick_error,
+                "pick_dropped": self.pick_dropped,
+                "picks": deepcopy(self.picks),
+                "knowledge_split": deepcopy(self.knowledge_split),
                 "stats": {"calls": list(self.calls), "marks": list(self.marks), "started": self.started},
                 "nav": self._nav(),
                 "result": self.result,
@@ -357,6 +387,7 @@ class BoardServer:
             "auto_approve": bool(_get(self.config, "provider.opencode.auto_approve", True)),
             "opencode_config": _get(self.config, "provider.opencode.config_file", "") or "",
             "theme": _get(self.config, "ui.theme", "system") or "system",
+            "selection": _selection_value(_get(self.config, "knowledge.selection")),
             "knowledge_status": status,
             "roles_folder": _get(self.config, "knowledge.roles_folder", "") or "",
             "roles_status": self._roles_status(),
@@ -407,6 +438,7 @@ class BoardServer:
             "opencode_config": ("provider.opencode.config_file", str),
             "roles_folder": ("knowledge.roles_folder", str),
             "theme": ("ui.theme", str),
+            "selection": ("knowledge.selection", _selection_value),
         }
         with self.lock:
             for key, (dotted, cast) in mapping.items():
@@ -441,6 +473,7 @@ class BoardServer:
         else:
             chosen = knowledge_mod.active_projects(self.config)
         session = Session(question, chosen)
+        session.selection = _selection_value(_get(self.config, "knowledge.selection"))
         with self.lock:
             self.sessions[session.id] = session
         self._spawn(session, self._clarify, session)
@@ -541,6 +574,58 @@ class BoardServer:
         }
         session.phase = "confirm"
         session.mark("confirm")
+        if session.selection == "ai" and session.pick_state in ("idle", "failed"):
+            self._start_pick(session)
+
+    def _start_pick(self, session: Session) -> None:
+        """Under the session lock: the AI-assisted pick runs in the background
+        while Alex reads the confirm screen (spec 5.1)."""
+        session.pick_state = "running"
+        session.pick_error = None
+        session.picks = None
+        self._spawn(session, self._pick, session)
+
+    def pick(self, session: Session, body: dict[str, Any]) -> None:
+        """The page asks for the pick: after switching the dropdown to AI
+        assisted, or to pick again."""
+        with session.lock:
+            if session.phase != "confirm":
+                raise ApiError(409, "The pick is made on the confirm screen.")
+            if "selection" in body:
+                session.selection = _selection_value(body.get("selection"))
+            if session.selection != "ai":
+                session.pick_state = "idle"
+                return
+            if session.pick_state == "running":
+                return
+            self._start_pick(session)
+
+    def _pick(self, session: Session) -> None:
+        query = f"{session.question}\n{session.inputs.get('topic', '')}\n{session.inputs.get('context', '')}"
+        try:
+            board = roles_mod.load_board(self.config)
+            terms = {m: role_terms(role) for m, role in board.profiles.items()}
+            cands = knowledge_mod.candidates(self.config, query, terms, projects=session.projects)
+            lines = {m: (role.perspective or role.title) for m, role in board.profiles.items()}
+            result = picker.pick(RecordingProvider(self.provider(), session), query, lines, cands)
+        except Exception as exc:
+            if session.cancelled.is_set():
+                return
+            with session.lock:
+                session.pick_state = "failed"
+                session.pick_error = f"{exc}"[:200]
+            return
+        with session.lock:
+            session.llm_calls += 1
+            session.pick_dropped = result.dropped
+            if result.ok:
+                session.picks = result.picks
+                session.pick_state = "done"
+                session.pick_error = None
+            else:
+                session.picks = None
+                session.pick_state = "failed"
+                session.pick_error = result.error
 
     def _clarify_more(self, session: Session) -> None:
         rounds = [(r["questions"], r["answers"]) for r in session.rounds]
@@ -585,6 +670,8 @@ class BoardServer:
             }
             session.selected_members = self._chosen_members(session, inputs.get("members"))
             session.mode = "combined" if str(inputs.get("mode") or "").lower() == "combined" else "individual"
+            if "selection" in inputs:
+                session.selection = _selection_value(inputs.get("selection"))
             session.budget = self._budget(inputs.get("budget"))
             session.extra = [str(x) for x in inputs.get("extra") or [] if str(x).strip()]
             session.exclude = [str(x) for x in inputs.get("exclude") or [] if str(x).strip()]
@@ -616,18 +703,33 @@ class BoardServer:
         picks on top and minus the exclusions."""
         query = f"{session.question}\n{session.inputs.get('topic', '')}"
         terms = {m: role_terms(board.profiles.get(m)) for m in selected}
+        with session.lock:
+            picks = session.picks if session.selection == "ai" and session.pick_state == "done" else None
         return knowledge_mod.gather_for_members(
             self.config, query, terms, token_budget=max(budget, 1),
             projects=session.projects,
             extra=list(extra if extra is not None else session.extra),
-            exclude=list(exclude if exclude is not None else session.exclude))
+            exclude=list(exclude if exclude is not None else session.exclude), picks=picks)
 
-    def _member_blocks(self, session: Session, board, selected: list[str], budget: int) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+    @staticmethod
+    def _blocks_from(selections: dict) -> dict[str, Any]:
+        """What a run or an estimate needs from the selections: the whole
+        block per member, the core once with each member's delta (spec
+        5.1), the pages for citation checks and the token split."""
+        return {
+            "knowledge": {m: sel.text for m, sel in selections.items()},
+            "shared": next((sel.core_text for sel in selections.values() if sel.core_text), ""),
+            "delta": {m: "\n\n".join(t for t in (sel.own_text, sel.brief_text) if t) for m, sel in selections.items()},
+            "notes": {m: {**sel.sent, **sel.brief_sent} for m, sel in selections.items()},
+            "paths": {m: sorted(sel.sent) for m, sel in selections.items()},
+            "split": {m: {"core": sel.core_tokens, "own": sel.own_tokens, "brief": sel.brief_tokens} for m, sel in selections.items()},
+        }
+
+    def _member_blocks(self, session: Session, board, selected: list[str], budget: int) -> dict[str, Any]:
         if budget <= 0 and not session.extra:
-            return {m: "" for m in selected}, {m: {} for m in selected}
-        selections = self._member_selections(session, board, selected, budget)
-        return ({m: sel.text for m, sel in selections.items()},
-                {m: dict(sel.sent) for m, sel in selections.items()})
+            return self._blocks_from({})  | {"knowledge": {m: "" for m in selected}, "delta": {m: "" for m in selected},
+                                             "notes": {m: {} for m in selected}, "paths": {m: [] for m in selected}}
+        return self._blocks_from(self._member_selections(session, board, selected, budget))
 
     @staticmethod
     def _chosen_members(session: Session, wanted: Any) -> list[str]:
@@ -677,9 +779,12 @@ class BoardServer:
                 member_data = knowledge_mod.kpi_notes(self.config, selected, projects=session.projects)
             except knowledge_mod.KnowledgeUnavailable:
                 member_data = {}
-            member_knowledge, member_notes = self._member_blocks(session, board, selected, session.budget or 0)
+            blocks = self._member_blocks(session, board, selected, session.budget or 0)
+            member_knowledge, member_notes = blocks["knowledge"], blocks["notes"]
             with session.lock:
                 session.member_notes = member_notes
+                session.member_paths = blocks["paths"]
+                session.knowledge_split = blocks["split"]
                 session.roles = roles_mod.summary(board)
                 session.roles["kpi_members"] = sorted(member_data)
                 session.member_meta = roles_mod.member_meta(board.profiles)
@@ -694,6 +799,7 @@ class BoardServer:
                 on_member=on_member, board=board, member_data=member_data, members=selected,
                 sent_notes={}, on_assessment=on_assessment,
                 member_knowledge=member_knowledge, member_notes=member_notes,
+                **({"shared_knowledge": blocks["shared"], "member_delta": blocks["delta"]} if session.mode == "combined" else {}),
             )
         except Exception as exc:
             session.fail(str(exc))
@@ -708,6 +814,7 @@ class BoardServer:
                 conduct=board.conduct, member_data=member_data,
                 project=", ".join(session.projects),
                 sent_notes={}, member_knowledge=member_knowledge, member_notes=member_notes,
+                shared_knowledge=blocks["shared"], member_delta=blocks["delta"],
             )
             session.result = {
                 "topic": result.topic,
@@ -763,7 +870,8 @@ class BoardServer:
                 if (session.budget or 0) > 0 or session.extra:
                     for m, sel in self._member_selections(session, board, missing, session.budget or 0).items():
                         conversation.member_knowledge[m] = sel.text
-                        conversation.member_notes[m] = dict(sel.sent)
+                        conversation.member_notes[m] = {**sel.sent, **sel.brief_sent}
+                        conversation.member_delta[m] = "\n\n".join(t for t in (sel.own_text, sel.brief_text) if t)
                 conversation.member_data.update(knowledge_mod.kpi_notes(self.config, missing, projects=session.projects))
             except Exception:   # a missing block is not a reason to refuse the question
                 pass
@@ -808,6 +916,9 @@ class BoardServer:
             budget = self._budget(body.get("budget"))
             extra = [str(x) for x in body.get("extra") or [] if str(x).strip()]
             exclude = [str(x) for x in body.get("exclude") or [] if str(x).strip()]
+            if "selection" in body:
+                session.selection = _selection_value(body.get("selection"))
+            selection, pick_state, pick_error = session.selection, session.pick_state, session.pick_error
         selected = self._chosen_members(session, body.get("members"))
         try:
             board = roles_mod.load_board(self.config)
@@ -820,15 +931,21 @@ class BoardServer:
             member_data = {}
         if budget <= 0 and not extra:
             selections = {}
-            member_knowledge, member_notes = {m: "" for m in roles}, {m: {} for m in roles}
+            blocks = self._blocks_from({}) | {"knowledge": {m: "" for m in roles}, "delta": {m: "" for m in roles},
+                                              "paths": {m: [] for m in roles}}
         else:
             selections = self._member_selections(session, board, list(roles), budget, extra, exclude)
-            member_knowledge = {m: sel.text for m, sel in selections.items()}
-            member_notes = {m: dict(sel.sent) for m, sel in selections.items()}
+            blocks = self._blocks_from(selections)
         sizes = prompt_sizes(topic=topic, context=context, options=options, constraints=constraints,
                              roles=roles, conduct=board.conduct, member_data=member_data,
                              project=", ".join(session.projects),
-                             member_knowledge=member_knowledge, mode=mode)
+                             member_knowledge=blocks["knowledge"], mode=mode,
+                             shared_knowledge=blocks["shared"], member_delta=blocks["delta"])
+        if selection == "ai" and pick_state != "done":
+            # The pick call is still to come: count it, at the size of its prompt.
+            terms = {m: role_terms(board.profiles.get(m)) for m in board.profiles}
+            cands = knowledge_mod.candidates(self.config, f"{session.question}\n{topic}", terms, projects=session.projects)
+            sizes.insert(0, ("knowledge pick", len(picker.pick_prompt(topic, {m: "" for m in board.profiles}, cands))))
         overhead, learned_from = session.overhead_per_call()
         per_call = [{"label": label, "tokens": knowledge_mod.estimate_tokens_for(chars) + overhead} for label, chars in sizes]
         return {
@@ -838,10 +955,20 @@ class BoardServer:
             "overhead_per_call": overhead,
             "overhead_learned_from": learned_from,
             "budget": budget,
-            "members": {m: sorted(paths) for m, paths in member_notes.items()},
+            "selection": selection,
+            "pick_state": pick_state,
+            "pick_error": pick_error,
+            "picked_by": {m: sel.picked_by for m, sel in selections.items()},
+            "reasons": {m: dict(sel.reasons) for m, sel in selections.items()},
+            "briefs": {m: [{"path": n.relative, "summary": n.summary, "reason": sel.reasons.get(n.relative, "")} for n in sel.briefs]
+                       for m, sel in selections.items()},
+            "split": blocks["split"],
+            "members": blocks["paths"],
             "sections": {m: [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
                               "tokens": knowledge_mod.estimate_tokens(sec.body),
-                              "forced": knowledge_mod.section_id(sec) in extra or sec.relative in extra}
+                              "forced": knowledge_mod.section_id(sec) in extra or sec.relative in extra,
+                              "core": sec in sel.sections[:0] or knowledge_mod.section_id(sec) in {knowledge_mod.section_id(c) for c in _core_of(sel)},
+                              "reason": sel.reasons.get(knowledge_mod.section_id(sec), "")}
                              for sec in sel.sections]
                          for m, sel in selections.items()},
             "forced_tokens": sum(sel.forced_tokens for sel in selections.values()),
@@ -1165,6 +1292,8 @@ def make_handler(server: BoardServer):
                     elif action == "estimate":
                         self._json(200, server.estimate(session, body))
                         return
+                    elif action == "pick":
+                        server.pick(session, body)
                     elif action == "back":
                         server.back(session)
                     elif action == "forward":

@@ -4,6 +4,7 @@ matter, deterministic note selection and the token budget."""
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -235,3 +236,108 @@ class TestVaultEdgeCases(unittest.TestCase):
         self.assertTrue(selection.truncated)
         self.assertLessEqual(selection.forced_tokens, knowledge.FORCED_CAP_TOKENS)
         self.assertEqual(selection.notes[0].relative, "P.md")
+
+
+class TestSecondGeneration(unittest.TestCase):
+    """Spec 5.1 (decided 10 September 2026): expansion, boosts, core, briefs, picks."""
+
+    def _vault(self, tmp: Path) -> Path:
+        (tmp / "Abbreviations.md").write_text(
+            "---\nkind: reference\n---\n# Abbreviations\n\n| Abbreviation | Full form | Description |\n| --- | --- | --- |\n"
+            "| PPAP | Production Part Approval Process | part approval |\n| DV | Design Verification | testing |\n", encoding="utf-8")
+        long = "\n".join(f"Line {i} of coaching text about supplier parts and readiness." for i in range(40))
+        (tmp / "VPDS_Customer Part Approval.md").write_text(
+            "---\nkind: process\naliases: [PPAP]\nphases: [MP4, MP5, MP6]\nlead_swimlane: Manufacturing\n"
+            "affected_swimlanes: [Manufacturing, Quality]\nsummary: AI summary, not official. The plant proves the part to the customer.\n---\n"
+            f"# VPDS task - Customer Part Approval\n\n## Definition\n\nThe plant proves the part to the customer.\n\n## Coaching\n\n{long}\n", encoding="utf-8")
+        (tmp / "VPDS_Design Verification Testing.md").write_text(
+            "---\nkind: process\nphases: [MP1, MP2, MP3, MP4]\nlead_swimlane: Systems\naffected_swimlanes: [Systems]\n"
+            "summary: AI summary, not official. Tests the design against the environment.\n---\n"
+            f"# VPDS task - Design Verification Testing\n\n## Definition\n\nTests the design.\n\n## Coaching\n\n{long}\n", encoding="utf-8")
+        (tmp / "VPDS_Overview.md").write_text(
+            "---\nkind: process\n---\n# VPDS\n\n## Maturity phases and gates\n\nMP0 to MP10, each closed by a gate.\n\n## Tasks\n\n"
+            + "\n".join(f"| task {i} | x |" for i in range(80)) + "\n", encoding="utf-8")
+        (tmp / "Dual DCDC.md").write_text("---\nkind: project\nprojects: [Dual DCDC]\n---\n# Dual DCDC\n\nSOP Aug 2028.\n", encoding="utf-8")
+        (tmp / "Other.md").write_text("---\nsummary: AI summary, not official. A page about something else.\n---\n# Other\n\nNothing here.\n", encoding="utf-8")
+        return tmp
+
+    def test_question_phases_read_numbers_gates_and_phase_words(self):
+        self.assertEqual(knowledge.question_phases("Before MG4 and during DV testing"), ("MP4", "MP3"))
+        self.assertEqual(knowledge.question_phases("MP 7 SOP readiness"), ("MP7",))
+        self.assertEqual(knowledge.question_phases("nothing"), ())
+
+    def test_aliases_and_abbreviations_expand_the_question_terms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = knowledge.load_vault(self._vault(Path(tmp)))
+        terms = knowledge.expand_terms(knowledge.query_terms("Is the PPAP late?"), "Is the PPAP late?", notes)
+        self.assertIn("production", terms)          # the abbreviation's full form
+        self.assertIn("customer", terms)            # the alias reaches the page title
+        terms = knowledge.expand_terms(knowledge.query_terms("part approval"), "part approval", notes)
+        self.assertIn("ppap", terms)                # and the title words reach the alias
+        terms = knowledge.expand_terms(knowledge.query_terms("DV plan"), "DV plan", notes)
+        self.assertIn("verification", terms)        # a two-letter abbreviation is read from the question
+
+    def test_property_boosts_prefer_the_members_own_pages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = knowledge.load_vault(self._vault(Path(tmp)))
+            neutral = "Should we source now?"
+            for_mfg = knowledge.select_sections(notes, neutral, 300, member="Manufacturing", core=[])
+            for_sys = knowledge.select_sections(notes, neutral, 300, member="Systems", core=[])
+        self.assertEqual(for_mfg.sections[0].relative, "VPDS_Customer Part Approval.md")   # lead_swimlane: Manufacturing
+        self.assertEqual(for_sys.sections[0].relative, "VPDS_Design Verification Testing.md")
+
+    def test_the_core_is_shared_and_capped_and_the_rest_is_one_line_each(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"knowledge": {"vault_path": tmp, "token_budget": 400, "project": "Dual DCDC"}}
+            self._vault(Path(tmp))
+            blocks = knowledge.gather_for_members(config, "What must happen in MP4?", {"Manufacturing": [], "Systems": []})
+        for block in blocks.values():
+            self.assertIn("## Knowledge from the vault, shared by every member", block.core_text)
+            self.assertIn("Dual DCDC.md", block.core_text)                       # the project page
+            self.assertIn("Maturity phases and gates", block.core_text)           # the gate definitions
+            self.assertIn("Customer Part Approval.md - Definition", block.core_text)   # a task active in MP4
+            self.assertLessEqual(block.core_tokens, int(400 * knowledge.CORE_SHARE) + 40)
+            self.assertIn("## Further pages in the vault", block.brief_text)
+            self.assertIn("Other.md: AI summary", block.brief_text)
+            self.assertLessEqual(block.brief_tokens, knowledge.BRIEF_CAP_TOKENS)
+            self.assertLessEqual(block.tokens, 400)                               # briefs ride on top of the budget
+            self.assertIn("Other.md", block.brief_sent)                            # a cited brief page verifies against its summary
+
+    def test_the_models_picks_lead_the_queue_and_carry_their_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"knowledge": {"vault_path": tmp, "token_budget": 250}}
+            self._vault(Path(tmp))
+            cands = knowledge.candidates(config, "Should we source now?", {"Systems": []})
+            ids = [c["id"] for c in cands["Systems"]]
+            self.assertIn("VPDS_Customer Part Approval.md#Definition", ids)
+            self.assertTrue(all("summary" in c for c in cands["Systems"]))
+            picks = {"Systems": {"full": ["VPDS_Customer Part Approval.md#Definition"], "brief": ["Other.md"],
+                                 "reasons": {"VPDS_Customer Part Approval.md#Definition": "the plant proves the part"}}}
+            block = knowledge.gather_for_members(config, "Should we source now?", {"Systems": []}, picks=picks)["Systems"]
+        self.assertEqual(block.picked_by, "model")
+        own_first = [l for l in block.own_text.splitlines() if l.startswith("### ")][0]
+        self.assertEqual(own_first, "### VPDS_Customer Part Approval.md - Definition")   # the pick leads the member's own tier
+        self.assertEqual(block.briefs[0].relative, "Other.md")
+        self.assertEqual(block.reasons["VPDS_Customer Part Approval.md#Definition"], "the plant proves the part")
+
+
+class TestPicker(unittest.TestCase):
+    def test_only_candidate_ids_survive_and_a_bad_answer_keeps_python_in_force(self):
+        from decisionboard import picker
+        cands = {"Hardware": [{"id": "A.md#One", "path": "A.md", "heading": "One", "summary": "", "tokens": 10},
+                              {"id": "B.md", "path": "B.md", "heading": "", "summary": "s", "tokens": 5}],
+                 "Finance": []}
+        text = json.dumps({"members": [{"member": "hardware", "full": ["A.md#One", "Z.md#Nope", "A.md#One"], "brief": ["B.md", "A.md#One"],
+                                        "reasons": {"A.md#One": "needs it", "Z.md#Nope": "invented"}}]})
+        result = picker.parse_picks(text, cands)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.picks["Hardware"]["full"], ["A.md#One"])
+        self.assertEqual(result.picks["Hardware"]["brief"], ["B.md"])
+        self.assertEqual(result.picks["Hardware"]["reasons"], {"A.md#One": "needs it"})
+        self.assertEqual(result.picks["Finance"], {"full": [], "brief": [], "reasons": {}})
+        self.assertEqual(result.dropped, 1)
+        self.assertFalse(picker.parse_picks("not json", cands).ok)
+        self.assertFalse(picker.parse_picks(json.dumps({"members": []}), cands).ok)
+        prompt = picker.pick_prompt("Q?", {"Hardware": "the chips"}, cands)
+        self.assertIn(picker.MARKER, prompt)
+        self.assertIn("- id: A.md#One | A.md - One | 10 tokens", prompt)

@@ -105,6 +105,9 @@ class BoardConversation:
     sent_notes: dict[str, str] = field(default_factory=dict)   # note path -> body, what every member received
     member_knowledge: dict[str, str] = field(default_factory=dict)   # member -> its own knowledge block
     member_notes: dict[str, dict[str, str]] = field(default_factory=dict)   # member -> note path -> text sent
+    # Spec 5.1: the shared core once, and each member's delta, for the combined form.
+    shared_knowledge: str = ""
+    member_delta: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -665,7 +668,9 @@ def _member_section(member: str, role: RoleProfile | None, kpi_data: str, knowle
     knowledge and KPI block the single call gets, under the member's heading."""
     lines = [f"### Member: {member}", ""]
     if knowledge:
-        lines += [knowledge.replace("## Knowledge from the vault", "#### Knowledge selected for this member", 1), ""]
+        lines += [knowledge.replace("## Knowledge selected for this member", "#### Knowledge selected for this member", 1)
+                  .replace("## Knowledge from the vault", "#### Knowledge selected for this member", 1)
+                  .replace("## Further pages in the vault, one line each", "#### Further pages in the vault, one line each", 1), ""]
     if role is not None and role.roles:
         lines.append(f"This member is the {role.member} swim lane. It speaks as {role.title} (level {role.level}) "
                      "and answers for every role in the swim lane. Roles by rank:")
@@ -684,19 +689,26 @@ def _member_section(member: str, role: RoleProfile | None, kpi_data: str, knowle
 def _combined_prompt(
     topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...],
     roles: dict[str, RoleProfile], conduct: str, member_data: dict[str, str], project: str,
-    member_knowledge: dict[str, str] | None = None,
+    member_knowledge: dict[str, str] | None = None, shared_knowledge: str = "",
+    member_delta: dict[str, str] | None = None,
 ) -> str:
+    """With ``shared_knowledge`` and ``member_delta`` (spec 5.1) the core
+    goes in once, before the members, and each member carries only its own
+    tier; without them every member carries its whole block, as before."""
     lines = [load_prompt("board_combined"), ""]
     if conduct:
         lines += ["## Board member conduct (the same for every member)", "", conduct, ""]
     lines += [*_input_block(topic, context, options, constraints), ""]
     if project:
         lines += [f"Project: {project}. This question belongs to this project.", ""]
+    if shared_knowledge:
+        lines += [shared_knowledge, ""]
     lines += ["## Members to assess, in this order", ""]
     lines.append(", ".join(roles))
     lines.append("")
+    per_member = member_delta if member_delta is not None else (member_knowledge or {})
     for member, role in roles.items():
-        lines += _member_section(member, role, member_data.get(member, ""), (member_knowledge or {}).get(member, ""))
+        lines += _member_section(member, role, member_data.get(member, ""), per_member.get(member, ""))
     return "\n".join(lines)
 
 
@@ -707,7 +719,8 @@ _ROLE_TERM_NOISE = _SOURCE_STOPWORDS | {
     "touches", "defines", "points", "there", "every", "phase", "itself", "pages", "affected", "swimlanes",
     "section", "level",
 }
-_ROLE_TERM_SECTIONS = ("## Targets I am judged on", "## Process", "## What I protect when I cannot have everything")
+_ROLE_TERM_SECTIONS = ("Targets I am judged on", "Process", "What I protect when I cannot have everything")
+_HEADING_LINE = re.compile(r"^(#{1,6})\s+(.*?)\s*$", re.M)
 _role_term_cache: dict[tuple[str, str], frozenset[str]] = {}
 
 
@@ -722,12 +735,16 @@ def _role_terms(role: RoleProfile | None) -> set[str]:
     cached = _role_term_cache.get(key)
     if cached is None:
         text = role.title + " "
-        for heading in _ROLE_TERM_SECTIONS:
-            start = role.body.find(heading)
-            if start == -1:
+        # A section runs from its heading to the next heading of the same
+        # or a higher level, whatever level the page uses (the role pages
+        # moved from ## to ### on 10 September 2026).
+        headings = list(_HEADING_LINE.finditer(role.body))
+        for index, match in enumerate(headings):
+            if match.group(2).strip() not in _ROLE_TERM_SECTIONS:
                 continue
-            end = role.body.find("\n## ", start + len(heading))
-            text += role.body[start:end if end != -1 else None] + " "
+            level = len(match.group(1))
+            end = next((m.start() for m in headings[index + 1:] if len(m.group(1)) <= level), len(role.body))
+            text += role.body[match.end():end] + " "
         cached = frozenset(w.lower() for w in re.findall(r"[A-Za-z][A-Za-z&-]{4,}", text)) - _ROLE_TERM_NOISE
         if len(_role_term_cache) > 256:
             _role_term_cache.clear()
@@ -787,6 +804,8 @@ def run_board_combined(
     on_assessment: Callable[[MemberAssessment], None] | None = None,
     member_knowledge: dict[str, str] | None = None,
     member_notes: dict[str, dict[str, str]] | None = None,
+    shared_knowledge: str = "",
+    member_delta: dict[str, str] | None = None,
 ) -> BoardResult:
     """The combined form (decided 9 September 2026): one call writes every
     chosen member's assessment and the synthesis. Everything the single
@@ -810,7 +829,7 @@ def run_board_combined(
         member_data = kpi_notes(config, names)
     project = active_project(config) or ""
     prompt = _combined_prompt(topic, context, options, constraints, roles, board.conduct, member_data, project,
-                              member_knowledge)
+                              member_knowledge, shared_knowledge, member_delta)
 
     def _notify(state: str) -> None:
         if on_member is not None:
@@ -878,7 +897,8 @@ def run_board_combined(
 def prompt_sizes(
     *, topic: str, context: str, options: tuple[str, ...], constraints: tuple[str, ...],
     roles: dict[str, RoleProfile], conduct: str, member_data: dict[str, str], project: str,
-    member_knowledge: dict[str, str], mode: str = "individual",
+    member_knowledge: dict[str, str], mode: str = "individual", shared_knowledge: str = "",
+    member_delta: dict[str, str] | None = None,
 ) -> list[tuple[str, int]]:
     """The prompts a run would send, as ``(label, characters)`` - built by
     the same builders the run uses, so the estimate on the confirm screen
@@ -888,7 +908,8 @@ def prompt_sizes(
     sizes: list[tuple[str, int]] = []
     if mode == "combined":
         sizes.append(("board, combined", len(_combined_prompt(topic, context, options, constraints, roles, conduct,
-                                                              member_data, project, member_knowledge))))
+                                                              member_data, project, member_knowledge,
+                                                              shared_knowledge, member_delta))))
         return sizes
     for member, role in roles.items():
         sizes.append((member, len(_member_prompt(topic, context, options, constraints, member, role, conduct,
@@ -910,10 +931,13 @@ def _combined_follow_up_prompt(conversation: BoardConversation, chosen: list[str
         lines += [f"Project: {conversation.project}.", ""]
     if conversation.conduct:
         lines += ["## Board member conduct (the same for every member)", "", conversation.conduct, ""]
+    if conversation.shared_knowledge:
+        lines += [conversation.shared_knowledge, ""]
     lines += ["## Members to ask again, in this order", "", ", ".join(chosen), ""]
     for member, role in roles.items():
         lines += _member_section(member, role, conversation.member_data.get(member, ""),
-                                 conversation.member_knowledge.get(member, ""))
+                                 (conversation.member_delta.get(member) if conversation.shared_knowledge
+                                  else conversation.member_knowledge.get(member, "")) or "")
         earlier = next((a for a in conversation.result.assessments if a.member == member), None)
         lines += ["#### Earlier assessment of this member", ""]
         lines.append(json.dumps({"applies": earlier.applies, "view": earlier.view, "impact": earlier.impact,

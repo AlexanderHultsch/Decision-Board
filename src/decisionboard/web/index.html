@@ -103,13 +103,29 @@
 <br><br>In both modes the program checks that every member came back, that each entry names its own measures or tasks, and every citation.</div>
     <p class="eyebrow">Who is asked <span class="muted small">untick a swim lane the topic does not concern</span></p>
     <div id="confirm-members" class="member-picks"></div>
-    <p class="eyebrow">Knowledge per member <span class="muted small">sections from the vault, ranked for the topic and for each member</span></p>
+    <p class="eyebrow">Knowledge per member <button type="button" class="info-btn" id="btn-budget-info" title="What does the slider cap?" aria-label="What does the slider cap?">i</button></p>
     <div class="budget-row">
       <input id="budget" type="range" min="0" max="12000" step="500" value="6000" aria-label="Knowledge tokens per member">
       <span id="budget-value" class="budget-value">6,000 tokens</span>
     </div>
+    <div id="budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections each member receives in full - the shared core (project page, phase and gate definitions, the tasks active in the phase your question names) and the member's own sections.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the sections you add below, and the KPI notes.<br><span class="muted">The estimate follows the slider.</span></div>
+    <p class="eyebrow">Knowledge selection <button type="button" class="info-btn" id="btn-selection-info" title="What is the difference?" aria-label="What is the difference?">i</button></p>
+    <div class="select-wrap">
+      <select id="selection-mode" class="select-modern">
+        <option value="ai">AI assisted (recommended)</option>
+        <option value="python">Python only</option>
+      </select>
+    </div>
+    <div id="selection-info" class="small info-text" hidden><strong>AI assisted</strong> (recommended)<br>The model reads a list of candidate sections with their summaries and picks, per member, what that member needs, with a reason you can read.<br><span class="muted">Pro: picks by meaning, knows synonyms, improves as the vault grows.<br>Con: one extra call per question, about the size of one member call; the model can pick wrongly, so the picks are shown below before the board runs.<br>Cost: one call more.</span>
+<br><br><strong>Python only</strong><br>The program ranks sections by how often the question's words and the member's own words appear, plus the page properties (lead, affected swim lanes, phase).<br><span class="muted">Pro: free, instant, the same result every time.<br>Con: literal; misses pages that say the same thing in other words; weaker as the vault grows.<br>Cost: none.</span></div>
+    <p id="pick-status" class="muted small"></p>
+    <p id="pick-banner" class="banner small" hidden></p>
     <p id="estimate" class="estimate muted small">Estimating…</p>
-    <details id="estimate-detail" class="estimate-detail"><summary class="muted small">What each member would receive, and what to add or leave out</summary>
+    <details id="estimate-detail" class="estimate-detail"><summary class="muted small">What each member would receive, with the reasons, and what to add or leave out</summary>
+      <div class="row picks-actions">
+        <button type="button" class="ghost small-btn" id="btn-picks-accept" title="Tick everything again">Accept all</button>
+        <button type="button" class="ghost small-btn" id="btn-picks-python" title="Switch to the Python ranking">Use Python picks instead</button>
+      </div>
       <div id="estimate-notes"></div>
       <p class="eyebrow">Add for every member <span class="muted small">sent whole, on top of the slider; the estimate follows, the slider does not move</span></p>
       <input id="outline-filter" type="text" class="outline-filter" placeholder="Filter notes and sections…">

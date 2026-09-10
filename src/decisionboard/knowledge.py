@@ -23,6 +23,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 DEFAULT_TOKEN_BUDGET = 6000
 _CHARS_PER_TOKEN = 4          # a rough, deliberately conservative estimate
@@ -61,6 +62,11 @@ class Note:
     kind: str = ""          # front matter ``kind``: "kpi" marks a KPI data note
     member: tuple[str, ...] = ()   # front matter ``affected_swimlanes`` (``member`` still accepted): who the note is attached to
     projects: tuple[str, ...] = ()  # front matter ``projects``: which projects the note belongs to; empty means all
+    # Decided 10 September 2026 (spec 5.1): the properties the ranking reads.
+    lead: str = ""                  # ``lead_swimlane``: the role that owns the page
+    summary: str = ""               # ``summary``: two lines, AI-written and marked so, for the outline and the brief tier
+    aliases: tuple[str, ...] = ()   # ``aliases``: other names of the page (PPAP for Customer Part Approval)
+    phases: tuple[str, ...] = ()    # ``phases``: the maturity phases a task is active in (MP1, MP2, ...)
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,20 @@ class KnowledgeSelection:
     tokens: int = 0                                       # estimate for ``text``
     truncated: bool = False                               # a note was cut to fit
     text: str = ""                                        # the block sent to the model
+    # Spec 5.1 (decided 10 September 2026): the block has three tiers. The
+    # shared core every member gets, this member's own sections, and one
+    # line per further page. ``core_text`` and ``own_text`` are the parts of
+    # ``text``; the combined mode sends the core once for all members.
+    core_text: str = ""
+    own_text: str = ""
+    brief_text: str = ""
+    core_tokens: int = 0
+    own_tokens: int = 0
+    brief_tokens: int = 0
+    briefs: list[Note] = field(default_factory=list)    # the pages summarised in the brief tier
+    brief_sent: dict[str, str] = field(default_factory=dict)   # page -> the line sent, for citation checks
+    reasons: dict[str, str] = field(default_factory=dict)   # section id -> why the model picked it (AI-assisted selection)
+    picked_by: str = "python"                             # "python" or "model"
 
     @property
     def relative_paths(self) -> list[str]:
@@ -175,8 +195,22 @@ def _load_note(vault: Path, path: Path) -> Note:
         projects = tuple(p.strip() for p in projects_raw.split(",") if p.strip())
     else:
         projects = tuple(str(p).strip() for p in projects_raw if str(p).strip())
+    lead_name = lead.strip() if isinstance(lead, str) else ""
+    summary = meta.get("summary")
     return Note(path=path, relative=relative, title=title, tags=tags, body=body,
-                kind=str(kind).lower(), member=members, projects=projects)
+                kind=str(kind).lower(), member=members, projects=projects, lead=lead_name,
+                summary=summary.strip() if isinstance(summary, str) else "",
+                aliases=_tuple_of(meta.get("aliases")), phases=tuple(p.upper() for p in _tuple_of(meta.get("phases"))))
+
+
+def _tuple_of(raw) -> tuple[str, ...]:
+    """A front matter value as a tuple of strings: a list, or one string
+    with commas."""
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return tuple(p.strip() for p in raw.split(",") if p.strip())
+    return tuple(str(p).strip() for p in raw if str(p).strip())
 
 
 # Notes already read, per vault: path -> (mtime_ns, size, Note). A second
@@ -399,65 +433,194 @@ class _Prepared:
 
 
 FORCED_CAP_TOKENS = 12000     # manual picks on top of the budget stop here, whatever the slider says
+CORE_SHARE = 0.4              # the shared core may take this share of the budget, the rest is the member's own
+BRIEF_PAGES = 20              # one-line summaries of further pages, per member
+BRIEF_CAP_TOKENS = 800        # ... within this many tokens, on top of the budget
+_BOOST_LEAD = 6               # spec 5.1: the page's lead_swimlane is this member
+_BOOST_AFFECTED = 3           # the member is among the page's affected_swimlanes
+_BOOST_PHASE = 3              # the task is active in a phase the question names
+_GATE_SECTION = "maturity phases and gates"    # the overview section every member gets in the core
+
+# Words that name a maturity phase without its number (decided 10 September
+# 2026): DV testing closes MP4, PV MP6, SOP is MP7. "MPn" and "MGn" are read
+# directly; a gate closes the phase of the same number.
+_PHASE_WORDS = {"pursuit": ("PURSUIT",), "dv": ("MP3", "MP4"), "pv": ("MP5", "MP6"),
+                "sop": ("MP7",), "pilot": ("MP5", "MP6")}
+
+
+def question_phases(text: str) -> tuple[str, ...]:
+    """The maturity phases a question names, as ``MPn`` (``PURSUIT`` for the
+    pursuit phase), for the phase boost and the shared core."""
+    found: list[str] = []
+    for match in re.finditer(r"\b(?:MP|MG)\s?(\d{1,2})\b", text, re.I):
+        phase = f"MP{int(match.group(1))}"
+        if phase not in found:
+            found.append(phase)
+    lowered = text.lower()
+    for word, phases in _PHASE_WORDS.items():
+        if re.search(rf"\b{word}\b", lowered):
+            found.extend(p for p in phases if p not in found)
+    return tuple(found)
+
+
+def expand_terms(terms: list[str], question: str, notes: list[Note]) -> list[str]:
+    """The question's terms plus what the vault says they mean (spec 5.1):
+    a page's ``aliases`` reach its title words and back, and a row of the
+    Abbreviations page reaches the full form's words. "PPAP" in a question
+    then matches "part approval" on a page, and "part approval" reaches the
+    page whose alias is PPAP. Two-letter abbreviations (DV, PV) are read
+    from the question directly, since ``query_terms`` drops them."""
+    table: dict[str, set[str]] = {}
+
+    def link(key: str, words) -> None:
+        key = key.strip().lower()
+        if len(key) >= 2:
+            table.setdefault(key, set()).update(w for w in words if len(w) >= 3)
+
+    for note in notes:
+        title_words = query_terms(re.sub(r"[_\-]+", " ", note.title))
+        for alias in note.aliases:
+            link(alias, title_words)
+            for word in query_terms(alias):
+                link(word, title_words)
+            for word in title_words:
+                link(word, [alias.lower()])
+        if note.kind == "reference" and "abbreviation" in note.title.lower():
+            for line in note.body.splitlines():
+                cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.startswith("|") else []
+                if len(cells) < 2 or cells[0].lower() in ("abbreviation", "") or cells[0].startswith("-"):
+                    continue
+                full = [w for w in query_terms(cells[1]) if w != "(?)"][:4]
+                for abbr in cells[0].split("/"):
+                    link(abbr, full)
+    short = [w.lower() for w in re.findall(r"\b[A-Za-z]{2}\b", question) if w.lower() in table]
+    expanded = list(terms)
+    for term in list(terms) + short:
+        for word in sorted(table.get(term, ())):
+            if word not in expanded:
+                expanded.append(word)
+    return expanded
+
+
+def core_sections(prepared: "_Prepared", notes: list[Note], projects: list[str], phases: tuple[str, ...]) -> list[Section]:
+    """The shared core (spec 5.1): the project page(s), the section of the
+    process overview that defines the phases and gates, and the Definition
+    of every task active in a phase the question names. In that order; the
+    packing caps it at ``CORE_SHARE`` of the budget."""
+    pinned = {n.relative for n in _pinned(notes, projects)}
+    core = [s for s in prepared.sections if s.relative in pinned]
+    core += [s for s in prepared.sections if s.heading.lower() == _GATE_SECTION and s.note.kind == "process"]
+    if phases:
+        wanted = set(phases)
+        core += [s for s in prepared.sections
+                 if s.note.phases and (wanted & set(s.note.phases)) and s.heading.lower() == "definition"]
+    return core
+
+
+def _label(section: Section) -> str:
+    return f"### {section.relative}" + (f" - {section.heading}" if section.heading else "")
 
 
 def select_sections(
     notes: list[Note], question: str, token_budget: int = DEFAULT_TOKEN_BUDGET,
     *, extra_terms: list[str] | tuple[str, ...] = (), pinned: list[Note] | None = None,
     extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
-    prepared: "_Prepared | None" = None,
+    prepared: "_Prepared | None" = None, member: str = "", phases: tuple[str, ...] | None = None,
+    core: list[Section] | None = None, preferred: list[str] | tuple[str, ...] = (),
+    brief_first: list[str] | tuple[str, ...] = (), reasons: dict[str, str] | None = None,
+    projects: list[str] | None = None,
 ) -> KnowledgeSelection:
     """Rank every section of every note against the question - and, for a
     member's own block, against ``extra_terms`` (the member's targets,
     process tasks and title) - and pack the best into ``token_budget``.
-    ``pinned`` notes (the project page) go first whatever their score,
-    within a share of the budget. Everything fits: everything is sent. A
-    section too big for what is left is cut to fit, once."""
-    terms = query_terms(question)
+
+    Spec 5.1 (decided 10 September 2026): the queue is manual picks, then
+    the shared ``core`` (within ``CORE_SHARE`` of the budget), then the
+    sections the model ``preferred`` in that order, then everything else by
+    score. The score carries the page properties: the page's lead is this
+    ``member`` (+6), the member is affected (+3), the task is active in a
+    phase the question names (+3); the question's terms are expanded by
+    aliases and abbreviations. After the budget is spent, up to
+    ``BRIEF_PAGES`` further pages go in as one line each (the page's
+    ``summary``), within ``BRIEF_CAP_TOKENS`` on top. ``pinned`` notes are
+    accepted for older callers and become part of the core."""
+    terms = expand_terms(query_terms(question), question, notes)
     member_terms = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
     forced = {str(x) for x in extra}
     banned = {str(x) for x in exclude}
     prep = prepared or _Prepared.of(notes)
+    named_phases = tuple(phases) if phases is not None else question_phases(question)
+    if core is None:
+        core = core_sections(prep, notes, projects or [], named_phases)
+        core = [s for s in prep.sections if s.relative in {n.relative for n in (pinned or [])}] + [s for s in core if s.relative not in {n.relative for n in (pinned or [])}]
+    core_ids = {section_id(s): i for i, s in enumerate(core)}
+    preferred_ids = {str(x): i for i, x in enumerate(preferred)}
     all_sections = [section for section in prep.sections
                     if section_id(section) not in banned and section.relative not in banned]
-    pinned_paths = {n.relative for n in (pinned or [])}
+    member_key = member.strip().lower()
 
     def is_forced(section: Section) -> bool:
         return section_id(section) in forced or section.relative in forced
 
+    def boosts(section: Section) -> int:
+        note = section.note
+        score = 0
+        if member_key:
+            if note.lead.lower() == member_key:
+                score += _BOOST_LEAD
+            elif any(m.lower() == member_key for m in note.member):
+                score += _BOOST_AFFECTED
+        if named_phases and note.phases and set(named_phases) & set(note.phases):
+            score += _BOOST_PHASE
+        return score
+
     def rank(section: Section) -> tuple:
-        pin = 0 if is_forced(section) else 1 if section.relative in pinned_paths else 2
+        sid = section_id(section)
+        if is_forced(section):
+            pin, order = 0, 0
+        elif sid in core_ids:
+            pin, order = 1, core_ids[sid]
+        elif sid in preferred_ids or section.relative in preferred_ids:
+            pin, order = 2, preferred_ids.get(sid, preferred_ids.get(section.relative, 0))
+        else:
+            pin, order = 3, 0
         low = prep.lowered.get(id(section))
-        score = score_section(section, terms, low) * 2 + score_section(section, member_terms, low)
-        return (pin, -score, -prep.mtimes.get(section.relative, 0.0), section.relative, section.index)
+        score = score_section(section, terms, low) * 2 + score_section(section, member_terms, low) + boosts(section)
+        return (pin, order, -score, -prep.mtimes.get(section.relative, 0.0), section.relative, section.index)
 
     ranked = sorted(all_sections, key=rank)
-    selection = KnowledgeSelection(vault_path=None, total_notes=len(notes))
+    selection = KnowledgeSelection(vault_path=None, total_notes=len(notes), reasons=dict(reasons or {}),
+                                   picked_by="model" if preferred else "python")
     if not notes:
         return selection
     remaining = token_budget - estimate_tokens("## Knowledge from the vault\n\n")
-    pinned_share = (token_budget // 4) // max(len(pinned_paths), 1)   # per pinned note, so no project page starves another
-    chosen: list[tuple[Section, str]] = []
-    pinned_used: dict[str, int] = {}
+    core_cap = int(token_budget * CORE_SHARE)
+    chosen: list[tuple[Section, str, str]] = []      # section, chunk, tier ("core" or "own")
+    core_used = 0
     cut_once = False
     for section in ranked:
-        label = f"### {section.relative}" + (f" - {section.heading}" if section.heading else "")
+        label = _label(section)
         chunk = f"{label}\n{section.body}\n\n"
         cost = estimate_tokens(chunk)
+        sid = section_id(section)
         if is_forced(section):
             if selection.forced_tokens + cost > FORCED_CAP_TOKENS:
                 selection.truncated = True      # the picks alone would overflow the model; the rest is dropped
                 continue
-            chosen.append((section, chunk))    # a manual pick is sent whole, on top of the budget
+            chosen.append((section, chunk, "own"))    # a manual pick is sent whole, on top of the budget
             selection.forced_tokens += cost
             continue
-        if section.relative in pinned_paths and pinned_used.get(section.relative, 0) + cost > pinned_share and chosen:
-            continue          # a project page may not eat the whole budget
+        if sid in core_ids:
+            if core_used + cost > core_cap and chosen:
+                continue          # the core may not eat the member's share
+            if cost <= remaining:
+                chosen.append((section, chunk, "core"))
+                remaining -= cost
+                core_used += cost
+            continue
         if cost <= remaining:
-            chosen.append((section, chunk))
+            chosen.append((section, chunk, "own"))
             remaining -= cost
-            if section.relative in pinned_paths:
-                pinned_used[section.relative] = pinned_used.get(section.relative, 0) + cost
             continue
         if remaining < 50:
             break             # the budget is spent
@@ -466,31 +629,71 @@ def select_sections(
             # This section does not fit whole: cut it once to what is left,
             # then keep looking for smaller sections that still fit.
             cut = section.body[:room_chars]
-            chosen.append((section, f"{label}\n{cut}\n[... cut to fit the token budget]\n\n"))
+            chosen.append((section, f"{label}\n{cut}\n[... cut to fit the token budget]\n\n", "own"))
             selection.truncated = True
             cut_once = True
             remaining = 0
             break
         continue              # too big: a smaller, lower-ranked section may still fit
     # Sections of one note stay together, in the note's own order, under the
-    # note's first appearance in the ranking.
-    order: list[str] = []
-    by_note: dict[str, list[tuple[Section, str]]] = {}
-    for section, chunk in chosen:
-        if section.relative not in by_note:
-            order.append(section.relative)
-            by_note[section.relative] = []
-        by_note[section.relative].append((section, chunk))
-    parts: list[str] = []
-    for relative in order:
-        items = sorted(by_note[relative], key=lambda item: item[0].index)
-        note_text = "".join(chunk for _s, chunk in items)
-        parts.append(note_text)
-        selection.notes.append(items[0][0].note)
-        selection.sections.extend(section for section, _c in items)
-        selection.sent[relative] = "".join(section.body + "\n" for section, _c in items)
-    selection.text = ("## Knowledge from the vault\n\n" + "".join(parts)).rstrip() if parts else ""
-    selection.tokens = estimate_tokens(selection.text)
+    # note's first appearance in the ranking - per tier: a page's Definition
+    # in the core does not pull its Coaching into the core.
+    by_note: dict[tuple[str, str], list[tuple[Section, str]]] = {}
+    order: dict[str, list[str]] = {"core": [], "own": []}
+    for section, chunk, tier in chosen:
+        key = (tier, section.relative)
+        if key not in by_note:
+            by_note[key] = []
+            order[tier].append(section.relative)
+        by_note[key].append((section, chunk))
+    parts: dict[str, list[str]] = {"core": [], "own": []}
+    for tier in ("core", "own"):
+        for relative in order[tier]:
+            items = sorted(by_note[(tier, relative)], key=lambda item: item[0].index)
+            parts[tier].append("".join(chunk for _s, chunk in items))
+            if items[0][0].note not in selection.notes:
+                selection.notes.append(items[0][0].note)
+            selection.sections.extend(section for section, _c in items)
+            selection.sent[relative] = selection.sent.get(relative, "") + "".join(section.body + "\n" for section, _c in items)
+    sent_pages = {relative for _tier, relative in by_note}
+    # The brief tier: one line per further page, the model's brief picks first.
+    brief_order: list[Note] = []
+    wanted_first = [str(x).split("#", 1)[0] for x in brief_first]
+    for relative in wanted_first:
+        note = next((s.note for s in all_sections if s.relative == relative), None)
+        if note is not None and relative not in sent_pages and note not in brief_order:
+            brief_order.append(note)
+    for section in ranked:
+        if section.relative in sent_pages or section.note in brief_order or section.note.kind == "project":
+            continue
+        brief_order.append(section.note)
+    brief_lines: list[str] = []
+    brief_used = 0
+    for note in brief_order[:BRIEF_PAGES]:
+        headings = [s.heading for s in split_sections(note) if s.heading][:4]
+        line = f"- {note.relative}: " + (note.summary or ("sections: " + ", ".join(headings) if headings else "no summary yet"))
+        cost = estimate_tokens(line + "\n")
+        if brief_used + cost > BRIEF_CAP_TOKENS:
+            break
+        brief_lines.append(line)
+        brief_used += cost
+        selection.briefs.append(note)
+        selection.brief_sent[note.relative] = note.summary or line
+    core_body = "".join(parts["core"]).rstrip()
+    own_body = "".join(parts["own"]).rstrip()
+    selection.core_text = ("## Knowledge from the vault, shared by every member\n\n" + core_body) if core_body else ""
+    selection.own_text = ("## Knowledge selected for this member\n\n" + own_body) if own_body else ""
+    selection.brief_text = ("## Further pages in the vault, one line each\n\nThese pages were not sent in full. "
+                            "Say so when you rely on one of them.\n\n" + "\n".join(brief_lines)) if brief_lines else ""
+    selection.core_tokens = estimate_tokens(selection.core_text)
+    selection.own_tokens = estimate_tokens(selection.own_text)
+    selection.brief_tokens = estimate_tokens(selection.brief_text)
+    blocks = [b for b in (core_body, own_body) if b]
+    text = "## Knowledge from the vault\n\n" + "\n\n".join(blocks) if blocks else ""
+    if selection.brief_text:
+        text = (text + "\n\n" if text else "") + selection.brief_text
+    selection.text = text
+    selection.tokens = estimate_tokens("## Knowledge from the vault\n\n" + "\n\n".join(blocks)) if blocks else 0   # the budgeted tiers; briefs ride on top
     return selection
 
 
@@ -552,7 +755,7 @@ def outline(config: dict, projects=None) -> list[dict]:
     result = []
     for note in notes:
         sections = split_sections(note)
-        result.append({"path": note.relative, "title": note.title, "kind": note.kind,
+        result.append({"path": note.relative, "title": note.title, "kind": note.kind, "summary": note.summary,
                        "sections": [{"id": section_id(s),
                                      "heading": s.heading or ("(whole note)" if len(sections) == 1 else "(opening)"),
                                      "tokens": estimate_tokens(s.body)} for s in sections]})
@@ -568,7 +771,7 @@ def gather(config: dict, question: str, *, token_budget: int | None = None, proj
     if vault is None:
         return KnowledgeSelection(vault_path=None)
     budget = token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET
-    selection = select_sections(notes, question, int(budget), pinned=_pinned(notes, chosen))
+    selection = select_sections(notes, question, int(budget), pinned=_pinned(notes, chosen), projects=chosen)
     selection.vault_path = vault
     selection.project = ", ".join(chosen) if chosen else None
     return selection
@@ -578,27 +781,68 @@ def gather_for_members(
     config: dict, question: str, member_terms: dict[str, list[str] | tuple[str, ...] | set[str]],
     *, token_budget: int | None = None, projects=None,
     extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
+    picks: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, KnowledgeSelection]:
     """One knowledge block per member (decided 9 September 2026): the
     sections ranked by the question and by the member's own terms, so each
-    member receives what concerns it, the project page first for all.
-    ``extra`` section ids are sent to every member on top of the budget;
-    ``exclude`` ids are never sent. The vault is read once. No source
+    member receives what concerns it, the shared core first for all (spec
+    5.1). ``extra`` section ids are sent to every member on top of the
+    budget; ``exclude`` ids are never sent. ``picks`` is the model's
+    choice per member (``{"full": [ids], "brief": [ids], "reasons": {id:
+    why}}``, ``picker.pick``): its full picks lead the queue, its brief
+    picks lead the brief tier. The vault is read once. No source
     configured: empty selections."""
     vault, chosen, notes = _knowledge_notes(config, projects)
     budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
     result: dict[str, KnowledgeSelection] = {}
-    pinned = _pinned(notes, chosen)
     prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
+    phases = question_phases(question)
+    core = core_sections(prepared, notes, chosen, phases) if prepared is not None else []
     for member, terms in member_terms.items():
         if vault is None:
             result[member] = KnowledgeSelection(vault_path=None)
             continue
-        selection = select_sections(notes, question, budget, extra_terms=tuple(terms), pinned=pinned,
-                                    extra=extra, exclude=exclude, prepared=prepared)
+        pick = (picks or {}).get(member) or {}
+        selection = select_sections(notes, question, budget, extra_terms=tuple(terms), extra=extra, exclude=exclude,
+                                    prepared=prepared, member=member, phases=phases, core=core, projects=chosen,
+                                    preferred=tuple(pick.get("full") or ()), brief_first=tuple(pick.get("brief") or ()),
+                                    reasons=dict(pick.get("reasons") or {}))
         selection.vault_path = vault
         selection.project = ", ".join(chosen) if chosen else None
         result[member] = selection
+    return result
+
+
+CANDIDATES_PER_MEMBER = 40
+
+
+def candidates(config: dict, question: str, member_terms: dict[str, list[str] | tuple[str, ...] | set[str]],
+               *, projects=None, limit: int = CANDIDATES_PER_MEMBER) -> dict[str, list[dict[str, Any]]]:
+    """The Python first cut for the AI-assisted pick (spec 5.1): per member
+    the ``limit`` best-ranked sections with id, page, heading, the page's
+    summary and size. The model chooses from these and from nothing else."""
+    vault, chosen, notes = _knowledge_notes(config, projects)
+    if vault is None:
+        return {m: [] for m in member_terms}
+    prepared = _Prepared.of(notes)
+    phases = question_phases(question)
+    core = core_sections(prepared, notes, chosen, phases)
+    core_ids = {section_id(s) for s in core}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for member, terms in member_terms.items():
+        # A very large budget: the ranking decides, the packing takes everything that fits.
+        selection = select_sections(notes, question, 10 ** 7, extra_terms=tuple(terms), prepared=prepared,
+                                    member=member, phases=phases, core=core, projects=chosen)
+        rows = []
+        for section in selection.sections:
+            sid = section_id(section)
+            if sid in core_ids:
+                continue          # the core goes to every member anyway
+            rows.append({"id": sid, "path": section.relative, "heading": section.heading,
+                         "summary": section.note.summary, "tokens": estimate_tokens(section.body)})
+            if len(rows) >= limit:
+                break
+        result[member] = rows
     return result
 
 

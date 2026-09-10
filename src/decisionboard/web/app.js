@@ -128,6 +128,26 @@
     return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
   function modeOf(id) { return $(id).value || "individual"; }
+  function selectionOf() { return $("selection-mode").value === "python" ? "python" : "ai"; }
+  function setSelection(value) { $("selection-mode").value = value === "python" ? "python" : "ai"; }
+  let lastPickState = null;
+  // The one line under the dropdown, and the banner when the model's pick failed.
+  function updatePickStatus() {
+    if (!session) return;
+    const state = session.pick_state;
+    const python = selectionOf() === "python";
+    const text = python ? "Python ranks the sections by the words of the question and of each member, plus the page properties."
+      : state === "running" ? "The model is choosing the knowledge for each member…"
+      : state === "done" ? `The model chose the knowledge for each member; its reasons are listed under the estimate.${session.pick_dropped ? ` ${session.pick_dropped} id(s) it named were not candidates and were dropped.` : ""}`
+      : state === "failed" ? "The model's pick did not come back usable; the Python ranking is shown instead."
+      : "The model will choose the knowledge for each member on this screen.";
+    $("pick-status").textContent = text;
+    const banner = $("pick-banner");
+    banner.hidden = !(state === "failed" && !python);
+    if (!banner.hidden) banner.textContent = `AI pick failed: ${session.pick_error || "no usable answer"}. Python's ranking is in force. Change the dropdown and back to try again.`;
+    if (lastPickState !== null && lastPickState !== state && ["done", "failed"].includes(state)) requestEstimate();
+    lastPickState = state;
+  }
   function setMode(id, value) { $(id).value = value; if ($(id).value !== value) $(id).value = "individual"; }
   // One member's answer as rows: the full assessment, or the reasons why the
   // topic does not touch it. Used on the member cards and inside follow-ups.
@@ -294,7 +314,8 @@
     }, 1000);
   }
   function needsPolling(s) {
-    return ["clarifying", "running", "synthesising", "proposing"].includes(s.phase) || s.busy;
+    return ["clarifying", "running", "synthesising", "proposing"].includes(s.phase) || s.busy
+      || (s.phase === "confirm" && s.pick_state === "running");
   }
 
   async function ask(event) {
@@ -335,7 +356,7 @@
     switch (session.phase) {
       case "clarifying": return renderClarifying();
       case "questions": return renderQuestions();
-      case "confirm": return renderConfirm();
+      case "confirm": renderConfirm(); return updatePickStatus();
       case "running":
       case "synthesising": return renderRunning();
       case "result": return renderResult();
@@ -420,6 +441,20 @@
     renderPicks($("confirm-members"), names, ticked);
     $("confirm-members").querySelectorAll("input").forEach((box) => box.addEventListener("change", saveConfirmDraft));
     setMode("run-mode", (kept && kept.mode) || session.mode || "individual");
+    // Knowledge selection (spec 5.1): the browser remembers the last choice;
+    // a choice that differs from the session's starts (or skips) the pick.
+    const remembered = store.get("selection") || session.selection || config.selection || "ai";
+    setSelection(remembered);
+    if (remembered !== session.selection) api("POST", `/api/sessions/${session.id}/pick`, { selection: remembered }).then((s2) => { session = s2; updatePickStatus(); }).catch(() => {});
+    $("selection-mode").onchange = async () => {
+      const value = selectionOf();
+      store.set("selection", value);
+      try { session = await api("POST", `/api/sessions/${session.id}/pick`, { selection: value }); } catch (err) { setError("home-error", err.message); }
+      updatePickStatus(); countLine(); saveConfirmDraft();
+      if (needsPolling(session) && !pollTimer) startPolling();
+    };
+    lastPickState = null;
+    updatePickStatus();
     $("budget").value = (kept && kept.budget != null) ? kept.budget : (session.budget != null ? session.budget : (config.token_budget || 6000));
     picks = { extra: (kept && kept.extra) || session.extra || [], exclude: (kept && kept.exclude) || session.exclude || [] };
     outlineCache = null;
@@ -468,8 +503,19 @@
     }));
   }
   function renderMemberSections(e) {
-    $("estimate-notes").innerHTML = `<dl>${Object.entries(e.sections || {}).map(([m, secs]) => `<dt>${esc(m)}</dt><dd>${secs.length ? `<ul class="sec-list">${secs.map((s) => `
-      <li><input type="checkbox" data-id="${esc(s.id)}" ${picks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out for every member"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>"}</dd>`).join("")}</dl>`;
+    const briefs = e.briefs || {};
+    const split = e.split || {};
+    const row = (s) => `
+      <li><input type="checkbox" data-id="${esc(s.id)}" ${picks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out for every member"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="Every member receives this">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
+    const briefRow = (b) => `
+      <li><input type="checkbox" data-id="${esc(b.path)}" ${picks.exclude.includes(b.path) ? "" : "checked"} title="Untick to leave this page out for every member"> ${esc(b.path)} <span class="brief-tag" title="One line, not the page">summary</span>${b.reason ? `<span class="reason">${esc(b.reason)}</span>` : (b.summary ? `<span class="reason">${esc(b.summary)}</span>` : "")}</li>`;
+    $("estimate-notes").innerHTML = `<dl>${Object.entries(e.sections || {}).map(([m, secs]) => {
+      const sp = split[m];
+      const sizes = sp ? `<span class="muted small"> core ${fmtNum(sp.core)} · own ${fmtNum(sp.own)} · summaries ${fmtNum(sp.brief)} tokens</span>` : "";
+      const full = secs.length ? `<p class="tier">In full${sizes}</p><ul class="sec-list">${secs.map(row).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>";
+      const brief = (briefs[m] || []).length ? `<p class="tier">As one line each</p><ul class="sec-list">${briefs[m].map(briefRow).join("")}</ul>` : "";
+      return `<dt>${esc(m)}${e.picked_by && e.picked_by[m] === "model" ? ' <span class="mode-mark" title="The model chose these">AI pick</span>' : ""}</dt><dd>${full}${brief}</dd>`;
+    }).join("")}</dl>`;
     $("estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
       const id = box.dataset.id;
       picks.exclude = picks.exclude.filter((x) => x !== id);
@@ -486,7 +532,7 @@
       if (!members.length) { $("estimate").textContent = "Tick at least one member."; return; }
       try {
         const e = await api("POST", `/api/sessions/${session.id}/estimate`, {
-          members, mode: modeOf("run-mode"), budget: Number($("budget").value),
+          members, mode: modeOf("run-mode"), budget: Number($("budget").value), selection: selectionOf(),
           topic: $("in-topic").value, context: $("in-context").value,
           options: lines($("in-options").value), constraints: lines($("in-constraints").value),
           extra: picks.extra, exclude: picks.exclude, outline: !outlineCache,
@@ -494,7 +540,8 @@
         if (seq !== estimateSeq) return;
         const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} per call learned from ${e.overhead_learned_from} real call(s) of this topic` : `overhead of ${fmtNum(e.overhead_per_call)} per call assumed until the first real call`;
         const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
-        $("estimate").innerHTML = `<strong>${e.calls} model call(s)</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, calls are exact`;
+        const pickCall = (e.per_call || []).some((c) => c.label === "knowledge pick") ? " (one of them the knowledge pick)" : "";
+        $("estimate").innerHTML = `<strong>${e.calls} model call(s)</strong>${pickCall}, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, calls are exact`;
         renderMemberSections(e);
         if (e.outline) { outlineCache = e.outline; renderOutline(); }
       } catch (err) {
@@ -530,7 +577,7 @@
     const body = {
       topic: $("in-topic").value, context: $("in-context").value,
       options: lines($("in-options").value), constraints: lines($("in-constraints").value),
-      members, mode: modeOf("run-mode"), budget: Number($("budget").value),
+      members, mode: modeOf("run-mode"), budget: Number($("budget").value), selection: selectionOf(),
       extra: picks.extra, exclude: picks.exclude,
     };
     try { session = await api("POST", `/api/sessions/${session.id}/run`, body); render(); }
@@ -841,8 +888,19 @@
       <table><thead><tr><th>Phase</th><th class="num">Duration</th></tr></thead><tbody>
         <tr><td>clarifier (all rounds)</td><td class="num">${fmtSec(wall.clarifier)}</td></tr>${wallRows}
         <tr class="total"><td>From the question to now</td><td class="num">${fmtSec(total)}</td></tr></tbody></table>
+      ${knowledgeSplitTable()}
       <p class="muted small">A retried empty run counts once, with the retry's tokens. Time you spent answering questions is not counted as model time.</p>`;
     dialog.hidden = false;
+  }
+
+  // Knowledge tokens per member of the last run, by tier (spec 5.1).
+  function knowledgeSplitTable() {
+    const split = (session && session.knowledge_split) || {};
+    const names = Object.keys(split);
+    if (!names.length) return "";
+    const rows = names.map((m) => `<tr><td>${esc(m)}</td><td class="num">${fmtNum(split[m].core)}</td><td class="num">${fmtNum(split[m].own)}</td><td class="num">${fmtNum(split[m].brief)}</td></tr>`).join("");
+    return `<p class="eyebrow">Knowledge per member <span class="muted small">tokens by tier, last run · selection: ${esc(session.selection === "python" ? "Python only" : session.pick_state === "done" ? "AI assisted" : "AI assisted, Python fallback")}</span></p>
+      <table class="split"><thead><tr><th>Member</th><th class="num">Shared core</th><th class="num">Own sections</th><th class="num">Summaries</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   function renderDone() {
@@ -901,6 +959,10 @@
   $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("followup-mode").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
   $("btn-mode-info").addEventListener("click", () => { $("mode-info").hidden = !$("mode-info").hidden; });
+  $("btn-budget-info").addEventListener("click", () => { $("budget-info").hidden = !$("budget-info").hidden; });
+  $("btn-selection-info").addEventListener("click", () => { $("selection-info").hidden = !$("selection-info").hidden; });
+  $("btn-picks-accept").addEventListener("click", () => { picks.exclude = []; saveConfirmDraft(); requestEstimate(); });
+  $("btn-picks-python").addEventListener("click", () => { setSelection("python"); $("selection-mode").onchange(); });
   $("btn-followup-mode-info").addEventListener("click", () => { $("mode-info").hidden = false; $("mode-info").scrollIntoView({ block: "center" }); });
   $("btn-stats").addEventListener("click", openStats);
   $("btn-stats-close").addEventListener("click", () => { $("stats-dialog").hidden = true; });

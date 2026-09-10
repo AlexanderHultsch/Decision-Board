@@ -23,6 +23,7 @@ PROMPT_NAMES: tuple[str, ...] = (
     "board_members",
     "board_synthesis",
     "clarifier",
+    "knowledge_pick",
     "memory_proposal",
 )
 

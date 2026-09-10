@@ -44,11 +44,20 @@ class RoutingFakeProvider(AiProvider):
     def __init__(self):
         self.prompts: list[str] = []
         self.lock = threading.Lock()
+        self.pick_answer: str | None = None     # a fixed answer to the pick prompt, for the fallback test
 
     def complete(self, task: str, prompt: str) -> AiResult:
         with self.lock:
             self.prompts.append(prompt)
-        if "## Question from Alex" in prompt:
+        if "## Candidate sections" in prompt:
+            if self.pick_answer is not None:
+                text = self.pick_answer
+            else:
+                members = [line[4:].strip() for line in prompt.splitlines() if line.startswith("### ")]
+                ids = [line.split("- id: ", 1)[1].split(" | ", 1)[0] for line in prompt.splitlines() if line.startswith("- id: ")]
+                text = json.dumps({"members": [{"member": m, "full": ids[:1], "brief": ids[1:2],
+                                                "reasons": {i: f"{m} needs it" for i in ids[:2]}} for m in members]})
+        elif "## Question from Alex" in prompt:
             text = CLEAR if "## Clarification so far" in prompt else CLARIFIER
         elif "## Members to assess" in prompt or "## Members to ask again" in prompt:
             names = [line.split("### Member: ", 1)[1].strip() for line in prompt.splitlines() if line.startswith("### Member: ")]
@@ -86,7 +95,8 @@ class TestServerFlow(unittest.TestCase):
         (cls.vault / "Tooling.md").write_text("---\ntitle: Tooling\ntags: [tooling]\n---\nTooling is late.\n", encoding="utf-8")
         make_roles(cls.vault / "Roles&Responsibilities")
         cls.config_path = Path(cls.tmp.name) / "config.local.json"
-        cls.config = {"provider": {"models": {"board": "fake/m"}}, "knowledge": {"vault_path": str(cls.vault), "token_budget": 6000}}
+        cls.config = {"provider": {"models": {"board": "fake/m"}},
+                      "knowledge": {"vault_path": str(cls.vault), "token_budget": 6000, "selection": "python"}}
         cls.config_path.write_text(json.dumps(cls.config), encoding="utf-8")
         cls.provider = RoutingFakeProvider()
         cls.httpd, cls.board_server = create_http_server(cls.config, cls.config_path, port=0, provider=cls.provider)
@@ -556,3 +566,60 @@ class TestServerFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKnowledgePick(TestServerFlow):
+    """Spec 5.1: the AI-assisted pick on the confirm screen, its fallback,
+    the shared core once in the combined form, the statistics row."""
+
+    def _to_confirm(self, selection=None):
+        _, state = self.call("POST", "/api/sessions", {"question": "Rework the tooling before MG4?"})
+        sid = state["id"]
+        self.wait_for(sid, lambda s: s["phase"] == "questions")
+        self.call("POST", f"/api/sessions/{sid}/answers", {"answers": [""], "final": True})
+        self.wait_for(sid, lambda s: s["phase"] == "confirm")
+        if selection:
+            self.call("POST", f"/api/sessions/{sid}/pick", {"selection": selection})
+        return sid
+
+    def test_the_pick_runs_on_the_confirm_screen_and_leads_each_members_block(self):
+        sid = self._to_confirm("ai")
+        state = self.wait_for(sid, lambda s: s["pick_state"] in ("done", "failed"))
+        self.assertEqual(state["pick_state"], "done", state["pick_error"])
+        self.assertEqual(state["selection"], "ai")
+        first = state["picks"][CLASSIC[0]]["full"][0]           # the fake picks the first candidate
+        status, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
+        self.assertEqual(est["calls"], 3)                        # the pick is made: two members plus the synthesis
+        self.assertEqual(est["picked_by"][CLASSIC[0]], "model")
+        self.assertEqual(est["reasons"][CLASSIC[0]][first], f"{CLASSIC[0]} needs it")
+        self.assertTrue(any(s["reason"] for s in est["sections"][CLASSIC[0]]))
+        self.assertIn("split", est)
+        self.call("POST", f"/api/sessions/{sid}/run", {"topic": "Rework?", "members": list(CLASSIC[:2]), "budget": 2000, "mode": "combined"})
+        state = self.wait_for(sid, lambda s: s["phase"] == "result")
+        combined = [p for p in self.provider.prompts if "## Members to assess" in p][-1]
+        self.assertEqual(combined.count("shared by every member"), 1 if "shared by every member" in combined else 0)
+        self.assertIn(CLASSIC[0], state["knowledge_split"])
+        steps = [c["step"] for c in state["stats"]["calls"]]
+        self.assertIn("knowledge pick", steps)
+
+    def test_a_bad_pick_keeps_the_python_ranking_and_says_so(self):
+        self.provider.pick_answer = "{}"
+        try:
+            sid = self._to_confirm("ai")
+            state = self.wait_for(sid, lambda s: s["pick_state"] in ("done", "failed"))
+            self.assertEqual(state["pick_state"], "failed")
+            self.assertIn("members", state["pick_error"])
+            _, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
+            self.assertEqual(est["picked_by"][CLASSIC[0]], "python")
+            self.assertEqual(est["calls"], 4)                    # a failed pick is redone: pick, two members, synthesis
+            self.assertIn("Tooling.md", est["members"][CLASSIC[0]])
+        finally:
+            self.provider.pick_answer = None
+
+    def test_python_only_makes_no_pick_call(self):
+        sid = self._to_confirm("python")
+        _, state = self.call("GET", f"/api/sessions/{sid}")
+        self.assertEqual(state["pick_state"], "idle")
+        _, est = self.call("POST", f"/api/sessions/{sid}/estimate", {"members": list(CLASSIC[:2]), "budget": 2000})
+        self.assertEqual(est["calls"], 3)
+        self.assertNotIn("knowledge pick", [p["label"] for p in est["per_call"]])
