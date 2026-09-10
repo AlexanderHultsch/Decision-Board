@@ -441,7 +441,65 @@ Sessions live in memory for the life of the process. The server writes
 nothing to disk except the audit entry `run_board` already writes and the
 one vault note Alex confirms.
 
-## 10. Origin
+### 9.5 Site address and start page
+
+**Decided 10 September 2026 in an interview, to be built.** The board
+becomes one use case of several behind one start page.
+
+| # | Decision |
+|---|---|
+| 21 | The site's address is `http://ai.localhost:8765/`. Every name under `.localhost` resolves to this machine in Chrome, Edge and Firefox without admin rights or a hosts-file entry, so the name works on a locked-down company laptop. The server still binds to `127.0.0.1` only. `serve` opens the named address; `http://localhost:8765/` keeps working as the fallback and the start page shows both. The name is `server.site_name` (default `ai`). The Host and Origin checks of 9.4 accept `<site_name>.localhost` next to `localhost` and `127.0.0.1`, and nothing else. |
+| 22 | The start page at `/` holds the project picker and one tile per use case: **Board** (the tool as it is today, now at `/board`) and **Ask the vault** (`/ask`, section 10). The project is chosen once on the start page, remembered in the browser, and carried into every use case; a use case shows the chosen project with a link back to change it, and no longer carries a picker of its own. Options stays where it is, reachable from every page. |
+| 23 | One page, one script, one stylesheet as before: the path decides which screen the script shows (`/`, `/board`, `/ask`), the server serves `index.html` for all three, and the browser's Back button moves between them. Deep links work after a reload. |
+
+## 10. Ask the vault
+
+**Decided 10 September 2026 in an interview, to be built.** A second use
+case on the same infrastructure: one agent, no members, that answers any
+question from the Obsidian vault and says where the answer comes from.
+
+### 10.1 Decisions
+
+| # | Decision |
+|---|---|
+| 1 | **One agent, one call per question.** No clarifier, no confirm screen, no members. The question goes to the model together with the knowledge block; the answer comes back in the same request cycle the board uses (a background thread, the page polls). |
+| 2 | **A thread, not a single question.** Follow-up questions go into the same thread; each call carries the thread's earlier questions and answers, as the board's follow-up does, so "and who approves that?" works. |
+| 3 | **Knowledge: the whole vault, the board's Python ranking, no pick call.** `select_sections` with the question's terms and no member terms; the shared core applies (project page, phases and gates, the abbreviation rows the question uses, the Definitions of tasks active in a named phase); one-line summaries of further pages ride on top as for a member; KPI notes of the chosen project are attached with their age, as for the board. The AI-assisted pick is not used here: one call is the point. |
+| 4 | **Slider, default 12,000 tokens** (`ask.token_budget`), twice a member's default since there is only one call, with the same "i" and the same estimate line ("1 call · about T tokens"). Manual picks and exclusions from the estimate list work as on the confirm screen. |
+| 5 | **Answer with sources and gaps.** The model returns JSON: the answer in Markdown, the sources it used as `path#heading` with one line why each, and the gaps: what the question asked that the vault does not hold. Python keeps only sources that were actually sent (as the board's fact check does), drops the rest and says how many it dropped. The page shows the answer, then "Sources" as links that open the page in Obsidian (`obsidian://open?vault=<name>&file=<path>`, the vault name being the vault folder's name unless `knowledge.vault_name` says otherwise) with the section name beside, then "Not in the vault" when the gaps list is not empty. The prompt (`ask.md`) forbids inventing a rule, a date or an owner: what is not in the block is a gap, never a guess. A question that asks for a decision rather than a fact gets its answer and one line pointing to the Board. |
+| 6 | **Threads are kept and listed.** Every thread is saved as one JSON file under `server.threads_folder` (default `threads/` next to `config.local.json`, git-ignored), never in the vault: the questions, the answers with sources and gaps, the knowledge paths sent, the statistics. The `/ask` page lists the threads (first question, date, number of questions) and reopens one for reading and further questions. A thread can be deleted from the list. |
+| 7 | **Close thread may propose a vault note**, through the board's memory step unchanged: the same proposal call, the same outline of the vault, the same confirm screen, the same folder and front matter, written only after a yes. Discard leaves the thread as it is. |
+| 8 | **Audit trail** as for the board: one `ask` entry per call with the counts and durations, nothing of the text. Statistics per thread as for a topic. |
+| 9 | **Language rules (section 7) apply**: English, plain, no invented names. |
+
+### 10.2 Reuse
+
+| Existing part | Used for |
+|---|---|
+| `knowledge.select_sections`, `core_sections`, `kpi_notes` | The knowledge block, unchanged; `member=""` and no member terms. |
+| `Session`, the background jobs, polling, Back, error handling | A session of kind `ask`; the board's sessions are kind `board`. |
+| `estimate` and the picks list | The estimate line and the section list under the slider. |
+| `memory_writer` and the `/memory` routes | The close step. |
+| `audit.log_run`, `RecordingProvider`, statistics | Per call, per thread. |
+| `web/index.html`, `app.js`, `style.css` | The start page, the `/ask` screens and the moved board, all in the same files. |
+
+New: `ask.py` (the prompt assembly, the JSON parsing with the source check, the thread store), `agent/prompts/ask.md`, the routes `POST /api/ask` (new thread from a question), `POST /api/ask/<id>/question`, `GET /api/ask`, `GET /api/ask/<id>`, `DELETE /api/ask/<id>`, `POST /api/ask/<id>/close` and the memory routes reused on an ask session, `config`: `server.site_name`, `server.threads_folder`, `ask.token_budget`, `knowledge.vault_name`.
+
+### 10.3 Order of work
+
+1. The address: `site_name`, the Host and Origin checks, `serve` opening the name.
+2. The start page, the paths, the project picker moved, the board under `/board`.
+3. `ask.py`, the prompt and the routes, with tests against the fake provider.
+4. The `/ask` page: question, slider, estimate, answer with sources and gaps, follow-ups.
+5. Thread store and list.
+6. Close with the memory step.
+7. The browser walk extended to the start page and a thread; the spec marked as built.
+
+### 10.4 Out of scope for now
+
+The AI-assisted pick for the agent, any write into the vault other than the confirmed memory note, more than one agent per question, threads shared between machines.
+
+## 11. Origin
 
 Decision Board was TR-4 of the Program Lead Cockpit, a single-user automation
 system for a Program Lead at Visteon Electronics running the MB32829 Gen6
