@@ -517,11 +517,12 @@ The AI-assisted pick for the agent, any write into the vault other than the conf
 
 ## 11. Program Mind: the app shell
 
-**Decided 10 September 2026 in an interview of four rounds, to be built.**
-The site is rebuilt from the ground as an app that hosts several agents,
-small and large, all working on the Obsidian vault, which is the one thing
-that sets it apart from any other AI. The board and Ask the vault are the
-first two.
+**Decided 10 September 2026 in an interview of four rounds, built the same
+day** in `shell/server.py`, `memory/history.py`, `web/` and each agent's
+own script. The site is rebuilt from the ground as an app that hosts
+several agents, small and large, all working on the Obsidian vault, which
+is the one thing that sets it apart from any other AI. The board and Ask
+the vault are the first two.
 
 ### 11.1 Decisions
 
@@ -619,6 +620,30 @@ the file and whatever the server still holds; a note written into the
 vault stays). Home and both agent pages list only open work. A closed
 topic reopened from the archive is read-only, as a closed thread is: the
 result and the follow-ups stay, the follow-up form goes.
+
+**Built, steps 4 and 5 (10 September 2026).** The menu pages and the walk.
+Privacy and About are two written screens (`/privacy`, `/about`) reached
+from the menu, which now reads Options, Statistics, Status details, Open
+vault in Obsidian, Archive, Privacy, About, Report a bug, in that order.
+Privacy names what leaves the machine (one thing: the prompt each agent
+builds, to the company gateway, answered by the model named in Options,
+and what a prompt holds), what never does (the vault, the history, the
+audit trail, and anything about how the site is used - no telemetry of any
+kind), that no agent writes into the vault without a confirmation, and
+that what the gateway does with a prompt is the company's agreement, not
+this program's. Text only, no live paths, as decision 11 asks. About shows
+the version, the site address, the specification and the repository. **The
+version is the date of the release** (`programmind.__version__`,
+`2026.09.10`): the specification dates every decision, one person runs one
+copy, and there is nothing for two numbers to compare. The specification
+is served from this machine at `/spec` as plain text, so About works
+without the internet; when the program was copied without `docs/`, the
+link goes to the repository instead. Report a bug points at the
+repository's Issues page, in a new tab. The browser walk now runs the
+whole shell end to end - the status icons and their cards, the menu, the
+status page with its test call, the home page and its open work, both
+agents, the step line, the archive with its search and its deletion, and
+the two written pages - and prints `errors: []`.
 
 ### 11.2 Reuse
 

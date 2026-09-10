@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
+from programmind import __version__  # noqa: E402
 from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 from programmind.shell.server import Session, create_http_server, site_name  # noqa: E402
 from programmind.memory import history as history_mod  # noqa: E402
@@ -141,7 +142,7 @@ class TestServerFlow(unittest.TestCase):
         self.fail(f"timed out waiting; last phase {state['phase']} error {state['error']}")
 
     def test_index_and_static_files_are_served(self):
-        for path in ("/", "/board", "/board/abc123", "/ask", "/ask/abc123"):
+        for path in ("/", "/board", "/board/abc123", "/ask", "/ask/abc123", "/archive", "/privacy", "/about"):
             request = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
             with urllib.request.urlopen(request, timeout=10) as response:
                 self.assertIn(b"Program Mind", response.read())
@@ -153,6 +154,19 @@ class TestServerFlow(unittest.TestCase):
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}/static/../server.py")
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(request, timeout=10)
+
+    def test_the_menu_pages_have_what_they_name(self):
+        """Spec 11.1, decision 12: the version, the site address and the
+        specification, which is served from this machine so About works
+        without the internet."""
+        _, view = self.call("GET", "/api/config")
+        self.assertEqual(view["version"], __version__)
+        self.assertTrue(view["repository"].startswith("https://github.com/"))
+        self.assertTrue(view["spec"])
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/spec", timeout=10) as response:
+            self.assertEqual(response.status, 200)
+            self.assertTrue(response.headers["Content-Type"].startswith("text/plain"))
+            self.assertIn(b"## 11. Program Mind: the app shell", response.read())
 
     def test_project_round_trips_and_the_vault_projects_are_listed(self):
         (self.vault / "Dual DCDC.md").write_text("---\nkind: project\n---\nThe project.\n", encoding="utf-8")

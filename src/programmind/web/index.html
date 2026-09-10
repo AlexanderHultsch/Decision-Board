@@ -51,6 +51,8 @@
         <button id="btn-status" type="button" role="menuitem">Status details</button>
         <a id="link-obsidian" role="menuitem" href="#" hidden>Open vault in Obsidian</a>
         <button id="btn-archive" type="button" role="menuitem">Archive</button>
+        <button id="btn-privacy" type="button" role="menuitem">Privacy</button>
+        <button id="btn-about" type="button" role="menuitem">About</button>
         <a id="link-bug" role="menuitem" href="https://github.com/AlexanderHultsch/program-mind/issues" target="_blank" rel="noopener">Report a bug</a>
       </div>
     </div>
@@ -182,6 +184,49 @@
     <p id="archive-count" class="muted small"></p>
     <div id="archive-list" class="thread-list"></div>
     <p id="archive-error" class="error" hidden></p>
+  </section>
+
+  <!-- Privacy (spec 11.1, decision 11): written, text only, no live paths -->
+  <section id="screen-privacy" class="screen" hidden>
+    <h1 class="greeting">Privacy</h1>
+    <p class="lede">What leaves this machine, what never does, and what is written where. This page is a description, not a setting.</p>
+    <div class="prose">
+      <h2>What leaves this machine</h2>
+      <p>One thing: the prompt each agent builds, sent to your company's AI gateway and answered by the model named in Options. A prompt holds what that agent needs to answer:</p>
+      <ul>
+        <li>the question or the topic you typed, and your answers to the clarifying questions;</li>
+        <li>the sections of your vault the agent selected for that question, and one-line summaries of further pages;</li>
+        <li>the role profiles and the conduct note of the swim lanes being asked, and their KPI notes;</li>
+        <li>the earlier questions and answers of the same topic or thread, so a follow-up makes sense.</li>
+      </ul>
+      <p>You can read the whole of it before it goes: the confirm screen lists every section that would be sent, with its size, and you can add or leave out any of them. The estimate under the slider counts the same material.</p>
+      <h2>What never leaves it</h2>
+      <ul>
+        <li><strong>The vault.</strong> It stays a folder on your disk. Only the sections an agent selected for one question travel, never the whole vault, and never a page nobody asked about.</li>
+        <li><strong>Your work.</strong> Topics and threads are files next to this program's configuration. They are not in the vault and they are not sent anywhere.</li>
+        <li><strong>The audit trail.</strong> One line per model call, with the counts and the durations, never the text. It is a file on this machine.</li>
+        <li><strong>Anything about how you use the site.</strong> There is no telemetry, no analytics, no crash reporting, no check for updates. The server listens on this machine only and answers nothing but its own page.</li>
+      </ul>
+      <h2>Writing into the vault</h2>
+      <p>No agent writes into the vault on its own. When you close a topic or a thread you may ask for a note; the agent proposes the text and the place, you see exactly what would be written and where, and it is written only after you confirm. Discarding leaves the vault untouched. The enrich command works the same way: it proposes, and writes only when you say so.</p>
+      <h2>What the gateway does</h2>
+      <p>Once a prompt reaches the company gateway, what happens to it is governed by your company's agreement with that provider, not by this program. This program keeps no copy of a prompt beyond the topic or thread on this machine.</p>
+    </div>
+  </section>
+
+  <!-- About (spec 11.1, decision 12) -->
+  <section id="screen-about" class="screen" hidden>
+    <h1 class="greeting">About</h1>
+    <p class="lede">Program Mind hosts agents that work on one Obsidian vault: the Board for a decision, Ask the vault for a question.</p>
+    <div class="prose">
+      <dl class="about-rows">
+        <dt>Version</dt><dd id="about-version"></dd>
+        <dt>This site</dt><dd id="about-address"></dd>
+        <dt>Specification</dt><dd id="about-spec"></dd>
+        <dt>Repository</dt><dd id="about-repo"></dd>
+      </dl>
+      <p class="muted">The version is the date of the release. Every decision behind this program, with its date and its reason, is in the specification.</p>
+    </div>
   </section>
 
   <!-- Clarifying -->

@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from programmind import __version__
 from programmind.ai.opencode_client import opencode_config_problem
 from programmind.agents.board import clarify as clarify_mod
 from programmind.knowledge import knowledge as knowledge_mod
@@ -53,6 +54,8 @@ from programmind.agents.board.board import (
 )
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
+SPEC_FILE = PACKAGE_DIR.parents[1] / "docs" / "spec.md"   # served at /spec so About works without the internet
+REPOSITORY = "https://github.com/AlexanderHultsch/program-mind"
 WEB_DIR = PACKAGE_DIR / "web"                       # the shell: index.html, shell.js, style.css
 AGENTS_DIR = PACKAGE_DIR / "agents"                 # each agent ships its script under agents/<name>/web/
 DEFAULT_PORT = 8765
@@ -591,6 +594,9 @@ class BoardServer:
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "selection": _selection_value(_get(self.config, "knowledge.selection")),
             "site_name": site_name(self.config),
+            "version": __version__,
+            "repository": REPOSITORY,
+            "spec": SPEC_FILE.is_file(),
             "ask_budget": int(_get(self.config, "ask.token_budget", ask_mod.DEFAULT_TOKEN_BUDGET) or ask_mod.DEFAULT_TOKEN_BUDGET),
             "vault_name": self.vault_name(),
             "knowledge_status": status,
@@ -2081,14 +2087,32 @@ def make_handler(server: BoardServer):
             self.end_headers()
             self.wfile.write(body)
 
+        def _spec(self) -> None:
+            """The specification as it is on disk (11.1, decision 12): plain
+            text, so it opens in a tab and needs no build step and no
+            internet. Missing when the program was copied without ``docs/``."""
+            if not SPEC_FILE.is_file():
+                self._json(404, {"error": "The specification is not next to this copy of the program."})
+                return
+            body = SPEC_FILE.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         # -- routing --------------------------------------------------------
 
         def do_GET(self) -> None:   # noqa: N802 - stdlib naming
             path = self.path.split("?", 1)[0]
             try:
                 self._local_only(post=False)
-                if path in ("/", "/index.html", "/board", "/ask", "/archive") or path.startswith(("/ask/", "/board/")):
+                if path in ("/", "/index.html", "/board", "/ask", "/archive", "/privacy", "/about") \
+                        or path.startswith(("/ask/", "/board/")):
                     self._static("index.html")       # one page; the script reads the path (spec 9.5)
+                elif path == "/spec":
+                    self._spec()
                 elif path.startswith("/static/"):
                     self._static(path[len("/static/"):])
                 elif path == "/api/config":

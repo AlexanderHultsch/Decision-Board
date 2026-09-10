@@ -83,6 +83,7 @@
     $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
     $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question, one call.`;
     $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "mind")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
+    $("link-bug").href = `${config.repository || ""}/issues`;
     const obsidian = $("link-obsidian");
     obsidian.hidden = !config.vault_name;
     obsidian.href = config.vault_name ? `obsidian://open?vault=${encodeURIComponent(config.vault_name)}` : "#";
@@ -368,6 +369,18 @@
     $("btn-menu").setAttribute("aria-expanded", String(!list.hidden));
   }
 
+  // -- About (decision 12): the version, the address, the specification --
+
+  function renderAbout() {
+    const port = location.port || "80";
+    $("about-version").textContent = config.version || "unknown";
+    $("about-address").innerHTML = `http://${esc(config.site_name || "mind")}.localhost:${esc(port)}/<br><span class="muted">also http://localhost:${esc(port)}/ · the server listens on this machine only</span>`;
+    $("about-spec").innerHTML = config.spec
+      ? `<a href="/spec" target="_blank" rel="noopener">Read it here</a> <span class="muted">· docs/spec.md, as it is on this machine</span>`
+      : `<a href="${esc(config.repository || "")}/blob/main/docs/spec.md" target="_blank" rel="noopener">Read it on the repository</a> <span class="muted">· it is not next to this copy</span>`;
+    $("about-repo").innerHTML = `<a href="${esc(config.repository || "")}" target="_blank" rel="noopener">${esc(config.repository || "")}</a>`;
+  }
+
   // -- the archive (decision 10): everything closed, of every agent --
 
   let archive = [];
@@ -467,6 +480,10 @@
   $("btn-status-test-yes").addEventListener("click", runAiTest);
 
   $("btn-archive").addEventListener("click", () => navigate("/archive"));
+
+  $("btn-privacy").addEventListener("click", () => navigate("/privacy"));
+
+  $("btn-about").addEventListener("click", () => navigate("/about"));
 
   $("archive-filter").addEventListener("input", renderArchive);
 
@@ -602,7 +619,7 @@
   let currentRoute = "start";
   function register(agent) { agents.push(agent); }
   function routeOf(pathname) {
-    if (pathname === "/archive") return "archive";
+    if (["/archive", "/privacy", "/about"].includes(pathname)) return pathname.slice(1);
     for (const a of agents) { const r = a.match(pathname); if (r) return r; }
     return "start";
   }
@@ -620,6 +637,8 @@
     if (!agent) {
       $("step-line").hidden = true;
       if (currentRoute === "archive") { show("archive"); openArchive(); return; }
+      if (currentRoute === "privacy") { show("privacy"); return; }
+      if (currentRoute === "about") { renderAbout(); show("about"); return; }
       show("start"); loadRecent(); return;
     }
     if (agent.onEnter) agent.onEnter();

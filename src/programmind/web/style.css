@@ -101,6 +101,16 @@ svg { width: 1.25em; height: 1.25em; fill: none; stroke: currentColor; stroke-wi
 .menu-list button, .menu-list a { display: block; width: 100%; text-align: left; padding: .5rem .8rem; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; text-decoration: none; cursor: pointer; }
 .menu-list button:hover, .menu-list a:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .menu-list[hidden] { display: none; }
+/* The written pages in the menu: Privacy and About (decisions 11 and 12). */
+.prose { max-width: 74ch; }
+.prose h2 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; }
+.prose ul { margin: 0 0 .9rem; padding-left: 1.2rem; }
+.prose li { margin: .25rem 0; }
+.about-rows { display: grid; grid-template-columns: 9rem 1fr; gap: .5rem 1rem; margin: .6rem 0 1.4rem; }
+.about-rows dt { color: var(--muted); }
+.about-rows dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .about-rows { grid-template-columns: 1fr; } .about-rows dd { margin-bottom: .4rem; } }
+
 /* The archive (decision 10) and the home page's recent work (decision 5). */
 .archive-row .thread-meta { margin-left: auto; }
 .recent-row .agent-tag { flex: none; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; padding: .1rem .45rem; }

@@ -343,6 +343,23 @@ const { chromium } = require('playwright');
   await page.goto('http://127.0.0.1:8765/archive');
   await page.waitForSelector('.archive-row', { timeout: 10000 });
   console.log('archive after a reload:', await page.locator('.archive-row').count(), 'rows');
+
+  // The written pages in the menu (spec 11.1, decisions 11 and 12).
+  await page.click('#btn-menu');
+  await page.click('#btn-privacy');
+  await page.waitForSelector('#screen-privacy:not([hidden])');
+  console.log('privacy path:', new URL(page.url()).pathname, '| sections:', await page.locator('#screen-privacy .prose h2').count(), '|', await page.textContent('#screen-privacy .prose h2'));
+  await shot('30-privacy');
+  await page.click('#btn-menu');
+  await page.click('#btn-about');
+  await page.waitForSelector('#screen-about:not([hidden])');
+  console.log('about version:', await page.textContent('#about-version'), '| address:', (await page.textContent('#about-address')).slice(0, 34), '| spec:', await page.getAttribute('#about-spec a', 'href'), '| bug link:', await page.getAttribute('#link-bug', 'href'));
+  await shot('31-about');
+  const spec = await page.request.get('http://127.0.0.1:8765/spec');
+  console.log('spec served:', spec.status(), spec.headers()['content-type'], (await spec.text()).slice(0, 28).replace(/\n/g, ' '));
+  await page.goBack();
+  await page.waitForSelector('#screen-privacy:not([hidden])');
+  console.log('browser back from about ->', new URL(page.url()).pathname);
   // dark theme check
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('http://127.0.0.1:8765/');
