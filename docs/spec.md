@@ -443,8 +443,9 @@ one vault note Alex confirms.
 
 ### 9.5 Site address and start page
 
-**Decided 10 September 2026 in an interview, to be built.** The board
-becomes one use case of several behind one start page.
+**Decided 10 September 2026 in an interview, built the same day in
+`server.py` and `web/`.** The board becomes one use case of several behind
+one start page.
 
 | # | Decision |
 |---|---|
@@ -454,7 +455,8 @@ becomes one use case of several behind one start page.
 
 ## 10. Ask the vault
 
-**Decided 10 September 2026 in an interview, to be built.** A second use
+**Decided 10 September 2026 in an interview, built the same day in
+`ask.py`, `agent/prompts/ask.md`, `server.py` and `web/`.** A second use
 case on the same infrastructure: one agent, no members, that answers any
 question from the Obsidian vault and says where the answer comes from.
 
@@ -495,7 +497,20 @@ New: `ask.py` (the prompt assembly, the JSON parsing with the source check, the 
 6. Close with the memory step.
 7. The browser walk extended to the start page and a thread; the spec marked as built.
 
-### 10.4 Out of scope for now
+### 10.4 As built, where it differs from the decisions
+
+The ranking query is the question plus the two questions before it in
+the thread, so "and who approves that?" still finds the pages of the
+question it follows. A running call can be stopped from the page
+(`POST /api/ask/<id>/stop`); the question stays typed and nothing is
+recorded. `DELETE /api/ask/<id>` removes a thread and its file; a note it
+wrote to the vault stays. The slider goes up to 40,000 tokens. The thread
+list shows the thread's project(s). The prompt tells the model that a page
+listed as a one-line summary was not sent in full, and the source list
+marks such a source "summary only". The statistics dialog shows the open
+thread's calls when a thread is open, the board's topic otherwise.
+
+### 10.5 Out of scope for now
 
 The AI-assisted pick for the agent, any write into the vault other than the confirmed memory note, more than one agent per question, threads shared between machines.
 

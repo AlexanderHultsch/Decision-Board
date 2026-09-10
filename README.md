@@ -108,7 +108,15 @@ Start the browser interface:
 python scripts/run_board.py serve
 ```
 
-It listens on `http://127.0.0.1:8765/` only and opens your default browser.
+It listens on `127.0.0.1` only and opens `http://ai.localhost:8765/` in
+your default browser (`http://localhost:8765/` works too; the name is
+`server.site_name`, and any name under `.localhost` resolves to your own
+machine without admin rights). The start page holds the project picker and
+one tile per use case: **Board**, the decision board, and **Ask the vault**,
+one agent that answers any question from the vault with the pages it used
+and what it could not find, in a thread that stays open until you close it
+(`docs/spec.md` sections 9.5 and 10). Threads are kept as JSON files under
+`config/threads/`, never in the vault.
 Open **Options** (the gear) to choose your knowledge source — a folder of
 Markdown notes, typically an Obsidian vault — with the native folder dialog,
 and to set the model string, token budget, audit folder and theme. Options
@@ -154,10 +162,10 @@ python -m pytest -q tests/
 
 ## Status
 
-The code is a straight port from the source project and works. The memory
-described in `docs/spec.md` section 5 — a folder of Markdown notes the board
-would consult and grow across sessions — is designed but not built: nothing
-in this repository reads or writes it yet. Nothing else is currently planned
-for this repository.
+Built and in use: the board with the clarifier, the two modes, the
+follow-ups and the memory step (`docs/spec.md` sections 3 to 6 and 9), the
+second-generation knowledge selection (5.1), the start page with the site
+name under `.localhost` (9.5) and Ask the vault (10). Open items are listed
+in the spec sections themselves.
 
 See `docs/spec.md` for the full specification.
