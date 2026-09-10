@@ -116,8 +116,13 @@
       $("thread-turns").querySelectorAll("a.to-board").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); PM.navigate("/board"); }));
     }
     $("thread-pending").hidden = !thread.busy;
-    if (thread.busy) $("thread-pending-text").textContent = `Reading the vault and answering: ${thread.pending_question || ""}`;
+    if (thread.busy) {
+      $("thread-pending-text").textContent = thread.phase === "choosing"
+        ? `Reading the table of contents and choosing what to read: ${thread.pending_question || ""}`
+        : `Reading the chosen pages and answering: ${thread.pending_question || ""}`;
+    }
     $("thread-form").hidden = closed || thread.busy;
+    renderPicksMode();
     $("thread-closed").hidden = !closed || thread.busy;
     if (closed) {
       $("thread-closed-text").textContent = thread.written_path
@@ -129,8 +134,50 @@
     if (thread.busy) startThreadPolling(); else { stopThreadPolling(); if (!closed) requestAskEstimate(); }
   }
 
+  // The picks screen (spec 5.3): the question is asked, the model has
+  // chosen, and the form turns into "read these pages?" until Alex reads
+  // or cancels. The same slider, list and outline serve both modes.
+  let picksFor = null;    // the pending question the current adjustments belong to
+
+  function inPicks() { return !!thread && thread.phase === "picks" && !!thread.pending_question; }
+
+  function renderPicksMode() {
+    const picks = inPicks();
+    if (picks && picksFor !== thread.pending_question) {
+      picksFor = thread.pending_question;
+      askPicks = { extra: [], exclude: [] };      // a fresh choice: no adjustments yet
+      $("ask-estimate-detail").open = true;
+    }
+    if (!picks && picksFor) { picksFor = null; $("ask-estimate-detail").open = false; }   // back to the folded estimate
+    $("thread-picks-head").hidden = !picks;
+    $("thread-question").hidden = picks;
+    $("btn-thread-close").hidden = picks;
+    $("btn-thread-cancel").hidden = !picks;
+    $("btn-thread-ask").textContent = picks ? "Read and answer" : "Ask";
+    if (picks) {
+      $("thread-picks-question").textContent = thread.pending_question;
+      const parts = [];
+      if (thread.picks) parts.push(`The model chose ${thread.picks.full.length} item(s) from the table of contents; its reasons are beside them.`);
+      else parts.push(`The model's choice did not come back usable${thread.pick_error ? ` (${thread.pick_error})` : ""}: the word ranking chose instead.`);
+      if (thread.pick_dropped) parts.push(`${thread.pick_dropped} pick(s) named nothing in the vault and were dropped.`);
+      if (thread.contents_trimmed) parts.push("The table of contents was trimmed to fit; a page may be missing.");
+      parts.push(`Table of contents: ${fmtNum(thread.contents_tokens)} tokens.`);
+      $("thread-picks-status").textContent = parts.join(" ");
+    }
+  }
+
+  async function readPicks() {
+    if (!inPicks()) return;
+    setError("thread-error", "");
+    try {
+      thread = await api("POST", `/api/ask/${thread.id}/read`, { budget: Number($("ask-budget").value), extra: askPicks.extra, exclude: askPicks.exclude });
+      renderThread();
+    } catch (err) { setError("thread-error", err.message); }
+  }
+
   async function askInThread(event) {
     event.preventDefault();
+    if (inPicks()) return readPicks();
     const question = $("thread-question").value.trim();
     if (!question || !thread) return;
     setError("thread-error", "");
@@ -144,7 +191,12 @@
 
   async function stopThread() {
     if (!thread) return;
-    try { thread = await api("POST", `/api/ask/${thread.id}/stop`); renderThread(); } catch (err) { setError("thread-error", err.message); }
+    const typed = thread.pending_question || "";
+    try {
+      thread = await api("POST", `/api/ask/${thread.id}/stop`);
+      if (typed && !$("thread-question").value.trim()) $("thread-question").value = typed;   // nothing typed is lost
+      renderThread();
+    } catch (err) { setError("thread-error", err.message); }
   }
 
   async function closeThread(remember) {
@@ -158,16 +210,25 @@
 
   function renderAskSections(e) {
     const row = (s) => `
-      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`;
+      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
+    // What the model chose that did not fit the slider (5.3, decision 4): shown, unticked; tick to send it on top.
+    const overRow = (o) => `
+      <li class="over"><input type="checkbox" data-id="${esc(o.id)}" data-over="1" ${askPicks.extra.includes(o.id) ? "checked" : ""} title="Tick to send it on top of the slider"> ${esc(o.id)} <span class="over-tag">over the budget</span>${o.reason ? `<span class="reason">${esc(o.reason)}</span>` : ""}</li>`;
     const briefRow = (b) => `
       <li><input type="checkbox" data-id="${esc(b.path)}" ${askPicks.exclude.includes(b.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(b.path)} <span class="brief-tag" title="One line, not the page">summary</span>${b.summary ? `<span class="reason">${esc(b.summary)}</span>` : ""}</li>`;
     const full = (e.sections || []).length ? `<p class="tier">In full <span class="muted small">${fmtNum(e.knowledge_tokens)} tokens · KPI notes ${fmtNum(e.kpi_tokens)} tokens</span></p><ul class="sec-list">${e.sections.map(row).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>";
     const brief = (e.briefs || []).length ? `<p class="tier">As one line each</p><ul class="sec-list">${e.briefs.map(briefRow).join("")}</ul>` : "";
-    $("ask-estimate-notes").innerHTML = full + brief;
+    const over = (e.over_budget || []).length ? `<p class="tier">Chosen, but over the budget <span class="muted small">raise the slider, or tick to send on top</span></p><ul class="sec-list">${e.over_budget.map(overRow).join("")}</ul>` : "";
+    $("ask-estimate-notes").innerHTML = full + over + brief;
     $("ask-estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
       const id = box.dataset.id;
-      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
-      if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
+      if (box.dataset.over) {
+        askPicks.extra = askPicks.extra.filter((x) => x !== id);
+        if (box.checked) askPicks.extra.push(id);
+      } else {
+        askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
+        if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
+      }
       requestAskEstimate();
     }));
   }
@@ -198,13 +259,14 @@
       $("ask-budget-value").textContent = `${fmtNum(Number($("ask-budget").value))} tokens`;
       try {
         const e = await api("POST", `/api/ask/${thread.id}/estimate`, {
-          question: $("thread-question").value, budget: Number($("ask-budget").value),
+          question: inPicks() ? thread.pending_question : $("thread-question").value, budget: Number($("ask-budget").value),
           extra: askPicks.extra, exclude: askPicks.exclude, outline: !askOutlineCache,
         });
         if (seq !== askEstimateSeq) return;
         const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} learned from ${e.overhead_learned_from} real call(s) of this thread` : `overhead of ${fmtNum(e.overhead_per_call)} assumed until the first real call`;
         const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
-        $("ask-estimate").innerHTML = `<strong>1 model call</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, the call count is exact`;
+        const who = e.picked_by === "model" ? "the model's choice" : "the word ranking";
+        $("ask-estimate").innerHTML = `<strong>${inPicks() ? "1 more model call" : "2 model calls"}</strong>, the read about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · pages by ${who} · ${esc(learned)} · tokens are an estimate, the call count is exact`;
         renderAskSections(e);
         if (e.outline) { askOutlineCache = e.outline; renderAskOutline(); }
       } catch (err) {
@@ -233,6 +295,8 @@
   $("ask-outline-filter").addEventListener("input", renderAskOutline);
 
   $("btn-thread-stop").addEventListener("click", stopThread);
+
+  $("btn-thread-cancel").addEventListener("click", stopThread);   // leaves the picks screen; the question stays typed
 
   $("btn-thread-close").addEventListener("click", () => { setError("thread-close-error", ""); $("thread-close-dialog").hidden = false; });
 

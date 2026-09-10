@@ -438,6 +438,14 @@ legend { padding: 0 var(--s1); font-size: var(--fs-help); font-weight: 600; colo
 .fresh-pages { position: relative; margin: var(--s2) 0 0; padding-left: 1.1rem; color: var(--muted); }
 .fresh-pages::before { content: "+"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
 
+/* The picks screen of Ask the vault (spec 5.3) */
+.picks-head { margin: var(--s2) 0 var(--s3); padding: var(--s3) var(--s4); background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: var(--r-lg); }
+.picks-head .eyebrow { margin-top: 0; }
+.picks-question { font-weight: 600; margin-bottom: var(--s1); }
+.estimate-detail .sec-list li.over { opacity: .7; }
+.estimate-detail .sec-list .over-tag { font-size: .72rem; color: var(--warn); }
+
 /* The knowledge slider, estimate and outline */
 .budget-row { display: flex; align-items: center; gap: var(--s4); margin: var(--s1) 0 var(--s2); }
 .budget-row input[type=range] { flex: 1; max-width: 28rem; accent-color: var(--accent); }

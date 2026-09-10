@@ -149,12 +149,18 @@
     </div>
     <form id="thread-form" class="ask compact">
       <textarea id="thread-question" rows="3" placeholder="Ask back, or ask the next question…"></textarea>
+      <!-- The picks screen (spec 5.3): the model chose from the table of contents; Alex reads or changes it. -->
+      <div id="thread-picks-head" class="picks-head" hidden>
+        <p class="eyebrow">Read these pages?</p>
+        <p id="thread-picks-question" class="picks-question"></p>
+        <p id="thread-picks-status" class="muted small"></p>
+      </div>
       <p class="eyebrow">Knowledge for this question <button type="button" class="info-btn" id="btn-ask-budget-info" title="What does the slider cap?" aria-label="What does the slider cap?">i</button></p>
       <div class="budget-row">
         <input id="ask-budget" type="range" min="0" max="40000" step="500" value="12000" aria-label="Knowledge tokens for this question">
         <span id="ask-budget-value" class="budget-value">12,000 tokens</span>
       </div>
-      <div id="ask-budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections sent in full for this question - the shared core (project page, phase and gate definitions, the abbreviations the question uses, the tasks active in the phase the question names) and the best-ranked sections for the question's words.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the KPI notes of the project with their age, the sections you add below, and the earlier questions and answers of this thread.<br><span class="muted">One call per question, whatever the slider says. The Python ranking chooses; there is no pick call here.</span></div>
+      <div id="ask-budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections sent in full for this question - the shared core (project page, phase and gate definitions, the abbreviations the question uses, the tasks active in the phase the question names) and the best-ranked sections for the question's words.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the KPI notes of the project with their age, the sections you add below, and the earlier questions and answers of this thread.<br><span class="muted">Two calls per question: one reads the table of contents and chooses, one reads the chosen pages and answers. What the model chose is read, and nothing is added behind its back; you add or leave out below.</span></div>
       <p id="ask-estimate" class="estimate muted small">Estimating…</p>
       <details id="ask-estimate-detail" class="estimate-detail"><summary class="muted small">What the agent would receive, and what to add or leave out</summary>
         <div id="ask-estimate-notes"></div>
@@ -164,6 +170,7 @@
       </details>
       <div class="row between">
         <button id="btn-thread-close" type="button" class="ghost">Close thread</button>
+        <button id="btn-thread-cancel" type="button" class="ghost" hidden>Cancel</button>
         <button type="submit" class="primary" id="btn-thread-ask">Ask</button>
       </div>
     </form>

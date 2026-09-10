@@ -102,6 +102,12 @@ call. KPI pages reach the agents with the date their numbers were checked.
 A vault that cannot be read stops the run with an error; there is no
 fallback source.
 
+Every question goes through two model calls: the first reads the table of
+contents of the vault (every page with its properties and summary) and
+names what to read; you see that choice, with the model's reasons, and add
+or leave out pages before the second call reads them and answers. The
+board's knowledge pick on the confirm screen works the same way.
+
 Nothing is written to the vault without your confirmation. When you close a
 topic or a thread the agent proposes a note and a place for it; you edit and
 confirm, or do not write. The work itself is kept as one JSON file per topic

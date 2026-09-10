@@ -287,6 +287,46 @@ the first question, and never again.
 | 6 | **The page says what was read.** A follow-up turn, in either agent, names the pages that this topic or thread had not seen before ("Read from the vault for this question: ..."). Nothing new to report, nothing shown. |
 | 7 | The slider's budget applies per call, as it always has. Reading again costs tokens, not calls. |
 
+### 5.3 The model chooses, from the whole table of contents
+
+**Decided 10 September 2026, after the second day of use.** The question
+"which VPDS tasks is [a named person] responsible for" found nothing: the
+word ranking sent the org chart as a pointer and never listed a task page,
+because the tasks carry the role, not the name. A better formula cannot
+make that hop. The choice of pages moves to the model, in front of every
+read, and Alex sees it before anything is read.
+
+| # | Decision |
+|---|---|
+| 1 | **Three steps for every question, in both agents.** (1) Python writes the table of contents of the vault: every page as one entry, with its title, `kind`, `lead_swimlane`, `affected_swimlanes`, `phases`, `aliases`, the AI summary, and its sections with their headings and sizes. No ranking, nothing left out. (2) One call: the model reads the table of contents and names what it wants to read, most important first, with one line why each. (3) The picks screen, every time: the chosen pages ticked with their reasons, the rest of the vault below to add from, the slider and the estimate; one click reads them and answers. |
+| 2 | **The model is told what the list is and how to choose.** Each entry says what the page holds, as far as its title, properties and summary tell. The model takes a page when the answer might be on it, not only when it is sure. When it cannot tell which page of a kind holds the answer - a role it does not know the holder of, a task it cannot name - it takes every page of that kind that could, and says so. Breadth costs tokens, not calls, and the slider and the screen keep it in hand. |
+| 3 | **A pick is an id, a page or a rule.** A section id reads that section; a page path reads the whole page; a rule names property values (`kind: process, lead_swimlane: HW Engineering`) and Python expands it to every page that matches. The rule is what makes "all VPDS tasks of that role" one line rather than forty ids the model might get wrong. |
+| 4 | **The budget caps the read, not a count.** Python fills the slider's budget in the model's order. What does not fit stays on the list, unticked and marked "over the budget", so Alex sees what was left and can raise the slider. The caps of 5.1 (eight in full, twenty as one line) go. |
+| 5 | **Python keeps the last word**, as in 5.1: an id, a page or a rule that matches nothing in the vault is dropped and counted; a pick that fails or returns nothing leaves the word ranking in force, and the picks screen says so. |
+| 6 | **Ask the vault waits at the picks screen.** A question starts the choosing call; the thread then rests in a `picks` phase until Alex reads or cancels. Stop works in both calls. A follow-up goes through the same three steps. Decision 3 of section 10 (no pick for the agent, one call is the point) is withdrawn: two calls per question, the first the size of the table of contents. |
+| 7 | **The board's pick sees the whole vault too.** On the confirm screen the pick that already runs per member chooses from the table of contents rather than from Python's shortlist. Nothing else on that screen changes. |
+| 8 | **The table of contents has a size, and it is shown.** The status page prints it. Above `knowledge.contents_limit_tokens` (default 40,000) Python trims the list to the pages the word ranking puts first for the question, and the picks screen says the list was trimmed. A safety valve, not a mode. |
+| 9 | **One line in the vault makes the named-person case direct**: the holder's name in `aliases` on the role page. Then the table of contents shows name, role, and every task with that lead, and the model needs no rule of thumb. That is what `aliases` is for in the vault guide; the enrich command may propose it from the org chart. |
+
+The word ranking of 5.1 stays for what it is good at: the fallback when
+the model's pick fails, the trim of an oversized table of contents, the
+ranking query of 5.2 for the clarifier, and the evaluation baseline.
+
+**Built 10 September 2026** in `knowledge.contents`, `picker.choose`, the
+prompt `knowledge_choose.md`, the server and the thread page. As built:
+the table of contents lists the role pages too, which the ranking of 5.1
+leaves out for the board (a profile is a member's mandatory context, not a
+note competing for the budget); Ask the vault may read them, since "who is
+responsible" is answered there. **What the model chose is the block**: the
+core and the manual picks come with it, and nothing is topped up from the
+ranking behind Alex's back, so the picks screen shows exactly what will be
+read; a chosen section is never held back by the big-section rule, only by
+the budget. A question asked while a choice waits is refused until the
+choice is read or cancelled; cancelling puts the question back in the box.
+The choosing call is counted in the statistics as "knowledge pick", for
+either agent. The board's pick answers in the shape of 5.1 (`full`,
+`brief`) or of 5.3 (`read`); both are understood.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that
@@ -484,7 +524,7 @@ question from the Obsidian vault and says where the answer comes from.
 |---|---|
 | 1 | **One agent, one call per question.** No clarifier, no confirm screen, no members. The question goes to the model together with the knowledge block; the answer comes back in the same request cycle the board uses (a background thread, the page polls). |
 | 2 | **A thread, not a single question.** After an answer the user asks back in the same thread, as often as wanted; each call carries the thread's earlier questions and answers, as the board's follow-up does, so "and who approves that?" works. Leaving the page, reloading or restarting the server does not end a thread: it stays open in the list and continues where it stopped. |
-| 3 | **Knowledge: the whole vault, the board's Python ranking, no pick call.** `select_sections` with the question's terms and no member terms; the shared core applies (project page, phases and gates, the abbreviation rows the question uses, the Definitions of tasks active in a named phase); one-line summaries of further pages ride on top as for a member; KPI notes of the chosen project are attached with their age, as for the board. The AI-assisted pick is not used here: one call is the point. |
+| 3 | **Knowledge: the whole vault, the board's Python ranking, no pick call.** `select_sections` with the question's terms and no member terms; the shared core applies (project page, phases and gates, the abbreviation rows the question uses, the Definitions of tasks active in a named phase); one-line summaries of further pages ride on top as for a member; KPI notes of the chosen project are attached with their age, as for the board. The AI-assisted pick is not used here: one call is the point. *Withdrawn 10 September 2026 by 5.3: the model chooses from the table of contents first, and the picks screen comes before every read.* |
 | 4 | **Slider, default 12,000 tokens** (`ask.token_budget`), twice a member's default since there is only one call, with the same "i" and the same estimate line ("1 call · about T tokens"). Manual picks and exclusions from the estimate list work as on the confirm screen. |
 | 5 | **Answer with sources and gaps.** The model returns JSON: the answer in Markdown, the sources it used as `path#heading` with one line why each, and the gaps: what the question asked that the vault does not hold. Python keeps only sources that were actually sent (as the board's fact check does), drops the rest and says how many it dropped. The page shows the answer, then "Sources" as links that open the page in Obsidian (`obsidian://open?vault=<name>&file=<path>`, the vault name being the vault folder's name unless `knowledge.vault_name` says otherwise) with the section name beside, then "Not in the vault" when the gaps list is not empty. The prompt (`ask.md`) forbids inventing a rule, a date or an owner: what is not in the block is a gap, never a guess. A question that asks for a decision rather than a fact gets its answer and one line pointing to the Board. |
 | 6 | **Threads are kept and listed.** Every thread is saved as one JSON file under `server.threads_folder` (default `threads/` next to `config.local.json`, git-ignored), never in the vault: the questions, the answers with sources and gaps, the knowledge paths sent, the statistics. The `/ask` page lists the threads (first question, date, number of questions) and reopens one for reading and further questions. A thread can be deleted from the list. |

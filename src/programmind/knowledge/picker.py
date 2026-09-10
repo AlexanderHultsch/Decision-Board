@@ -19,9 +19,11 @@ from typing import Any
 from programmind.ai.prompts import load_prompt
 from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
 
-MAX_FULL = 8        # sections in full per member
+MAX_FULL = 8        # sections in full per member (the 5.1 pick from Python's shortlist)
 MAX_BRIEF = 20      # one-line pages per member
+MAX_CHOSEN = 300    # the 5.3 choice from the whole table of contents: the budget caps it, this only stops a runaway
 MARKER = "## Candidate sections"     # what the statistics route on
+AGENT_NAME = "Ask the vault"         # how the nameless chooser of Ask the vault is called in the prompt
 
 
 @dataclass
@@ -107,5 +109,104 @@ def pick(provider: AiProvider, question: str, members: dict[str, str],
     other call's does, so the session can show it."""
     ai_result = provider.complete(TASK_BOARD, pick_prompt(question, members, candidates))
     result = parse_picks(ai_result.text, candidates)
+    result.ai_result = ai_result
+    return result
+
+
+# -- spec 5.3: the model chooses from the whole table of contents ------------
+
+def choose_prompt(question: str, members: dict[str, str], pages: list[dict[str, Any]], *, trimmed: bool = False,
+                  history: list[tuple[str, str]] | None = None) -> str:
+    """``members`` maps a member's name to one line on what it judges; the
+    empty name is Ask the vault's one agent. ``pages`` is
+    ``knowledge.contents(...)["pages"]``."""
+    from programmind.knowledge.knowledge import contents_lines
+    lines = [load_prompt("knowledge_choose"), "", "## Question", "", question.strip(), ""]
+    if history:
+        lines += ["## Earlier in this thread", ""]
+        for asked, answered in history[-3:]:
+            lines += [f"Q: {asked.strip()}", f"A: {answered.strip()[:600]}"]
+        lines.append("")
+    lines += ["## Members", ""]
+    for member, line in members.items():
+        name = member or AGENT_NAME
+        lines.append(f"### {name}")
+        lines.append(line or "answers the question from the vault")
+        lines.append("")
+    lines += [MARKER, ""]
+    if trimmed:
+        lines += ["(The vault is larger than this list: the program kept the pages its word ranking puts first "
+                  "for the question. Say in a reason if you suspect a page is missing.)", ""]
+    lines += contents_lines(pages)
+    lines += ["", "Choose now, as the JSON object described above."]
+    return "\n".join(lines)
+
+
+def parse_choice(text: str, members: dict[str, str], pages: list[dict[str, Any]]) -> PickResult:
+    """The model's choice with Python's checks applied (5.3, decision 5):
+    an id or a page must exist, a rule must match a page, everything else
+    is dropped and counted. The picks come back as ``full`` in the model's
+    order, pages and rules expanded to paths; ``brief`` stays empty."""
+    from programmind.knowledge.knowledge import expand_rules
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return PickResult(error="the choice did not parse as JSON")
+    if not isinstance(data, dict) or not isinstance(data.get("members"), list):
+        return PickResult(error="the choice carried no members list")
+    paths = {page["path"] for page in pages}
+    ids = {sec["id"] for page in pages for sec in page.get("sections") or []}
+    by_name = {(m or AGENT_NAME).lower(): m for m in members}
+    result = PickResult()
+    for item in data["members"]:
+        if not isinstance(item, dict):
+            continue
+        member = by_name.get(str(item.get("member", "")).strip().lower())
+        if member is None or member in result.picks:
+            continue
+        chosen: list[str] = []
+        reasons_raw = item.get("reasons") if isinstance(item.get("reasons"), dict) else {}
+        reasons: dict[str, str] = {}
+        named = []
+        for key in ("read", "full", "brief"):            # "full"/"brief" is the 5.1 shape, still understood
+            if isinstance(item.get(key), list):
+                named.extend(item[key])
+        for value in named:
+            if isinstance(value, dict):                       # a rule
+                found = expand_rules([value], pages)
+                if not found:
+                    result.dropped += 1
+                why = str(value.get("why") or "").strip()
+                for path in found:
+                    if path not in chosen:
+                        chosen.append(path)
+                        if why:
+                            reasons[path] = why
+                continue
+            key = str(value).strip()
+            if key in ids or key in paths:
+                if key not in chosen:
+                    chosen.append(key)
+            else:
+                result.dropped += 1
+        for key, why in reasons_raw.items():
+            key = str(key).strip()
+            if key in chosen and str(why).strip():
+                reasons[key] = str(why).strip()
+        result.picks[member] = {"full": chosen[:MAX_CHOSEN], "brief": [], "reasons": reasons}
+    for member in members:
+        result.picks.setdefault(member, {"full": [], "brief": [], "reasons": {}})
+    if not result.ok:
+        result.error = "the choice named nothing that is in the vault"
+    return result
+
+
+def choose(provider: AiProvider, question: str, members: dict[str, str], pages: list[dict[str, Any]], *,
+           trimmed: bool = False, history: list[tuple[str, str]] | None = None) -> PickResult:
+    """The one choosing call (5.3). A bad answer never raises: the result
+    says why the word ranking stays in force. A provider failure raises,
+    as every other call's does."""
+    ai_result = provider.complete(TASK_BOARD, choose_prompt(question, members, pages, trimmed=trimmed, history=history))
+    result = parse_choice(ai_result.text, members, pages)
     result.ai_result = ai_result
     return result

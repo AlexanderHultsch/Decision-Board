@@ -3,7 +3,7 @@ answers by the markers of each prompt, the real server on port 8765.
 Run from anywhere: python tools/browser_walk/demo_server.py
 """
 """Starts the real server with a slow fake provider for a browser walk-through."""
-import json, sys, tempfile, time, threading
+import json, re, sys, tempfile, time, threading
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -35,14 +35,22 @@ class Slow(AiProvider):
                                "sources": [{"path": "Suppliers/Housing tooling.md", "heading": "", "why": "the tooling delay"}, {"path": "Projects/Dual DCDC.md", "heading": "", "why": "the project page"}, {"path": "Invented/Page.md", "heading": "", "why": "made up"}],
                                "gaps": ["the date of the design freeze for this project"] if not later else [], "decision_question": later})
         elif "## Candidate sections" in prompt:
+            # The choice from the table of contents (spec 5.3): the pages whose line shares a
+            # word with the question, the tooling page always, plus the summaries of two more.
             time.sleep(1.2)
-            members, ids, current = [], {}, None
-            for line in prompt.splitlines():
-                if line.startswith("### "): current = line[4:].strip(); members.append(current); ids[current] = []
-                elif line.startswith("- id: ") and current: ids[current].append(line.split("- id: ", 1)[1].split(" | ", 1)[0])
-            text = json.dumps({"members": [{"member": m, "full": ids[m][:2], "brief": ids[m][2:4],
-                                            "reasons": {i: (f"{m} needs the tooling delay to judge the SOP risk" if "tooling" in i.lower() else f"{m}: this section bears on the decision")
-                                                        for i in ids[m][:4]}} for m in members]})
+            lines = prompt.splitlines()
+            members = [line[4:].strip() for line in lines if line.startswith("### ")]
+            question = prompt.split("## Question", 1)[1].split("##", 1)[0].lower()
+            rows = [line.split("- id: ", 1)[1] for line in lines if line.startswith("- id: ")]
+            ids = [row.split(" | ", 1)[0] for row in rows]
+            words = [w for w in re.findall(r"[a-z]{5,}", question)]
+            chosen = [row.split(" | ", 1)[0] for row in rows if any(w in row.lower() for w in words)]
+            chosen += [i for i in ids if "tooling" in i.lower() and i not in chosen]
+            chosen = chosen[:6] or ids[:2]
+            text = json.dumps({"members": [{"member": m, "read": chosen,
+                                            "reasons": {i: (f"{m} needs the tooling delay to judge the SOP risk" if "tooling" in i.lower()
+                                                            else f"{m}: this page bears on the question") for i in chosen}}
+                                           for m in members]})
         elif "## Question from Alex" in prompt and "## Clarification so far" in prompt:
             time.sleep(0.8)
             if "Round 2" in prompt:

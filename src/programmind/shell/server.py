@@ -504,10 +504,16 @@ class AskSession:
         self.lock = threading.RLock()
         self.cancelled = threading.Event()
         self.active_threads: set[int] = set()
-        self.phase = "idle"                 # idle, asking, proposing, proposal, written
+        self.phase = "idle"                 # idle, choosing, picks, asking, proposing, proposal, written
         self.busy = False
         self.error: str | None = None
         self.pending_question: str | None = None
+        # Spec 5.3: the model's choice from the table of contents, waiting on the picks screen.
+        self.picks: dict[str, Any] | None = None    # {"full": [ids or paths], "reasons": {id: why}}
+        self.pick_error: str | None = None          # why the word ranking is in force instead
+        self.pick_dropped = 0
+        self.contents_tokens = 0
+        self.contents_trimmed = False
         self.proposal: memory_writer.MemoryProposal | None = None
         self.marks: list[dict[str, Any]] = []
         self.started = time.time()
@@ -550,6 +556,8 @@ class AskSession:
                 "id": thread.id, "kind": "ask", "title": thread.title, "status": thread.status,
                 "phase": self.phase, "busy": self.busy, "error": self.error,
                 "pending_question": self.pending_question,
+                "picks": deepcopy(self.picks), "pick_error": self.pick_error, "pick_dropped": self.pick_dropped,
+                "contents_tokens": self.contents_tokens, "contents_trimmed": self.contents_trimmed,
                 "projects": list(thread.projects), "budget": thread.budget,
                 "extra": list(thread.extra), "exclude": list(thread.exclude),
                 "turns": deepcopy(thread.turns),
@@ -872,13 +880,13 @@ class BoardServer:
         query = f"{session.question}\n{session.inputs.get('topic', '')}\n{session.inputs.get('context', '')}"
         try:
             board = roles_mod.load_board(self.config)
-            terms = {m: role_terms(role) for m, role in board.profiles.items()}
-            cands = knowledge_mod.candidates(self.config, query, terms, projects=session.projects)
+            table = knowledge_mod.contents(self.config, session.projects, question=query, include_roles=False)
             lines = {m: (role.perspective or role.title) for m, role in board.profiles.items()}
             with session.lock:
                 if session.pick_id == pick_id:
-                    session.pick_prompt_chars = len(picker.pick_prompt(query, lines, cands))
-            result = picker.pick(RecordingProvider(self.provider(), session), query, lines, cands)
+                    session.pick_prompt_chars = len(picker.choose_prompt(query, lines, table["pages"], trimmed=table["trimmed"]))
+            result = picker.choose(RecordingProvider(self.provider(), session), query, lines, table["pages"],
+                                   trimmed=table["trimmed"])
         except Exception as exc:
             if session.cancelled.is_set():
                 return
@@ -1448,6 +1456,13 @@ class BoardServer:
         out["notes"] = len(notes)
         out["last_read"] = time.time()
         out["projects"] = len(knowledge_mod.project_names(notes))
+        try:
+            table = knowledge_mod.contents(self.config)
+            out["contents_tokens"] = table["tokens"]
+            out["contents_limit"] = int(_get(self.config, "knowledge.contents_limit_tokens", knowledge_mod.CONTENTS_LIMIT_TOKENS)
+                                        or knowledge_mod.CONTENTS_LIMIT_TOKENS)
+        except knowledge_mod.KnowledgeUnavailable:
+            pass
         folder, _origin = knowledge_mod.resolve_roles_folder(self.config)
         out["roles_folder"] = str(folder) if folder is not None else None
         missing = []
@@ -1719,10 +1734,13 @@ class BoardServer:
         member, the shared core included, within ``budget``."""
         thread = session.thread
         query = _ranking_query(question, [t["question"] for t in thread.turns[-2:]])
+        with session.lock:
+            picks = {"": dict(session.picks)} if session.picks else None
         selections = knowledge_mod.gather_for_members(
             self.config, query, {"": []}, token_budget=max(budget, 1), projects=thread.projects,
             extra=list(extra if extra is not None else thread.extra),
-            exclude=list(exclude if exclude is not None else thread.exclude))
+            exclude=list(exclude if exclude is not None else thread.exclude),
+            picks=picks, include_roles=True)
         return selections[""]
 
     def ask_estimate(self, session: AskSession, body: dict[str, Any]) -> dict[str, Any]:
@@ -1755,11 +1773,29 @@ class BoardServer:
             "sections": [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
                           "tokens": knowledge_mod.estimate_tokens(sec.body),
                           "forced": knowledge_mod.section_id(sec) in (extra or thread.extra) or sec.relative in (extra or thread.extra),
-                          "core": knowledge_mod.section_id(sec) in sel.core_ids}
+                          "core": knowledge_mod.section_id(sec) in sel.core_ids,
+                          "reason": sel.reasons.get(knowledge_mod.section_id(sec)) or sel.reasons.get(sec.relative, "")}
                          for sec in sel.sections] if sel else [],
             "forced_tokens": sel.forced_tokens if sel else 0,
+            "picked_by": "model" if (sel and session.picks) else "python",
+            "over_budget": self._over_budget(session, sel) if sel else [],
             "outline": knowledge_mod.outline(self.config, thread.projects) if body.get("outline") else None,
         }
+
+    @staticmethod
+    def _over_budget(session: AskSession, sel) -> list[dict[str, Any]]:
+        """What the model chose that did not fit the slider (5.3, decision
+        4): listed so Alex sees it and can raise the budget or tick it."""
+        with session.lock:
+            picks = session.picks or {}
+        sent_ids = {knowledge_mod.section_id(sec) for sec in sel.sections}
+        sent_paths = {sec.relative for sec in sel.sections}
+        out = []
+        for key in picks.get("full") or []:
+            if key in sent_ids or key in sent_paths:
+                continue
+            out.append({"id": key, "reason": (picks.get("reasons") or {}).get(key, "")})
+        return out
 
     def ask_question(self, session: AskSession, body: dict[str, Any]) -> None:
         question = str(body.get("question") or "").strip()
@@ -1770,6 +1806,69 @@ class BoardServer:
                 raise ApiError(409, "This thread is closed. Start a new one.")
             if session.busy:
                 raise ApiError(409, "Wait for the answer before asking the next question.")
+            if session.phase == "picks":
+                raise ApiError(409, "A choice is waiting on the picks screen: read it or cancel it first.")
+            if body.get("budget") not in (None, ""):
+                try:
+                    session.thread.budget = max(0, min(int(body["budget"]), 40000))
+                except (TypeError, ValueError):
+                    pass
+            if "extra" in body:
+                session.thread.extra = [str(x) for x in body.get("extra") or []]
+            if "exclude" in body:
+                session.thread.exclude = [str(x) for x in body.get("exclude") or []]
+            session.cancelled.clear()
+            session.busy = True
+            session.error = None
+            session.pending_question = question
+            session.picks, session.pick_error, session.pick_dropped = None, None, 0
+            if _get(self.config, "knowledge.vault_path"):
+                session.phase = "choosing"                 # spec 5.3: the model chooses first
+                session.mark("choosing")
+                self._spawn(session, self._choose, session, question)
+                return
+            session.phase = "asking"                       # no vault: nothing to choose from
+            session.mark("asked")
+        self._spawn(session, self._ask, session, question)
+
+    def _choose(self, session: AskSession, question: str) -> None:
+        """The choosing call (5.3): the table of contents in, the picks out,
+        then the thread waits for Alex on the picks screen. A choice that
+        does not come back usable leaves the word ranking in force and the
+        screen says so; a call that fails is an error like any other."""
+        thread = session.thread
+        try:
+            table = knowledge_mod.contents(self.config, thread.projects, question=question)
+            with session.lock:
+                session.contents_tokens, session.contents_trimmed = table["tokens"], table["trimmed"]
+            result = picker.choose(RecordingProvider(self.provider(), session), question,
+                                   {"": "the one agent answering the question from the vault"},
+                                   table["pages"], trimmed=table["trimmed"], history=thread.history())
+        except Exception as exc:
+            with session.lock:
+                session.busy, session.phase, session.pending_question = False, "idle", None
+                if not session.cancelled.is_set():
+                    session.error = f"The choosing call failed: {exc}"
+            return
+        with session.lock:
+            if session.cancelled.is_set():
+                session.busy, session.phase, session.pending_question = False, "idle", None
+                return
+            session.pick_dropped = result.dropped
+            if result.ok:
+                session.picks = result.picks.get("")
+                session.pick_error = None
+            else:
+                session.picks, session.pick_error = None, result.error
+            session.busy = False
+            session.phase = "picks"
+            session.mark("picks")
+
+    def ask_read(self, session: AskSession, body: dict[str, Any]) -> None:
+        """Alex confirmed the picks screen: read what is ticked and answer."""
+        with session.lock:
+            if session.phase != "picks" or not session.pending_question:
+                raise ApiError(409, "There is no choice waiting to be read.")
             if body.get("budget") not in (None, ""):
                 try:
                     session.thread.budget = max(0, min(int(body["budget"]), 40000))
@@ -1783,7 +1882,7 @@ class BoardServer:
             session.busy = True
             session.error = None
             session.phase = "asking"
-            session.pending_question = question
+            question = session.pending_question
             session.mark("asked")
         self._spawn(session, self._ask, session, question)
 
@@ -1821,8 +1920,11 @@ class BoardServer:
                 "dropped": answer.dropped, "decision_question": answer.decision_question,
                 "parse_error": answer.parse_error, "paths": paths, "new_pages": sorted(set(paths) - seen),
                 "briefs": sorted(briefs), "at": time.time(),
+                "chosen_by": "model" if session.picks else "python",
+                "pick_reasons": dict((session.picks or {}).get("reasons") or {}),
             })
             session.busy, session.phase, session.pending_question = False, "idle", None
+            session.picks = None
             session.mark("answered")
             self._save_thread(session)
         ai_result = answer.ai_result
@@ -1834,10 +1936,12 @@ class BoardServer:
                 tokens=ai_result.total_tokens if ai_result else None)
 
     def ask_stop(self, session: AskSession) -> None:
-        """Stop the running call; the question stays typed, nothing is recorded."""
+        """Stop the running call, or leave the picks screen; the question
+        stays typed, nothing is recorded."""
         session.stop_work()
         with session.lock:
             session.busy, session.phase, session.pending_question = False, "idle", None
+            session.picks, session.pick_error = None, None
             session.mark("stopped")
 
     def ask_close(self, session: AskSession, remember: bool) -> None:
@@ -2308,6 +2412,8 @@ def make_handler(server: BoardServer):
                     action = parts[4] if len(parts) > 4 else ""
                     if action == "question":
                         server.ask_question(thread, body)
+                    elif action == "read":
+                        server.ask_read(thread, body)
                     elif action == "estimate":
                         self._json(200, server.ask_estimate(thread, body))
                         return

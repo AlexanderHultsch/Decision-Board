@@ -17,14 +17,15 @@
   },
 
   "knowledge": {
-    "_comment": "The board's knowledge source: a folder of Markdown notes, such as an Obsidian vault. Read for every question, written to only after you confirm a memory entry when closing a topic. token_budget is the default of the knowledge slider on the confirm screen: how many tokens of vault sections each member receives (ranked for the topic and for the member). Empty vault_path means the board answers from your question alone. project is the default of the project picker on the home page: one project name, or several separated by commas. Notes whose front matter lists projects: [...] are used only when they name one of them, notes without the property are common to all projects; empty means every note is used. kpi_stale_days is how old a KPI note may be before members are told to say so before relying on it. roles_folder is the one folder whose role profiles define the board's members (section 3.4): one file per role or one file with several roles; empty means Roles/ inside the vault, and the examples shipped under roles/ when that does not exist. Read on every run, never part of the ranked selection. selection is the default of the Knowledge selection dropdown on the confirm screen (section 5.1): ai lets the model pick, per member, from the Python candidates in one extra call; python uses the Python ranking alone, no extra call. vault_name is the Obsidian vault name the Ask the vault sources link to (obsidian://open); empty means the vault folder's name.",
+    "_comment": "The board's knowledge source: a folder of Markdown notes, such as an Obsidian vault. Read for every question, written to only after you confirm a memory entry when closing a topic. token_budget is the default of the knowledge slider on the confirm screen: how many tokens of vault sections each member receives (ranked for the topic and for the member). Empty vault_path means the board answers from your question alone. project is the default of the project picker on the home page: one project name, or several separated by commas. Notes whose front matter lists projects: [...] are used only when they name one of them, notes without the property are common to all projects; empty means every note is used. kpi_stale_days is how old a KPI note may be before members are told to say so before relying on it. roles_folder is the one folder whose role profiles define the board's members (section 3.4): one file per role or one file with several roles; empty means Roles/ inside the vault, and the examples shipped under roles/ when that does not exist. Read on every run, never part of the ranked selection. selection is the default of the Knowledge selection dropdown on the confirm screen (section 5.1): ai lets the model pick, per member, from the Python candidates in one extra call; python uses the Python ranking alone, no extra call. vault_name is the Obsidian vault name the Ask the vault sources link to (obsidian://open); empty means the vault folder's name. contents_limit_tokens (section 5.3) is the most the table of contents may take in the choosing call; above it the pages the word ranking puts first for the question are kept and the picks screen says the list was trimmed.",
     "vault_path": "",
     "project": "",
     "token_budget": 6000,
     "kpi_stale_days": 30,
     "roles_folder": "",
     "selection": "ai",
-    "vault_name": ""
+    "vault_name": "",
+    "contents_limit_tokens": 40000
   },
 
   "server": {

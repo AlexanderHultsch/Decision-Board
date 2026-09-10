@@ -595,7 +595,7 @@ def select_sections(
     prepared: "_Prepared | None" = None, member: str = "", phases: tuple[str, ...] | None = None,
     core: list[Section] | None = None, preferred: list[str] | tuple[str, ...] = (),
     brief_first: list[str] | tuple[str, ...] = (), reasons: dict[str, str] | None = None,
-    projects: list[str] | None = None, terms: list[str] | None = None,
+    projects: list[str] | None = None, terms: list[str] | None = None, exclusive: bool = False,
 ) -> KnowledgeSelection:
     """Rank every section of every note against the question - and, for a
     member's own block, against ``extra_terms`` (the member's targets,
@@ -613,7 +613,13 @@ def select_sections(
     rule). After the budget is spent, up to
     ``BRIEF_PAGES`` further pages go in as one line each (the page's
     ``summary``), within ``BRIEF_CAP_TOKENS`` on top. ``pinned`` notes are
-    accepted for older callers and become part of the core."""
+    accepted for older callers and become part of the core.
+
+    Spec 5.3 (10 September 2026): with ``exclusive`` and a non-empty
+    ``preferred``, the block is what the model chose, the core and the
+    manual picks, and nothing else is topped up from the ranking - Alex sees
+    the choice and reads exactly that. A chosen section is never held back
+    by the big-section rule; the budget alone caps it."""
     terms = list(terms) if terms is not None else expand_terms(query_terms(question), question, notes)   # once per question when the caller has them
     member_terms = [t for t in (str(x).lower().strip() for x in extra_terms) if len(t) >= 4 and t not in terms]
     forced = {str(x) for x in extra}
@@ -692,7 +698,10 @@ def select_sections(
                 remaining -= cost
                 core_used += cost
             continue
-        if cost > _BIG_SECTION_TOKENS and cost > token_budget * SECTION_SHARE:
+        chosen_by_model = sid in preferred_ids or section.relative in preferred_ids
+        if exclusive and preferred_ids and not chosen_by_model:
+            continue          # spec 5.3: the model's choice is the block; the rest may still go in as one line
+        if not chosen_by_model and cost > _BIG_SECTION_TOKENS and cost > token_budget * SECTION_SHARE:
             if skipped_big is None:
                 skipped_big = section
             continue          # one table must not be the whole block; the page's summary still reaches the member
@@ -804,14 +813,18 @@ def select_notes(
     return select_sections(notes, question, token_budget)
 
 
-def _knowledge_notes(config: dict, projects=None) -> tuple[Path | None, list[str], list[Note]]:
+def _knowledge_notes(config: dict, projects=None, *, include_roles: bool = False) -> tuple[Path | None, list[str], list[Note]]:
+    """The notes a selection may draw on. The roles folder is left out for
+    the board (section 3.4: a profile is a member's mandatory context, not a
+    note competing for the budget) and read in for Ask the vault and the
+    table of contents (spec 5.3): "who is responsible" is answered there."""
     vault_path = _config_value(config, "knowledge.vault_path")
     if not vault_path:
         return None, [], []
     vault = Path(str(vault_path)).expanduser()
     chosen = _project_list(projects) if projects is not None else active_projects(config)
-    notes = [n for n in for_project(load_vault(vault, skip_subfolders=_roles_inside(config, vault)), chosen)
-             if n.kind != "kpi"]
+    skip = () if include_roles else _roles_inside(config, vault)
+    notes = [n for n in for_project(load_vault(vault, skip_subfolders=skip), chosen) if n.kind != "kpi"]
     return vault, chosen, notes
 
 
@@ -851,6 +864,100 @@ def outline(config: dict, projects=None) -> list[dict]:
     return result
 
 
+CONTENTS_LIMIT_TOKENS = 40000     # ``knowledge.contents_limit_tokens``: above this the table of contents is trimmed (spec 5.3)
+
+
+def contents(config: dict, projects=None, *, question: str = "", limit_tokens: int | None = None,
+             include_roles: bool = True) -> dict[str, Any]:
+    """The table of contents of the vault (spec 5.3): every page of the
+    chosen project(s) as one entry with its title, properties and summary,
+    and its sections with their ids, headings and sizes. Nothing ranked,
+    nothing left out - unless the whole list would exceed ``limit_tokens``,
+    in which case the pages the word ranking puts first for ``question``
+    are kept and ``trimmed`` says so."""
+    vault, chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
+    if vault is None:
+        return {"pages": [], "tokens": 0, "trimmed": False, "total_pages": 0}
+    limit = int(limit_tokens or _config_value(config, "knowledge.contents_limit_tokens") or CONTENTS_LIMIT_TOKENS)
+    pages: list[dict[str, Any]] = []
+    for note in notes:
+        sections = split_sections(note)
+        pages.append({
+            "path": note.relative, "title": note.title, "kind": note.kind, "lead": note.lead,
+            "affected": list(note.member), "phases": list(note.phases), "aliases": list(note.aliases),
+            "summary": note.summary, "tokens": estimate_tokens(note.body),
+            "sections": [{"id": section_id(sec),
+                          "heading": sec.heading or ("(whole page)" if len(sections) == 1 else "(opening)"),
+                          "tokens": estimate_tokens(sec.body)} for sec in sections],
+        })
+    total = len(pages)
+    size = estimate_tokens("\n".join(contents_lines(pages)))
+    trimmed = False
+    if size > limit and question.strip():
+        # The valve: keep the pages the ranking puts first, until the list fits.
+        prepared = _Prepared.of(notes)
+        ranked = select_sections(notes, question, 10 ** 7, prepared=prepared, projects=chosen).ranked
+        order = {sec.relative: i for i, sec in enumerate(ranked) if sec.relative not in {}}
+        pages.sort(key=lambda page: order.get(page["path"], len(order)))
+        kept: list[dict[str, Any]] = []
+        used = 0
+        for page in pages:
+            cost = estimate_tokens("\n".join(contents_lines([page])))
+            if used + cost > limit and kept:
+                break
+            kept.append(page)
+            used += cost
+        pages = sorted(kept, key=lambda page: page["path"])
+        size, trimmed = used, True
+    return {"pages": pages, "tokens": size, "trimmed": trimmed, "total_pages": total}
+
+
+def contents_lines(pages: list[dict[str, Any]]) -> list[str]:
+    """The table of contents as the model reads it: one line per page with
+    what the page holds, then one ``- id:`` line per section."""
+    lines: list[str] = []
+    for page in pages:
+        props = [f"kind: {page['kind']}" if page.get("kind") else "",
+                 f"lead: {page['lead']}" if page.get("lead") else "",
+                 f"affected: {', '.join(page['affected'])}" if page.get("affected") else "",
+                 f"phases: {', '.join(page['phases'])}" if page.get("phases") else "",
+                 f"aliases: {', '.join(page['aliases'])}" if page.get("aliases") else ""]
+        head = f"- page: {page['path']} | {page['title']}" + "".join(f" | {p}" for p in props if p) + f" | {page['tokens']} tokens"
+        lines.append(head)
+        if page.get("summary"):
+            lines.append(f"  summary: {page['summary']}")
+        for sec in page.get("sections") or []:
+            lines.append(f"- id: {sec['id']} | {page['path']} - {sec['heading']} | {sec['tokens']} tokens")
+    return lines
+
+
+def expand_rules(rules: list[dict[str, Any]], pages: list[dict[str, Any]]) -> list[str]:
+    """The pages a rule names (spec 5.3, decision 3): every page whose
+    properties carry every value the rule gives, compared without case.
+    ``kind``, ``lead``, ``affected``, ``phases`` and ``aliases`` may be
+    named; a rule with no known key matches nothing."""
+    keys = ("kind", "lead", "affected", "phases", "aliases")
+    found: list[str] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        wanted = {k: str(v).strip().lower() for k, v in rule.items()
+                  if k in keys and str(v).strip()}
+        if not wanted:
+            continue
+        for page in pages:
+            match = True
+            for key, value in wanted.items():
+                have = page.get(key)
+                haves = [str(h).lower() for h in (have if isinstance(have, list) else [have or ""])]
+                if value not in haves:
+                    match = False
+                    break
+            if match and page["path"] not in found:
+                found.append(page["path"])
+    return found
+
+
 def gather(config: dict, question: str, *, token_budget: int | None = None, projects=None) -> KnowledgeSelection:
     """The knowledge block for ``question`` under the configured source.
 
@@ -870,7 +977,7 @@ def gather_for_members(
     config: dict, question: str, member_terms: dict[str, list[str] | tuple[str, ...] | set[str]],
     *, token_budget: int | None = None, projects=None,
     extra: list[str] | tuple[str, ...] = (), exclude: list[str] | tuple[str, ...] = (),
-    picks: dict[str, dict[str, Any]] | None = None,
+    picks: dict[str, dict[str, Any]] | None = None, include_roles: bool = False,
 ) -> dict[str, KnowledgeSelection]:
     """One knowledge block per member (decided 9 September 2026): the
     sections ranked by the question and by the member's own terms, so each
@@ -881,7 +988,7 @@ def gather_for_members(
     why}}``, ``picker.pick``): its full picks lead the queue, its brief
     picks lead the brief tier. The vault is read once. No source
     configured: empty selections."""
-    vault, chosen, notes = _knowledge_notes(config, projects)
+    vault, chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
     budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
     result: dict[str, KnowledgeSelection] = {}
     prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
@@ -896,7 +1003,7 @@ def gather_for_members(
         selection = select_sections(notes, question, budget, extra_terms=tuple(terms), extra=extra, exclude=exclude,
                                     prepared=prepared, member=member, phases=phases, core=core, projects=chosen, terms=expanded,
                                     preferred=tuple(pick.get("full") or ()), brief_first=tuple(pick.get("brief") or ()),
-                                    reasons=dict(pick.get("reasons") or {}))
+                                    reasons=dict(pick.get("reasons") or {}), exclusive=bool(pick.get("full")))
         selection.vault_path = vault
         selection.project = ", ".join(chosen) if chosen else None
         result[member] = selection
