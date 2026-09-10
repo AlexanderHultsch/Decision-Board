@@ -514,7 +514,62 @@ thread's calls when a thread is open, the board's topic otherwise.
 
 The AI-assisted pick for the agent, any write into the vault other than the confirmed memory note, more than one agent per question, threads shared between machines.
 
-## 11. Origin
+## 11. Program Mind: the app shell
+
+**Decided 10 September 2026 in an interview of four rounds, to be built.**
+The site is rebuilt from the ground as an app that hosts several agents,
+small and large, all working on the Obsidian vault, which is the one thing
+that sets it apart from any other AI. The board and Ask the vault are the
+first two.
+
+### 11.1 Decisions
+
+| # | Decision |
+|---|---|
+| 1 | **Name: Program Mind.** The repository is renamed `program-mind` and the Python package `programmind`, both now, together: the command becomes `programmind` (`programmind serve`, `programmind board`, `programmind enrich`, `programmind eval-knowledge`), `scripts/run_board.py` becomes `scripts/programmind.py` and the old script stays one release as a one-line pointer. GitHub redirects the old repository URL; the local clone needs one `git remote set-url`. The site name defaults to `mind` (`http://mind.localhost:8765/`); `server.site_name` still overrides it. |
+| 2 | **Mark: a small graph of linked nodes**, three or four connected dots in the accent colour, inline SVG, the same as the tab icon. Wordmark "Program Mind" beside it. |
+| 3 | **Look: a calm light workspace, dark mode kept.** White cards on a soft grey ground, one accent colour, generous spacing, app density on desktop, the system theme followed as today. One page, one script, one stylesheet, no build step, as before. |
+| 4 | **Shell: a top bar with a burger menu at the right.** From the left: the mark and wordmark as the home button, the project chip (click: back to the home page's picker), the three status icons, the burger. The step arrows go away. |
+| 5 | **Home page: the project picker, one card per agent, and the recent open work** (threads and topics, newest first, with agent, title, date, count) to reopen with one click. Agents are reached from here and from the home button, not from the menu. |
+| 6 | **Navigation inside a flow: a step line.** The board shows Question · Clarify · Confirm · Result; earlier steps are clickable and go back exactly as the arrows did (the server's back logic stays, as the secondary way, and the browser's Back still steps through it). Ask the vault has no steps: thread list, thread. Every screen can reach home with one click. |
+| 7 | **Status icons, three, each red, amber or green**, refreshed on load and every five minutes through one `GET /api/status`, never more often; hovering shows a small card with the detail and a link. **Vault**: green when the folder is reachable and read (hover: path, note count, last read; link opens the vault in Obsidian), amber when reachable but without project pages or a roles folder, red when unset or unreachable. **AI**: green when OpenCode is found, the model string set and the gateway config with a key found; amber when something is set but unverified; red when missing (hover: model, config file; link opens Options). The five-minute check is cheap and makes no model call; a real tiny call runs only when the user clicks the icon and confirms, and its result and time then show in the hover. **Project**: green when a project is chosen (hover: the project and its gate baseline; link to home), amber for "all projects", red when the vault has no project pages. |
+| 8 | **The burger menu holds the tools, not the agents**: Options (as today), Statistics (of the open topic or thread), Status details (the three checks written out with their links and a refresh button), Open vault in Obsidian, Archive, Privacy, About, Report a bug. |
+| 9 | **History for the board as for the threads.** Every board topic is saved as one JSON file next to the threads (inputs, answers, synthesis, follow-ups, statistics, the knowledge paths), reopened to read or to ask a follow-up, closed only by the user with a confirmation, as a thread is. This replaces decision 6 of section 9.1. The folder becomes `config/history/` with a `kind` per file (`board`, `ask`); a running topic still lives in memory as now and is written after every step that changes it. |
+| 10 | **Archive: closed work moves there by itself.** Home and the agent pages list only open work; everything closed is under Archive in the menu, readable, searchable by title, deletable. No archive button. |
+| 11 | **Privacy: a written page.** What leaves the machine (the prompts, to the company gateway, with the model named), what never leaves (the vault stays on disk, history and audit stay local, no telemetry), and that every write into the vault is confirmed first. Text only, no live paths. |
+| 12 | **About**: the version, the site address, the link to this spec. **Report a bug**: a plain link to the repository's Issues page, opened in a new tab. |
+| 13 | The "N notes" chip goes; the Options gear and the Statistics button move into the menu. |
+
+### 11.2 Reuse
+
+Everything behind the API stays: sessions, threads, the knowledge
+selection, the memory step, the audit trail, the statistics. New on the
+server: `GET /api/status` (the three checks, cheap), `POST /api/status/ai`
+(the confirmed test call), the history store for board topics (the
+thread store generalised), `GET /api/history?state=open|closed`. The page
+is rewritten around the shell; the screens of the board and of Ask the
+vault keep their content and their element ids where the tests and the
+browser walk rely on them.
+
+### 11.3 Order of work
+
+1. The renames: repository, package, command, scripts, README, config
+   folders, tests. One commit, nothing else in it.
+2. The shell: top bar, mark, burger, status API and icons, home page with
+   the agent cards and the recent work.
+3. Board history and the step line; the archive for both agents.
+4. The menu pages: Options and Statistics moved, Status details, Privacy,
+   About, Report a bug, Open vault.
+5. Browser walk over the shell, both agents and the archive; the spec
+   marked as built.
+
+### 11.4 Out of scope for now
+
+An agents list in the menu, company brand colours, a layout made for
+phones beyond the responsive rules already in place, a real reachability
+call on a timer.
+
+## 12. Origin
 
 Decision Board was TR-4 of the Program Lead Cockpit, a single-user automation
 system for a Program Lead at Visteon Electronics running the MB32829 Gen6
