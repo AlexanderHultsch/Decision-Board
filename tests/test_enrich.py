@@ -13,8 +13,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from decisionboard import enrich, evaluate, knowledge  # noqa: E402
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
+from programmind.knowledge import enrich
+
+from programmind.knowledge import evaluate
+
+from programmind.knowledge import knowledge  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _roles_fixture import make_roles  # noqa: E402

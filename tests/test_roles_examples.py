@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from decisionboard import roles  # noqa: E402
+from programmind.agents.board import roles  # noqa: E402
 
 EXAMPLES = REPO_ROOT / "roles" / "examples"
 

@@ -33,19 +33,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .agent.opencode_client import opencode_config_problem
-from . import clarify as clarify_mod
-from . import knowledge as knowledge_mod
-from . import memory_writer
-from . import ask as ask_mod
-from . import picker
-from . import roles as roles_mod
-from .agent.opencode_client import stop_call
-from .agent.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
-from .audit import log_run
-from .board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
+from programmind.ai.opencode_client import opencode_config_problem
+from programmind.agents.board import clarify as clarify_mod
+from programmind.knowledge import knowledge as knowledge_mod
+from programmind.memory import memory_writer
+from programmind.agents.ask import ask as ask_mod
+from programmind.knowledge import picker
+from programmind.agents.board import roles as roles_mod
+from programmind.ai.opencode_client import stop_call
+from programmind.ai.provider import AiNotConfiguredError, AiProvider, AiResult, build_provider
+from programmind.memory.audit import log_run
+from programmind.agents.board.board import BoardConversation, ask_follow_up_full, prompt_sizes, role_terms, run_board, run_board_combined
 
-WEB_DIR = Path(__file__).resolve().parent / "web"
+PACKAGE_DIR = Path(__file__).resolve().parents[1]
+WEB_DIR = PACKAGE_DIR / "web"                       # the shell: index.html, shell.js, style.css
+AGENTS_DIR = PACKAGE_DIR / "agents"                 # each agent ships its script under agents/<name>/web/
 DEFAULT_PORT = 8765
 
 _CONTENT_TYPES = {
@@ -1591,8 +1593,15 @@ def make_handler(server: BoardServer):
             return data if isinstance(data, dict) else {}
 
         def _static(self, name: str) -> None:
-            path = (WEB_DIR / name).resolve()
-            if WEB_DIR.resolve() not in path.parents or not path.is_file():
+            # /static/agents/<agent>/<file> comes from that agent's web folder (restructuring of 10 September 2026).
+            if name.startswith("agents/"):
+                parts = name.split("/")
+                root = (AGENTS_DIR / parts[1] / "web").resolve() if len(parts) == 3 else None
+                path = (root / parts[2]).resolve() if root else None
+            else:
+                root = WEB_DIR.resolve()
+                path = (WEB_DIR / name).resolve()
+            if path is None or root not in path.parents or not path.is_file():
                 self._json(404, {"error": "not found"})
                 return
             body = path.read_bytes()

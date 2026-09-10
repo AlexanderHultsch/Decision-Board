@@ -15,8 +15,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
-from decisionboard import board, knowledge, roles  # noqa: E402
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
+from programmind.agents.board import board
+
+from programmind.knowledge import knowledge
+
+from programmind.agents.board import roles  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 from _roles_fixture import make_roles  # noqa: E402
 
 

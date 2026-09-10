@@ -1025,7 +1025,7 @@ def kpi_notes(config: dict, members: list[str] | tuple[str, ...], *, today: date
 def _roles_inside(config: dict, vault: Path) -> tuple[str, ...]:
     """The roles folder as a vault-relative path when it lies inside the
     vault (section 3.4: profiles are not knowledge notes), else nothing."""
-    from .roles import resolve_folder   # local import: roles imports this module
+    from programmind.agents.board.roles import resolve_folder   # local import: roles imports this module
     folder, _ = resolve_folder(config)
     if folder is None:
         return ()

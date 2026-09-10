@@ -5,7 +5,7 @@ config/*.bak
 
 # The board's memory (decision 0005): program content, must never be
 # committed
-memory/
+/memory/
 
 # The default audit folder the setup wizard proposes
 audit/

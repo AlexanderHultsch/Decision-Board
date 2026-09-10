@@ -19,9 +19,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
-from decisionboard.server import create_http_server, site_name  # noqa: E402
-from decisionboard import clarify as clarify_mod  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
+from programmind.shell.server import create_http_server, site_name  # noqa: E402
+from programmind.agents.board import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
 MEMBER_COUNT = len(CLASSIC)
@@ -142,10 +142,12 @@ class TestServerFlow(unittest.TestCase):
     def test_index_and_static_files_are_served(self):
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}/")
         with urllib.request.urlopen(request, timeout=10) as response:
-            self.assertIn(b"Decision Board", response.read())
-        for name in ("app.js", "style.css"):
+            self.assertIn(b"Program Mind", response.read())
+        for name in ("shell.js", "style.css", "agents/board/board.js", "agents/ask/ask.js"):
             with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/static/{name}", timeout=10) as response:
                 self.assertEqual(response.status, 200)
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(f"http://127.0.0.1:{self.port}/static/agents/board/../../shell/server.py", timeout=10)
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}/static/../server.py")
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(request, timeout=10)

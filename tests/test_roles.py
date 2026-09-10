@@ -17,8 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from decisionboard import board, knowledge, roles, setup_wizard  # noqa: E402
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
+from programmind.agents.board import board
+from programmind.knowledge import knowledge
+from programmind.agents.board import roles
+from programmind import setup_wizard  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
 
@@ -46,7 +49,7 @@ class TestNothingShipped(unittest.TestCase):
     def test_no_member_list_survives_in_the_code(self):
         self.assertFalse(hasattr(board, "BOARD_MEMBERS"))
         self.assertFalse(hasattr(roles, "MEMBERS"))
-        prompt = (REPO_ROOT / "src/decisionboard/agent/prompts/board_members.md").read_text(encoding="utf-8")
+        prompt = (REPO_ROOT / "src/programmind/agents/board/prompts/board_members.md").read_text(encoding="utf-8")
         for name in CLASSIC:
             self.assertNotIn(name, prompt)
 

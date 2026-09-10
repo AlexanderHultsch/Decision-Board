@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiProvider, AiResult
-from .knowledge import vault_outline
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
+from programmind.knowledge.knowledge import vault_outline
 
 DEFAULT_SUBFOLDER = "Decision Board"
 

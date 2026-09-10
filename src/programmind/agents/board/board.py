@@ -39,11 +39,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
-from .audit import log_run
-from .knowledge import active_project, kpi_notes
-from .roles import Board, RoleProfile, load_board
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiNotConfiguredError, AiProvider, AiResult, is_configured
+from programmind.memory.audit import log_run
+from programmind.knowledge.knowledge import active_project, kpi_notes
+from programmind.agents.board.roles import Board, RoleProfile, load_board
 
 
 def _get(config: dict, dotted: str, default: Any = None) -> Any:

@@ -16,8 +16,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiProvider, AiResult
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
 
 MAX_FULL = 8        # sections in full per member
 MAX_BRIEF = 20      # one-line pages per member

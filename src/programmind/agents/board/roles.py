@@ -50,10 +50,10 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .knowledge import _front_matter
+from programmind.knowledge.knowledge import _front_matter
 
 DEFAULT_SUBFOLDER = "Roles"
-SUPPORT_DIR = Path(__file__).resolve().parents[2] / "roles"
+SUPPORT_DIR = Path(__file__).resolve().parents[4] / "roles"
 CONDUCT_NAME = "_Board member conduct.md"
 TEMPLATE_NAME = "_Template - member.md"
 KPI_TEMPLATE_NAME = "_Template - KPI note.md"

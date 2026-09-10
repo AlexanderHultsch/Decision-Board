@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Decision Board</title>
+<title>Program Mind</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Crect%20width%3D%2224%22%20height%3D%2224%22%20rx%3D%226%22%20fill%3D%22%232563eb%22%2F%3E%3Cg%20transform%3D%22translate%2812%2012.4%29%20scale%280.98%29%20translate%28-12%20-12.4%29%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%225.5%22%20r%3D%222.2%22%2F%3E%3Ccircle%20cx%3D%225.5%22%20cy%3D%227%22%20r%3D%221.9%22%2F%3E%3Ccircle%20cx%3D%2218.5%22%20cy%3D%227%22%20r%3D%221.9%22%2F%3E%3Cpath%20d%3D%22M8.6%2012.2a3.4%203.4%200%200%201%206.8%200%22%2F%3E%3Cpath%20d%3D%22M2.5%2013a3%203%200%200%201%204.6-2.2M21.5%2013a3%203%200%200%200-4.6-2.2%22%2F%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2218%22%20r%3D%222%22%2F%3E%3Cpath%20d%3D%22M12%2014.6v1.2M12%2020.2v1.2M8.6%2018h1.2M14.2%2018h1.2M9.6%2015.6l.9.9M13.5%2019.5l.9.9M14.4%2015.6l-.9.9M10.5%2019.5l-.9.9%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -11,7 +11,7 @@
 <header class="topbar">
   <button class="brand" id="btn-brand" type="button" title="Start page">
     <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2.2"/><circle cx="5.5" cy="7" r="1.9"/><circle cx="18.5" cy="7" r="1.9"/><path d="M8.6 12.2a3.4 3.4 0 0 1 6.8 0"/><path d="M2.5 13a3 3 0 0 1 4.6-2.2M21.5 13a3 3 0 0 0-4.6-2.2"/><circle cx="12" cy="18" r="2"/><path d="M12 14.6v1.2M12 20.2v1.2M8.6 18h1.2M14.2 18h1.2M9.6 15.6l.9.9M13.5 19.5l.9.9M14.4 15.6l-.9.9M10.5 19.5l-.9.9"/></svg></span>
-    <span>Decision Board</span>
+    <span>Program Mind</span>
   </button>
   <nav class="nav-arrows" aria-label="Steps">
     <button id="btn-nav-back" class="nav-btn" type="button" title="Back one step (stops the board if it is working)" disabled><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><span>Back</span></button>
@@ -406,6 +406,8 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/shell.js"></script>
+<script src="/static/agents/board/board.js"></script>
+<script src="/static/agents/ask/ask.js"></script>
 </body>
 </html>

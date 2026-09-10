@@ -16,12 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import knowledge, picker
-from .agent.provider import AiProvider
-from .board import role_terms
-from .roles import load_board
+from programmind.knowledge import knowledge
 
-DEFAULT_SET = Path(__file__).resolve().parents[2] / "tests" / "knowledge_eval" / "questions.json"
+from programmind.knowledge import picker
+from programmind.ai.provider import AiProvider
+from programmind.agents.board.board import role_terms
+from programmind.agents.board.roles import load_board
+
+DEFAULT_SET = Path(__file__).resolve().parents[3] / "tests" / "knowledge_eval" / "questions.json"
 
 
 @dataclass

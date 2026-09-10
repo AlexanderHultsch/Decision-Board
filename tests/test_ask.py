@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from decisionboard import ask  # noqa: E402
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
+from programmind.agents.ask import ask  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 
 SENT = {
     "Process/VPDS/VPDS_Overview.md": "## Maturity phases and gates\n\nMG4 closes DV completion.\n",

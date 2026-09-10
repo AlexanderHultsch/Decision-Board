@@ -22,9 +22,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiProvider, AiResult
-from .knowledge import (
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
+from programmind.knowledge.knowledge import (
     KPI_STALE_DAYS, KPI_TOKEN_CAP, _CHARS_PER_TOKEN, _config_value, _freshness, _project_list, _roles_inside,
     active_projects, for_project, load_vault,
 )

@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from decisionboard import knowledge  # noqa: E402
+from programmind.knowledge import knowledge  # noqa: E402
 
 
 def _vault(tmp: Path) -> Path:
@@ -424,7 +424,7 @@ class TestReviewFixes(unittest.TestCase):
 
 class TestPicker(unittest.TestCase):
     def test_only_candidate_ids_survive_and_a_bad_answer_keeps_python_in_force(self):
-        from decisionboard import picker
+        from programmind.knowledge import picker
         cands = {"Hardware": [{"id": "A.md#One", "path": "A.md", "heading": "One", "summary": "", "tokens": 10},
                               {"id": "B.md", "path": "B.md", "heading": "", "summary": "s", "tokens": 5}],
                  "Finance": []}

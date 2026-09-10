@@ -16,8 +16,8 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _subprocess_fake import patch_subprocess  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from decisionboard.agent import opencode_client  # noqa: E402
-from decisionboard.agent.opencode_client import OpenCodeError, OpenCodeProvider  # noqa: E402
+from programmind.ai import opencode_client  # noqa: E402
+from programmind.ai.opencode_client import OpenCodeError, OpenCodeProvider  # noqa: E402
 
 CONFIG = {"provider": {"models": {"board": "opencode/big-pickle"}, "opencode": {"auto_approve": True}}}
 OLD_HELP = "opencode run [message..] Options: -h --help -m, --model --format --file --title --attach"

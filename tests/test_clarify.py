@@ -14,8 +14,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from decisionboard import clarify, memory_writer  # noqa: E402
-from decisionboard.agent.provider import AiProvider, AiResult  # noqa: E402
+from programmind.agents.board import clarify
+
+from programmind.memory import memory_writer  # noqa: E402
+from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
 
 
 class FakeProvider(AiProvider):

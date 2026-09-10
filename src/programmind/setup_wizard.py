@@ -38,7 +38,7 @@ import http.client
 import urllib.parse
 from pathlib import Path
 
-from .agent.opencode_client import OpenCodeError, OpenCodeProvider, describe_failure, opencode_config_problem
+from programmind.ai.opencode_client import OpenCodeError, OpenCodeProvider, describe_failure, opencode_config_problem
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
@@ -146,7 +146,7 @@ class Wizard:
     def step_profile(self, config_seed: dict | None = None) -> str:
         """Company or private. The one question that changes what follows:
         where the model lives and who may see the prompts."""
-        self.heading("2. How will you use Decision Board?")
+        self.heading("2. How will you use Program Mind?")
         if self.profile_arg:
             self.profile = self.profile_arg
             self.ok(f"profile: {self.profile} (given on the command line)")
@@ -622,7 +622,7 @@ class Wizard:
         if not vault:
             self.warn("no knowledge source set - the board answers from the question alone until you set one in Options.")
             return
-        from decisionboard.knowledge import KnowledgeUnavailable, load_vault
+        from programmind.knowledge.knowledge import KnowledgeUnavailable, load_vault
         try:
             notes = load_vault(vault)
         except KnowledgeUnavailable as exc:
@@ -636,7 +636,7 @@ class Wizard:
         3.4). One folder, chosen here: ``<vault>/Roles`` by default, any
         other on request. Missing or empty: offer to create it and copy the
         examples in."""
-        from decisionboard import roles as roles_mod
+        from programmind.agents.board import roles as roles_mod
         default = (roles_mod.detect_folder(vault) or (vault / roles_mod.DEFAULT_SUBFOLDER)) if vault else None
         if self.roles_arg:
             folder = Path(self.roles_arg).expanduser()
@@ -753,10 +753,10 @@ class Wizard:
         actually has to work (8 September 2026, when the board failed with
         "no answer text" after that test had passed)."""
         self.say("\n6b. Test call shaped like a real board call")
-        from decisionboard.agent.provider import TASK_BOARD
-        from decisionboard.board import _member_prompt
-        from decisionboard.knowledge import gather
-        from decisionboard.roles import RolesUnavailable, load_roles
+        from programmind.ai.provider import TASK_BOARD
+        from programmind.agents.board.board import _member_prompt
+        from programmind.knowledge.knowledge import gather
+        from programmind.agents.board.roles import RolesUnavailable, load_roles
 
         try:
             selection = gather(config, "Should we rework the existing tooling or switch supplier?")
@@ -852,7 +852,7 @@ class Wizard:
     # -- run ----------------------------------------------------------------
 
     def run(self) -> int:
-        self.say("Decision Board setup")
+        self.say("Program Mind setup")
         self.say("====================")
         self.step_environment()
         self.step_profile(_read_json(LOCAL_CONFIG))
@@ -879,13 +879,13 @@ class Wizard:
             self.ok("everything checked out.")
         elif self.failures:
             self.say("\n        Fix the items above, then run this script again.")
-        launcher = "python scripts\\run_board.py serve" if sys.platform == "win32" else "python3 scripts/run_board.py serve"
+        launcher = "python scripts\\run.py serve" if sys.platform == "win32" else "python3 scripts/run.py serve"
         self.say("")
         self.say("        Next:")
         self.bullets([f"start the board:  {launcher}",
                       "change any of this later in the interface under Options"])
         if self.interactive and not self.failures and self.confirm("Start the board now?", True):
-            from decisionboard.server import serve
+            from programmind.shell.server import serve
             return serve(config, LOCAL_CONFIG, port=int(config["server"]["port"]))
         return 1 if self.failures else 0
 
@@ -1023,7 +1023,7 @@ def diagnose(stdout: str | None, stderr: str | None) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Decision Board setup: check the machine, write the config, test the model.")
+    parser = argparse.ArgumentParser(description="Program Mind setup: check the machine, write the config, test the model.")
     parser.add_argument("--vault", help="knowledge source folder (skips the dialog)")
     parser.add_argument("--model", help="provider/model string (skips the question)")
     parser.add_argument("--opencode-config", help="path to the company opencode.json ('' for none; skips the dialog)")

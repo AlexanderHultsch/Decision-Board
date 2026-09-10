@@ -1,4 +1,4 @@
-# Decision Board bootstrap for Windows.
+# Program Mind bootstrap for Windows.
 #
 # Run from any PowerShell:
 #   powershell -ExecutionPolicy Bypass -File install.ps1
@@ -9,7 +9,7 @@
 # the knowledge source and makes one test call to the model.
 
 param(
-    [string]$Repo = "https://github.com/AlexanderHultsch/Decision-Board.git",
+    [string]$Repo = "https://github.com/AlexanderHultsch/program-mind.git",
     [string]$Branch = "main",
     [string]$Target = ""
 )
@@ -26,7 +26,7 @@ foreach ($tool in @("git", "python")) {
 if (-not $Target) {
     Add-Type -AssemblyName System.Windows.Forms
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = "Choose the folder that will contain the Decision-Board repository"
+    $dialog.Description = "Choose the folder that will contain the program-mind repository"
     $dialog.ShowNewFolderButton = $true
     if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
         Write-Host "No folder chosen." -ForegroundColor Yellow
@@ -35,7 +35,7 @@ if (-not $Target) {
     $Target = $dialog.SelectedPath
 }
 
-$repoDir = Join-Path $Target "Decision-Board"
+$repoDir = Join-Path $Target "program-mind"
 if (Test-Path (Join-Path $repoDir ".git")) {
     Write-Host "[ok] repository already at $repoDir - pulling $Branch"
     git -C $repoDir fetch origin $Branch

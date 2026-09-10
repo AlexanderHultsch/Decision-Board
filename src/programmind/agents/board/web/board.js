@@ -1,9 +1,10 @@
-/* Decision Board browser interface. Vanilla JS, no build step. Polls the
-   session state once a second while the server is working. */
+/* Program Mind - the Board agent (spec sections 3, 5.1 and 9). Loaded after
+   shell.js; registers itself with the shell and owns every board screen. */
 (function () {
   "use strict";
+  const PM = window.PM;
+  const { $, esc, api, store, show, setError, fmt, fmtNum, fmtSec, lines } = PM;
 
-  const $ = (id) => document.getElementById(id);
 
   const ICONS = {
     dollar: '<path d="M12 3v18"/><path d="M16.5 7.5A3.5 3.5 0 0 0 13 5h-2.5a3 3 0 0 0 0 6h3a3 3 0 0 1 0 6H11a3.5 3.5 0 0 1-3.5-2.5"/>',
@@ -21,92 +22,43 @@
     layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17l9 5 9-5"/>',
     person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   };
+
   const SYNTHESIS_ICON = '<path d="M20 6 9 17l-5-5"/>';
+
   let memberMeta = {};   // name -> {title, short, icon, color, perspective}, from the session
 
   function meta(name) {
     return memberMeta[name] || { title: name, short: name.slice(0, 14), icon: "person", color: "#6b7280", perspective: "" };
   }
+
   function setMemberMeta(list) {
     memberMeta = {};
     (list || []).forEach((m) => { memberMeta[m.name] = m; });
   }
 
-  let config = null;
   let session = null;
+
   let pollTimer = null;
+
   const openMembers = new Set();
 
   // What the browser keeps between reloads (9 September 2026: nothing typed
   // is lost to an error or a refresh): the current session's id and a draft
   // of everything typed, per session. localStorage may be unavailable; every
   // access is guarded and the page works without it.
-  const store = {
-    get(key) { try { const v = localStorage.getItem(`decision-board:${key}`); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
-    set(key, value) { try { localStorage.setItem(`decision-board:${key}`, JSON.stringify(value)); } catch (e) { /* no storage */ } },
-    del(key) { try { localStorage.removeItem(`decision-board:${key}`); } catch (e) { /* no storage */ } },
-  };
+
   function draft() { return (session && store.get(`draft:${session.id}`)) || {}; }
+
   function saveDraft(patch) { if (session) store.set(`draft:${session.id}`, Object.assign(draft(), patch)); }
+
   function forgetSession() { if (session) store.del(`draft:${session.id}`); store.del("session"); }
 
-  // -- helpers -----------------------------------------------------------
-
-  function esc(text) {
-    return String(text == null ? "" : text)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
   function avatar(name, cls) {
     const m = meta(name);
     const icon = Object.prototype.hasOwnProperty.call(ICONS, m.icon) ? ICONS[m.icon] : ICONS.person;
     return `<span class="avatar ${cls || ""}" style="background:${esc(m.color)}" aria-hidden="true"><svg viewBox="0 0 24 24">${icon}</svg></span>`;
   }
-  async function api(method, path, body) {
-    const response = await fetch(path, {
-      method, headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    let data = null;
-    try { data = await response.json(); } catch (e) { data = null; }
-    if (!response.ok) throw new Error((data && data.error) || `${response.status} ${response.statusText}`);
-    return data;
-  }
-  function show(name) {
-    // Scroll to the top only when the screen actually changes: a poll that
-    // redraws the same screen must not pull the page back up (9 September 2026).
-    const target = $(`screen-${name}`);
-    const changed = !target || target.hidden;
-    document.querySelectorAll(".screen").forEach((el) => { el.hidden = el.id !== `screen-${name}`; });
-    if (changed) window.scrollTo({ top: 0 });
-  }
-  function setError(id, message) {
-    const el = $(id);
-    el.textContent = message || "";
-    el.hidden = !message;
-  }
-  function applyTheme(theme) {
-    const root = document.documentElement;
-    if (theme === "light" || theme === "dark") root.setAttribute("data-theme", theme);
-    else root.removeAttribute("data-theme");
-  }
-  function greeting() {
-    const h = new Date().getHours();
-    return h < 5 ? "Good evening." : h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.";
-  }
-  function lines(text) { return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean); }
-  // Text that the model wrote as bullets ("- " lines) becomes a list; anything
-  // else is shown as it is. Arrays are lists too.
-  function fmt(value) {
-    if (Array.isArray(value)) return value.length ? `<ul class="bullets">${value.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "<span class='muted'>none stated</span>";
-    const text = String(value == null ? "" : value).trim();
-    if (!text) return "<span class='muted'>none stated</span>";
-    const rows = text.split("\n").map((r) => r.trim()).filter(Boolean);
-    if (rows.length && rows.every((r) => /^[-*•]\s+/.test(r))) {
-      return `<ul class="bullets">${rows.map((r) => `<li>${esc(r.replace(/^[-*•]\s+/, ""))}</li>`).join("")}</ul>`;
-    }
-    return esc(text);
-  }
-  // A pick-list of members: a labelled checkbox per member, all ticked at first.
+
   function renderPicks(container, names, ticked) {
     container.innerHTML = names.map((name) => `
       <label class="${ticked.has(name) ? "" : "off"}" style="color:${esc(meta(name).color)}">
@@ -118,6 +70,7 @@
   }
   // Where a member's material came from: verified facts from the knowledge
   // net (with the note), flagged citations, and the member's own judgement.
+
   function sourcesRows(a) {
     const facts = a.sources || [];
     const net = facts.length
@@ -127,11 +80,16 @@
     const flags = (a.flags || []).length ? `<dt class="bad">Check</dt><dd class="flag">${a.flags.map(esc).join("; ")}</dd>` : "";
     return `<dt>From the knowledge net</dt><dd>${net}</dd><dt>Own judgement</dt><dd>${own}</dd>${flags}`;
   }
+
   function modeOf(id) { return $(id).value || "individual"; }
+
   function selectionOf() { return $("selection-mode").value === "python" ? "python" : "ai"; }
+
   function setSelection(value) { $("selection-mode").value = value === "python" ? "python" : "ai"; }
+
   let lastPickState = null;
   // The one line under the dropdown, and the banner when the model's pick failed.
+
   function updatePickStatus() {
     if (!session) return;
     const state = session.pick_state;
@@ -148,174 +106,24 @@
     if (lastPickState !== null && lastPickState !== state && ["done", "failed"].includes(state)) requestEstimate();
     lastPickState = state;
   }
+
   function setMode(id, value) { $(id).value = value; if ($(id).value !== value) $(id).value = "individual"; }
   // One member's answer as rows: the full assessment, or the reasons why the
   // topic does not touch it. Used on the member cards and inside follow-ups.
+
   function memberBody(a) {
     if (a.applies === false) {
       return `<p class="na-note">This member says the topic does not touch its responsibilities. Its reasons:</p><dl><dt>Why not</dt><dd>${fmt(a.view)}</dd></dl>`;
     }
     return `<dl><dt>View</dt><dd>${fmt(a.view)}</dd>${a.impact ? `<dt>Impact on my area</dt><dd>${fmt(a.impact)}</dd>` : ""}<dt>Risks</dt><dd>${fmt(a.risks)}</dd><dt>Recommendation</dt><dd>${fmt(a.recommendation)}</dd>${sourcesRows(a)}</dl>`;
   }
+
   function picked(container) {
     return Array.from(container.querySelectorAll("input:checked")).map((box) => box.value);
   }
 
-  // -- config / options --------------------------------------------------
-
-  function renderKnowledgeChip() {
-    const chip = $("knowledge-chip");
-    const status = config.knowledge_status;
-    chip.className = "chip";
-    if (!status.configured) { chip.classList.add("none"); chip.textContent = "No knowledge source"; }
-    else if (status.ok) { chip.classList.add("ok"); chip.textContent = `${status.notes} notes`; }
-    else { chip.classList.add("bad"); chip.textContent = "Knowledge source not reachable"; }
-    // The path is a tooltip, not a label (9 September 2026): hover to see it.
-    chip.title = status.error || (config.vault_path ? `Knowledge source: ${config.vault_path}` : "Set a vault folder in Options");
-    const problem = !config.model ? '<span class="error">No model configured. Open Options.</span>'
-      : !status.configured ? "No knowledge source set. The board answers from your question alone."
-      : !status.ok ? `<span class="error">${esc(status.error)}</span>` : "";
-    $("home-hint").innerHTML = problem || `${status.notes} notes in the vault.`;
-    $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
-    $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question, one call.`;
-    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "ai")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
-  }
-
-  async function loadConfig() {
-    config = await api("GET", "/api/config");
-    applyTheme(config.theme);
-    renderKnowledgeChip();
-    renderProjectPicker();
-  }
-
-  // The project picker on the home page: a dropdown with checkboxes, like a
-  // spreadsheet filter. The default comes from the configuration; the
-  // choice travels with the question.
-  let chosenProjects = null;   // null until the config is known
-  function defaultProjects() {
-    return String(config.project || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean);
-  }
-  function projectLabel() {
-    return !chosenProjects || chosenProjects.length === 0 ? "All projects" : chosenProjects.length === 1 ? chosenProjects[0] : `${chosenProjects.length} projects`;
-  }
-  function renderProjectChips() {
-    ["board-project", "ask-project", "thread-project"].forEach((id) => { if ($(id)) $(id).textContent = projectLabel(); });
-  }
-  function renderProjectPicker() {
-    const names = (config.projects || []).slice();
-    // Chosen once on the start page, remembered in the browser, carried into every use case (spec 9.5).
-    if (chosenProjects === null) chosenProjects = Array.isArray(store.get("projects")) ? store.get("projects") : defaultProjects();
-    renderProjectChips();
-    chosenProjects.forEach((p) => { if (!names.some((n) => n.toLowerCase() === p.toLowerCase())) names.push(p); });
-    const all = chosenProjects.length === 0;
-    $("projects-list").innerHTML = `<label class="all"><input type="checkbox" value="" ${all ? "checked" : ""}> All projects</label>` +
-      names.map((n) => `<label><input type="checkbox" value="${esc(n)}" ${chosenProjects.some((p) => p.toLowerCase() === n.toLowerCase()) ? "checked" : ""}> ${esc(n)}</label>`).join("");
-    $("projects-label").textContent = all ? "All projects" : chosenProjects.length === 1 ? chosenProjects[0] : `${chosenProjects.length} projects`;
-    $("projects-list").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
-      if (box.value === "") chosenProjects = [];
-      else {
-        chosenProjects = Array.from($("projects-list").querySelectorAll("input")).filter((b) => b.value && b.checked).map((b) => b.value);
-      }
-      store.set("projects", chosenProjects);
-      renderProjectPicker();
-    }));
-    $("btn-projects").disabled = names.length === 0;
-    if (names.length === 0) $("projects-label").textContent = "No project pages in the vault";
-  }
-  function toggleProjectMenu(open) {
-    const menu = $("projects-menu");
-    menu.hidden = open === undefined ? !menu.hidden : !open;
-    $("btn-projects").setAttribute("aria-expanded", String(!menu.hidden));
-  }
-
-  function openOptions() {
-    $("opt-vault").value = config.vault_path || "";
-    $("opt-roles").value = config.roles_folder || "";
-    $("opt-budget").value = config.token_budget || 6000;
-    $("opt-model").value = config.model || "";
-    $("opt-occonfig").value = config.opencode_config || "";
-    $("opt-limit").value = config.token_limit == null ? "" : config.token_limit;
-    $("opt-auto").checked = !!config.auto_approve;
-    $("opt-audit").value = config.audit_folder || "";
-    $("opt-theme").value = config.theme || "system";
-    $("opt-path").textContent = config.config_path ? `Saved to ${config.config_path}` : "";
-    const s = config.knowledge_status;
-    $("opt-vault-status").textContent = !s.configured ? "Not set." : s.ok ? `${s.notes} notes found.` : s.error;
-    renderRolesStatus(config.roles_status);
-    setError("options-error", "");
-    $("options-dialog").hidden = false;
-  }
-
-  async function saveOptions(event) {
-    event.preventDefault();
-    try {
-      config = await api("POST", "/api/config", {
-        vault_path: $("opt-vault").value,
-        roles_folder: $("opt-roles").value,
-        token_budget: Number($("opt-budget").value) || 6000,
-        model: $("opt-model").value,
-        opencode_config: $("opt-occonfig").value,
-        token_limit: $("opt-limit").value === "" ? null : Number($("opt-limit").value),
-        auto_approve: $("opt-auto").checked,
-        audit_folder: $("opt-audit").value,
-        theme: $("opt-theme").value,
-      });
-      applyTheme(config.theme);
-      renderKnowledgeChip();
-      $("options-dialog").hidden = true;
-    } catch (err) { setError("options-error", err.message); }
-  }
-
-  // One folder or file dialog on the server, its result written into an input.
-  async function browseInto(buttonId, inputId, endpoint, extra) {
-    const btn = $(buttonId);
-    btn.disabled = true; btn.textContent = "Choose in the dialog…";
-    try {
-      const data = await api("POST", endpoint, Object.assign({ initial: $(inputId).value }, extra || {}));
-      if (data.path) $(inputId).value = data.path;
-    } catch (err) { setError("options-error", err.message); }
-    btn.disabled = false; btn.textContent = "Browse…";
-  }
-  const browse = () => browseInto("btn-browse", "opt-vault", "/api/pick-folder", { title: "Choose the knowledge source (Obsidian vault)" });
-  const browseRoles = () => browseInto("btn-browse-roles", "opt-roles", "/api/pick-folder", { title: "Choose the roles folder" });
-  const browseConfigFile = () => browseInto("btn-browse-occonfig", "opt-occonfig", "/api/pick-file");
-
-  function renderRolesStatus(r) {
-    const el = $("opt-roles-status");
-    if (!r) { el.textContent = ""; return; }
-    if (r.error) {
-      el.innerHTML = `<span class="error">${esc(r.error)}</span>`;
-      $("btn-install-roles").hidden = false;
-      return;
-    }
-    let text = `Board of ${r.count}: ${r.members.join(", ")} - from ${r.folder}.`;
-    if (r.skipped && r.skipped.length) text += ` Not on the board: ${r.skipped.map((x) => `${x.member} (${x.reason})`).join("; ")}.`;
-    const conduct = r.conduct || [];
-    text += conduct.length ? ` Common note(s): ${conduct.join(", ")}.` : " No common note (kind: conduct) in the folder.";
-    el.textContent = text;
-    $("btn-install-roles").hidden = conduct.length > 0;
-  }
-
-  async function installRoles() {
-    const btn = $("btn-install-roles");
-    btn.disabled = true;
-    try {
-      // Save the folder typed above first, so the examples land where the user said.
-      if ($("opt-roles").value !== (config.roles_folder || "") || $("opt-vault").value !== (config.vault_path || "")) {
-        config = await api("POST", "/api/config", { roles_folder: $("opt-roles").value, vault_path: $("opt-vault").value });
-        renderProjectPicker();
-      }
-      const r = await api("POST", "/api/roles/install");
-      config.roles_status = r;
-      renderRolesStatus(r);
-      if (r.written) $("opt-roles-status").textContent += ` Written ${r.written.length} file(s) to ${r.target}.`;
-    } catch (err) { setError("options-error", err.message); }
-    btn.disabled = false;
-  }
-
-  // -- session flow -----------------------------------------------------
-
   function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
   function startPolling() {
     stopPolling();
     pollTimer = setInterval(async () => {
@@ -324,6 +132,7 @@
       catch (err) { stopPolling(); showError(err.message); }
     }, 1000);
   }
+
   function needsPolling(s) {
     return ["clarifying", "running", "synthesising", "proposing"].includes(s.phase) || s.busy
       || (s.phase === "confirm" && s.pick_state === "running");
@@ -335,7 +144,7 @@
     if (!question) return;
     setError("home-error", "");
     try {
-      session = await api("POST", "/api/sessions", { question, projects: chosenProjects || [] });
+      session = await api("POST", "/api/sessions", { question, projects: PM.projects() });
       store.del("question");
       openMembers.clear();
       $("screen-result").dataset.phase = "";
@@ -345,7 +154,7 @@
   }
 
   function renderNav() {
-    if (currentRoute !== "board") { $("btn-nav-back").disabled = true; $("btn-nav-forward").disabled = true; return; }
+    if (PM.route() !== "board") { $("btn-nav-back").disabled = true; $("btn-nav-forward").disabled = true; return; }
     const nav = (session && session.nav) || { back: false, forward: false };
     const onHome = !$("screen-home").hidden;
     $("btn-nav-back").disabled = !session || onHome || !nav.back && !["questions"].includes(session.phase);
@@ -353,6 +162,7 @@
   }
 
   let lastPhase = null;
+
   function pushHistory() {
     const phase = session ? `${session.id}:${session.phase}` : "home";
     if (phase === lastPhase) return;
@@ -361,7 +171,7 @@
   }
 
   function render() {
-    if (currentRoute !== "board") return;
+    if (PM.route() !== "board") return;
     if (!session) { show("home"); renderNav(); return; }
     store.set("session", session.id);
     if (session.member_meta && session.member_meta.length) setMemberMeta(session.member_meta);
@@ -374,7 +184,7 @@
       case "synthesising": return renderRunning();
       case "result": return renderResult();
       case "proposing": return show("proposing");
-      case "proposal": return renderProposal();
+      case "proposal": return PM.showProposal(session.proposal, session.knowledge.vault_path || "", memoryHandlers);
       case "written":
       case "closed": return renderDone();
       case "error": return showError(session.error);
@@ -382,7 +192,9 @@
     }
   }
   // Every render also refreshes the arrows and the browser history.
+
   const _render = render;
+
   render = function () { _render(); renderNav(); pushHistory(); };
 
   function showError(message) {
@@ -456,7 +268,7 @@
     setMode("run-mode", (kept && kept.mode) || session.mode || "individual");
     // Knowledge selection (spec 5.1): the browser remembers the last choice;
     // a choice that differs from the session's starts (or skips) the pick.
-    const remembered = store.get("selection") || session.selection || config.selection || "ai";
+    const remembered = store.get("selection") || session.selection || PM.config.selection || "ai";
     setSelection(remembered);
     if (remembered !== session.selection) api("POST", `/api/sessions/${session.id}/pick`, { selection: remembered }).then((s2) => {
       session = s2; updatePickStatus();
@@ -471,7 +283,7 @@
     };
     lastPickState = null;
     updatePickStatus();
-    $("budget").value = (kept && kept.budget != null) ? kept.budget : (session.budget != null ? session.budget : (config.token_budget || 6000));
+    $("budget").value = (kept && kept.budget != null) ? kept.budget : (session.budget != null ? session.budget : (PM.config.token_budget || 6000));
     picks = { extra: (kept && kept.extra) || session.extra || [], exclude: (kept && kept.exclude) || session.exclude || [] };
     outlineCache = null;
     $("budget").disabled = !(k && k.vault_path);
@@ -497,10 +309,15 @@
 
   // The live estimate: exact calls, "about" tokens, from the server's own
   // prompt builders. Debounced, and a stale answer never overwrites a newer one.
+
   let estimateTimer = null;
+
   let estimateSeq = 0;
+
   let picks = { extra: [], exclude: [] };     // manual picks for the open topic: section ids
+
   let outlineCache = null;
+
   function renderOutline() {
     const filter = ($("outline-filter").value || "").toLowerCase();
     const rows = (outlineCache || []).map((note) => {
@@ -518,6 +335,7 @@
       saveConfirmDraft(); requestEstimate();
     }));
   }
+
   function renderMemberSections(e) {
     const briefs = e.briefs || {};
     const split = e.split || {};
@@ -539,6 +357,7 @@
       saveConfirmDraft(); requestEstimate();
     }));
   }
+
   function requestEstimate() {
     if (estimateTimer) clearTimeout(estimateTimer);
     estimateTimer = setTimeout(async () => {
@@ -603,6 +422,7 @@
   // One screen for "in session", "consolidating" and the result: the member
   // tiles stay in place and become clickable once their answer is in; the
   // "Board direction" box below turns into the recommendation.
+
   function memberStateLabel(name, state, answered, failed) {
     if (failed.has(name) || state === "failed") return "failed";
     const a = answered.get(name);
@@ -615,6 +435,7 @@
 
   // A tile is clickable as soon as that member's answer is in (9 September
   // 2026: read the early answers while the others still think).
+
   function renderTiles(answered, failed) {
     $("member-grid").innerHTML = Object.entries(session.members).map(([name, state]) => {
       const a = answered.get(name);
@@ -810,115 +631,8 @@
     } catch (err) { setError("close-error", err.message); }
   }
 
-  let memoryTarget = "board";        // whose proposal the write and discard buttons act on: "board" or "ask"
-  function renderProposal(proposal, vaultPath) {
-    if (!$("screen-proposal").hidden) return;
-    const p = proposal || session.proposal;
-    memoryTarget = proposal ? "ask" : "board";
-    $("prop-vault").value = vaultPath != null ? vaultPath : (session.knowledge.vault_path || "");
-    $("prop-path").value = p.path;
-    $("prop-title").value = p.title;
-    $("prop-tags").value = p.tags.join(", ");
-    $("prop-body").value = p.body;
-    $("prop-mode").textContent = p.mode === "append" ? "appends to existing note" : "new note";
-    $("prop-preview").textContent = p.preview;
-    setError("proposal-error", p.parse_error || "");
-    show("proposal");
-  }
-
-  async function writeMemory() {
-    const body = {
-      path: $("prop-path").value, title: $("prop-title").value,
-      tags: $("prop-tags").value.split(",").map((t) => t.trim()).filter(Boolean),
-      body: $("prop-body").value,
-    };
-    try {
-      if (memoryTarget === "ask") { thread = await api("POST", `/api/ask/${thread.id}/memory`, body); renderThread(); }
-      else { session = await api("POST", `/api/sessions/${session.id}/memory`, body); render(); }
-    } catch (err) { setError("proposal-error", err.message); }
-  }
-
-  async function discardMemory() {
-    try {
-      if (memoryTarget === "ask") { thread = await api("POST", `/api/ask/${thread.id}/discard-memory`); renderThread(); }
-      else { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); }
-    } catch (err) { setError("proposal-error", err.message); }
-  }
-
-  // -- statistics: tokens and time per step (9 September 2026) ----------------
-
-  function fmtNum(n) { return n == null ? "–" : Number(n).toLocaleString("en-GB"); }
-  function fmtSec(s) { return s == null ? "–" : s < 60 ? `${Number(s).toFixed(1)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`; }
-
-  function wallTimes(marks) {
-    // Wall time per phase, from the phase marks: each mark lasts until the next.
-    const rows = [];
-    const names = { running: "board members", synthesising: "consolidation", "follow-up": "follow-up", proposing: "memory proposal" };
-    let followUps = 0;
-    for (let i = 0; i < marks.length - 1; i++) {
-      const name = marks[i].phase;
-      if (!names[name]) continue;   // the rest is time waiting for Alex, not for the model
-      const seconds = marks[i + 1].at - marks[i].at;
-      if (seconds < 0.05) continue;  // the combined mode has no separate consolidation
-      rows.push({ phase: name === "follow-up" ? `follow-up ${++followUps}` : names[name], seconds });
-    }
-    // The clarifier's own time: from the start (or an answer) to the questions.
-    const clar = [];
-    for (let i = 0; i < marks.length - 1; i++) {
-      if (["started", "questions"].includes(marks[i].phase) && ["questions", "confirm"].includes(marks[i + 1].phase) && marks[i + 1].at - marks[i].at < 3600) {
-        clar.push(marks[i + 1].at - marks[i].at);
-      }
-    }
-    return { rows, clarifier: clar.reduce((a, b) => a + b, 0) };
-  }
-
-  function openStats() {
-    const dialog = $("stats-dialog");
-    const source = currentRoute === "thread" ? thread : session;
-    const stats = source && source.stats;
-    if (!stats || !stats.calls.length) {
-      $("stats-summary").textContent = source ? "No model call yet." : "Start a topic or a thread; the statistics fill in as the model works.";
-      $("stats-body").innerHTML = "";
-      dialog.hidden = false;
-      return;
-    }
-    const calls = stats.calls;
-    const sum = (key) => calls.reduce((a, c) => a + (c[key] || 0), 0);
-    const groups = new Map();
-    calls.forEach((c) => {
-      const key = c.step;
-      const g = groups.get(key) || { step: key, calls: 0, input: 0, output: 0, seconds: 0, members: [] };
-      g.calls += 1; g.input += c.input_tokens || 0; g.output += c.output_tokens || 0; g.seconds += c.seconds || 0;
-      if (c.member) g.members.push(c);
-      groups.set(key, g);
-    });
-    const wall = wallTimes(stats.marks || []);
-    const last = stats.marks && stats.marks.length ? stats.marks[stats.marks.length - 1].at : Date.now() / 1000;
-    const total = last - stats.started;
-    $("stats-summary").textContent = `${calls.length} model call(s) · ${fmtNum(sum("input_tokens"))} tokens in · ${fmtNum(sum("output_tokens"))} tokens out · ${fmtSec(sum("seconds"))} of model time · ${fmtSec(total)} from the question to now`;
-    const rows = [];
-    groups.forEach((g) => {
-      rows.push(`<tr><td>${esc(g.step)}</td><td class="num">${g.calls}</td><td class="num">${fmtNum(g.input)}</td><td class="num">${fmtNum(g.output)}</td><td class="num">${fmtSec(g.seconds)}</td></tr>`);
-      g.members.forEach((c) => {
-        rows.push(`<tr class="group"><td>&nbsp;&nbsp;${esc(c.member)}${c.error ? ` <span class="err">failed: ${esc(c.error)}</span>` : ""}</td><td class="num">1</td><td class="num">${fmtNum(c.input_tokens)}</td><td class="num">${fmtNum(c.output_tokens)}</td><td class="num">${fmtSec(c.seconds)}</td></tr>`);
-      });
-    });
-    rows.push(`<tr class="total"><td>Total</td><td class="num">${calls.length}</td><td class="num">${fmtNum(sum("input_tokens"))}</td><td class="num">${fmtNum(sum("output_tokens"))}</td><td class="num">${fmtSec(sum("seconds"))}</td></tr>`);
-    const wallRows = wall.rows.map((r) => `<tr><td>${esc(r.phase)}</td><td class="num">${fmtSec(r.seconds)}</td></tr>`).join("");
-    $("stats-body").innerHTML = `
-      <table><thead><tr><th>Step</th><th class="num">Calls</th><th class="num">Tokens in</th><th class="num">Tokens out</th><th class="num">Model time</th></tr></thead><tbody>${rows.join("")}</tbody></table>
-      <p class="eyebrow">Wall time <span class="muted small">members run in parallel, so a step is shorter than its calls added up</span></p>
-      <table><thead><tr><th>Phase</th><th class="num">Duration</th></tr></thead><tbody>
-        <tr><td>clarifier (all rounds)</td><td class="num">${fmtSec(wall.clarifier)}</td></tr>${wallRows}
-        <tr class="total"><td>From the question to now</td><td class="num">${fmtSec(total)}</td></tr></tbody></table>
-      ${knowledgeSplitTable()}
-      <p class="muted small">A retried empty run counts once, with the retry's tokens. Time you spent answering questions is not counted as model time.</p>`;
-    dialog.hidden = false;
-  }
-
-  // Knowledge tokens per member of the last run, by tier (spec 5.1).
   function knowledgeSplitTable() {
-    const split = (currentRoute === "board" && session && session.knowledge_split) || {};
+    const split = (PM.route() === "board" && session && session.knowledge_split) || {};
     const names = Object.keys(split);
     if (!names.length) return "";
     const rows = names.map((m) => `<tr><td>${esc(m)}</td><td class="num">${fmtNum(split[m].core)}</td><td class="num">${fmtNum(split[m].own)}</td><td class="num">${fmtNum(split[m].brief)}</td></tr>`).join("");
@@ -950,7 +664,7 @@
     $("question").value = keepQuestion ? question : "";
     store.set("question", $("question").value);
     $("followup").value = "";
-    setPath("/board");
+    PM.setPath("/board");
     show("home"); renderNav();
     $("question").focus();
   }
@@ -972,310 +686,80 @@
     }
   }
 
-  // -- routes (spec 9.5): one page, the path decides the screen -------------
-
-  let currentRoute = "start";
-  function routeOf(pathname) {
-    if (pathname === "/board") return "board";
-    if (pathname === "/ask") return "ask";
-    if (pathname.startsWith("/ask/")) return "thread";
-    return "start";
-  }
-  function setPath(path) {
-    currentRoute = routeOf(path);
-    if (location.pathname !== path) { try { history.pushState({ route: currentRoute }, "", path); } catch (e) { /* not available */ } }
-  }
-  function navigate(path) { setPath(path); renderRoute(); }
-  function renderRoute() {
-    currentRoute = routeOf(location.pathname);
-    lastPhase = null;
-    if (currentRoute !== "thread") stopThreadPolling();
-    if (currentRoute !== "board") stopPolling();
-    renderProjectChips();
-    if (currentRoute === "start") { show("start"); renderNav(); return; }
-    if (currentRoute === "board") { if (session) render(); else { show("home"); renderNav(); } return; }
-    if (currentRoute === "ask") { show("ask"); renderNav(); loadThreads(); return; }
-    openThread(location.pathname.split("/")[2]);
-  }
-
-  // -- Ask the vault (spec 10) ------------------------------------------------
-
-  let thread = null;                 // the open thread's snapshot
-  let threadPollTimer = null;
-  let askPicks = { extra: [], exclude: [] };
-  let askOutlineCache = null;
-  let askEstimateTimer = null;
-  let askEstimateSeq = 0;
-  function stopThreadPolling() { if (threadPollTimer) { clearInterval(threadPollTimer); threadPollTimer = null; } }
-  function startThreadPolling() {
-    stopThreadPolling();
-    threadPollTimer = setInterval(async () => {
-      if (!thread || currentRoute !== "thread") return stopThreadPolling();
-      try { thread = await api("GET", `/api/ask/${thread.id}`); renderThread(); }
-      catch (err) { stopThreadPolling(); setError("thread-error", err.message); }
-    }, 1000);
-  }
-  // A small Markdown: paragraphs, bullet and numbered lists, bold, code. Escaped first.
-  function md(text) {
-    const blocks = String(text || "").replace(/\r/g, "").split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
-    const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
-    return blocks.map((b) => {
-      const rows = b.split("\n").map((r) => r.trim()).filter(Boolean);
-      if (rows.every((r) => /^[-*•]\s+/.test(r))) return `<ul>${rows.map((r) => `<li>${inline(r.replace(/^[-*•]\s+/, ""))}</li>`).join("")}</ul>`;
-      if (rows.every((r) => /^\d+[.)]\s+/.test(r))) return `<ol>${rows.map((r) => `<li>${inline(r.replace(/^\d+[.)]\s+/, ""))}</li>`).join("")}</ol>`;
-      if (rows.length === 1 && /^#{1,6}\s+/.test(rows[0])) return `<p><strong>${inline(rows[0].replace(/^#{1,6}\s+/, ""))}</strong></p>`;
-      return `<p>${rows.map(inline).join("<br>")}</p>`;
-    }).join("");
-  }
-  function obsidianLink(path) {
-    const file = path.replace(/\.md$/i, "");
-    return `obsidian://open?vault=${encodeURIComponent(config.vault_name || "")}&file=${encodeURIComponent(file)}`;
-  }
-  function fmtDate(seconds) {
-    try { return new Date(seconds * 1000).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }); } catch (e) { return ""; }
-  }
-  async function loadThreads() {
-    const box = $("thread-list");
-    try {
-      const data = await api("GET", "/api/ask");
-      const rows = data.threads || [];
-      box.innerHTML = rows.length ? rows.map((r) => `
-        <div class="thread-row" data-id="${esc(r.id)}">
-          <button type="button" class="thread-open" title="Open this thread">${esc(r.title)}</button>
-          ${r.status === "closed" ? '<span class="closed-tag">closed</span>' : ""}
-          <span class="thread-meta">${r.questions} question(s) · ${esc(fmtDate(r.updated))}${r.projects && r.projects.length ? ` · ${esc(r.projects.join(", "))}` : ""}</span>
-          <button type="button" class="ghost small-btn thread-delete" title="Delete this thread">Delete</button>
-        </div>`).join("") : "<p class='muted small'>No threads yet. Ask the first question above.</p>";
-      box.querySelectorAll(".thread-open").forEach((b) => b.addEventListener("click", () => navigate(`/ask/${b.closest(".thread-row").dataset.id}`)));
-      box.querySelectorAll(".thread-delete").forEach((b) => b.addEventListener("click", async () => {
-        const id = b.closest(".thread-row").dataset.id;
-        if (!window.confirm("Delete this thread? Its questions and answers are removed; a note written to the vault stays.")) return;
-        try { await api("DELETE", `/api/ask/${id}`); loadThreads(); } catch (err) { setError("ask-error", err.message); }
-      }));
-    } catch (err) { setError("ask-error", err.message); }
-  }
-  async function newThread(event) {
-    event.preventDefault();
-    const question = $("ask-question").value.trim();
-    if (!question) return;
-    setError("ask-error", "");
-    $("btn-ask-new").disabled = true;
-    try {
-      const created = await api("POST", "/api/ask", { projects: chosenProjects || [], budget: config.ask_budget });
-      thread = await api("POST", `/api/ask/${created.id}/question`, { question });
-      store.del("ask-question");
-      $("ask-question").value = "";
-      setPath(`/ask/${thread.id}`);
-      askPicks = { extra: [], exclude: [] }; askOutlineCache = null;
-      renderThread();
-    } catch (err) { setError("ask-error", err.message); }
-    $("btn-ask-new").disabled = false;
-  }
-  async function openThread(id) {
-    try {
-      thread = await api("GET", `/api/ask/${id}`);
-      askPicks = { extra: thread.extra || [], exclude: thread.exclude || [] }; askOutlineCache = null;
-      $("thread-question").value = store.get(`thread-draft:${id}`) || "";
-      $("ask-budget").value = thread.budget != null ? thread.budget : config.ask_budget;
-      renderThread();
-    } catch (err) { setError("ask-error", err.message); navigate("/ask"); }
-  }
-  function renderTurnCard(t) {
-    const sources = (t.sources || []).length
-      ? `<ul>${t.sources.map((s) => `<li><a href="${obsidianLink(s.path)}" title="Open in Obsidian">${esc(s.path)}</a>${s.heading ? ` · ${esc(s.heading)}` : ""}${s.brief ? ' <span class="brief-tag" title="Only its one-line summary was sent">summary only</span>' : ""}${s.why ? ` <span class="why">${esc(s.why)}</span>` : ""}</li>`).join("")}</ul>`
-      : "<span class='muted'>no page named</span>";
-    const dropped = t.dropped ? `<p class="muted small">${t.dropped} source(s) the model named were not among the pages sent and were dropped.</p>` : "";
-    const gaps = (t.gaps || []).length ? `<dt>Not in the vault</dt><dd class="gaps"><ul>${t.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></dd>` : "";
-    const hint = t.decision_question ? `<p class="hint-board muted">This reads like a decision. <a href="/board" class="to-board">Put it to the Board</a> for an assessment by every swim lane.</p>` : "";
-    const parse = t.parse_error ? `<p class="error small">${esc(t.parse_error)}; the text is shown as it came.</p>` : "";
-    return `<div class="turn answer"><div class="q">${esc(t.question)}</div><div class="a">${md(t.answer)}</div>${parse}
-      <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${dropped}${hint}</div>`;
-  }
-  function renderThread() {
-    if (!thread) return;
-    const closed = thread.status === "closed";
-    if (thread.phase === "proposing") { show("proposing"); startThreadPolling(); return; }
-    if (thread.phase === "proposal" && thread.proposal) { stopThreadPolling(); renderProposal(thread.proposal, config.vault_path || ""); return; }
-    $("thread-title").textContent = thread.title || "New thread";
-    const calls = (thread.stats && thread.stats.calls || []).length;
-    $("thread-state").textContent = `${(thread.turns || []).length} question(s) · ${calls} model call(s)` + (closed ? " · closed" : " · open until you close it");
-    const key = `${thread.id}:${(thread.turns || []).length}:${thread.busy}:${thread.status}:${thread.phase}`;
-    if ($("thread-turns").dataset.key !== key) {
-      $("thread-turns").dataset.key = key;
-      $("thread-turns").innerHTML = (thread.turns || []).map(renderTurnCard).join("");
-      $("thread-turns").querySelectorAll("a.to-board").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate("/board"); }));
-    }
-    $("thread-pending").hidden = !thread.busy;
-    if (thread.busy) $("thread-pending-text").textContent = `Reading the vault and answering: ${thread.pending_question || ""}`;
-    $("thread-form").hidden = closed || thread.busy;
-    $("thread-closed").hidden = !closed || thread.busy;
-    if (closed) {
-      $("thread-closed-text").textContent = thread.written_path
-        ? `This thread is closed. A note was written to your vault: ${thread.written_path}`
-        : "This thread is closed. It stays here to read; it takes no further questions.";
-    }
-    setError("thread-error", thread.error || "");
-    show("thread"); renderNav();
-    if (thread.busy) startThreadPolling(); else { stopThreadPolling(); if (!closed) requestAskEstimate(); }
-  }
-  async function askInThread(event) {
-    event.preventDefault();
-    const question = $("thread-question").value.trim();
-    if (!question || !thread) return;
-    setError("thread-error", "");
-    try {
-      thread = await api("POST", `/api/ask/${thread.id}/question`, { question, budget: Number($("ask-budget").value), extra: askPicks.extra, exclude: askPicks.exclude });
-      $("thread-question").value = "";
-      store.del(`thread-draft:${thread.id}`);
-      renderThread();
-    } catch (err) { setError("thread-error", err.message); }
-  }
-  async function stopThread() {
-    if (!thread) return;
-    try { thread = await api("POST", `/api/ask/${thread.id}/stop`); renderThread(); } catch (err) { setError("thread-error", err.message); }
-  }
-  async function closeThread(remember) {
-    if (!thread) return;
-    try {
-      thread = await api("POST", `/api/ask/${thread.id}/close`, { remember });
-      $("thread-close-dialog").hidden = true;
-      renderThread();
-    } catch (err) { setError("thread-close-error", err.message); }
-  }
-  function renderAskSections(e) {
-    const row = (s) => `
-      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span></li>`;
-    const briefRow = (b) => `
-      <li><input type="checkbox" data-id="${esc(b.path)}" ${askPicks.exclude.includes(b.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(b.path)} <span class="brief-tag" title="One line, not the page">summary</span>${b.summary ? `<span class="reason">${esc(b.summary)}</span>` : ""}</li>`;
-    const full = (e.sections || []).length ? `<p class="tier">In full <span class="muted small">${fmtNum(e.knowledge_tokens)} tokens · KPI notes ${fmtNum(e.kpi_tokens)} tokens</span></p><ul class="sec-list">${e.sections.map(row).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>";
-    const brief = (e.briefs || []).length ? `<p class="tier">As one line each</p><ul class="sec-list">${e.briefs.map(briefRow).join("")}</ul>` : "";
-    $("ask-estimate-notes").innerHTML = full + brief;
-    $("ask-estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
-      const id = box.dataset.id;
-      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
-      if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
-      requestAskEstimate();
-    }));
-  }
-  function renderAskOutline() {
-    const filter = ($("ask-outline-filter").value || "").toLowerCase();
-    const rows = (askOutlineCache || []).map((note) => {
-      const secs = note.sections.filter((s) => !filter || note.path.toLowerCase().includes(filter) || (s.heading || "").toLowerCase().includes(filter));
-      if (!secs.length) return "";
-      return `<div class="note"><div class="note-title">${esc(note.path)}</div>${secs.map((s) => `
-        <label><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.extra.includes(s.id) ? "checked" : ""}> ${esc(s.heading || "(whole note)")}<span class="tok">${fmtNum(s.tokens)}</span></label>`).join("")}</div>`;
-    }).join("");
-    $("ask-outline").innerHTML = rows || "<span class='muted small'>Nothing matches.</span>";
-    $("ask-outline").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
-      const id = box.dataset.id;
-      askPicks.extra = askPicks.extra.filter((x) => x !== id);
-      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
-      if (box.checked) askPicks.extra.push(id);
-      requestAskEstimate();
-    }));
-  }
-  function requestAskEstimate() {
-    if (askEstimateTimer) clearTimeout(askEstimateTimer);
-    askEstimateTimer = setTimeout(async () => {
-      if (!thread || currentRoute !== "thread" || $("thread-form").hidden) return;
-      const seq = ++askEstimateSeq;
-      $("ask-budget-value").textContent = `${fmtNum(Number($("ask-budget").value))} tokens`;
-      try {
-        const e = await api("POST", `/api/ask/${thread.id}/estimate`, {
-          question: $("thread-question").value, budget: Number($("ask-budget").value),
-          extra: askPicks.extra, exclude: askPicks.exclude, outline: !askOutlineCache,
-        });
-        if (seq !== askEstimateSeq) return;
-        const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} learned from ${e.overhead_learned_from} real call(s) of this thread` : `overhead of ${fmtNum(e.overhead_per_call)} assumed until the first real call`;
-        const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
-        $("ask-estimate").innerHTML = `<strong>1 model call</strong>, about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · ${esc(learned)} · tokens are an estimate, the call count is exact`;
-        renderAskSections(e);
-        if (e.outline) { askOutlineCache = e.outline; renderAskOutline(); }
-      } catch (err) {
-        if (seq === askEstimateSeq) $("ask-estimate").textContent = `No estimate: ${err.message}`;
-      }
-    }, 250);
-  }
-
-  // -- wiring -------------------------------------------------------------
-
-  $("greeting").textContent = greeting();
   $("ask-form").addEventListener("submit", ask);
   $("question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask(e); });
+
   $("btn-answers").addEventListener("click", () => submitAnswers(false));
+
   $("btn-answers-final").addEventListener("click", () => submitAnswers(true));
+
   $("followup-members").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
+
   $("followup-mode").addEventListener("change", () => { if (session && session.phase === "result") renderResult(); });
+
   $("btn-mode-info").addEventListener("click", () => { $("mode-info").hidden = !$("mode-info").hidden; });
+
   $("btn-budget-info").addEventListener("click", () => { $("budget-info").hidden = !$("budget-info").hidden; });
+
   $("btn-selection-info").addEventListener("click", () => { $("selection-info").hidden = !$("selection-info").hidden; });
+
   $("btn-picks-accept").addEventListener("click", () => { picks.exclude = []; saveConfirmDraft(); requestEstimate(); });
+
   $("btn-picks-python").addEventListener("click", () => { setSelection("python"); $("selection-mode").onchange(); });
+
   $("btn-followup-mode-info").addEventListener("click", () => { $("mode-info").hidden = false; $("mode-info").scrollIntoView({ block: "center" }); });
-  $("btn-stats").addEventListener("click", openStats);
-  $("btn-stats-close").addEventListener("click", () => { $("stats-dialog").hidden = true; });
+
   $("btn-back-home").addEventListener("click", () => newTopic(false));
+
   $("btn-run").addEventListener("click", runBoard);
+
   $("btn-back-questions").addEventListener("click", goBack);
+
   $("followup-form").addEventListener("submit", followUp);
+
   $("followup").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) followUp(e); });
+
   $("btn-close").addEventListener("click", () => { setError("close-error", ""); $("close-dialog").hidden = false; });
+
   $("btn-close-cancel").addEventListener("click", () => { $("close-dialog").hidden = true; });
+
   $("btn-close-no").addEventListener("click", () => closeTopic(false));
+
   $("btn-close-yes").addEventListener("click", () => closeTopic(true));
-  $("btn-write").addEventListener("click", writeMemory);
-  $("btn-discard").addEventListener("click", discardMemory);
+
   $("btn-new").addEventListener("click", () => newTopic(false));
+
   $("btn-error-home").addEventListener("click", () => newTopic(true));
-  $("btn-brand").addEventListener("click", () => navigate("/"));
-  document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
-  $("ask-new-form").addEventListener("submit", newThread);
-  $("ask-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) newThread(e); });
-  $("ask-question").addEventListener("input", () => store.set("ask-question", $("ask-question").value));
-  $("thread-form").addEventListener("submit", askInThread);
-  $("thread-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) askInThread(e); });
-  $("thread-question").addEventListener("input", () => { if (thread) store.set(`thread-draft:${thread.id}`, $("thread-question").value); requestAskEstimate(); });
-  $("ask-budget").addEventListener("input", requestAskEstimate);
-  $("btn-ask-budget-info").addEventListener("click", () => { $("ask-budget-info").hidden = !$("ask-budget-info").hidden; });
-  $("ask-outline-filter").addEventListener("input", renderAskOutline);
-  $("btn-thread-stop").addEventListener("click", stopThread);
-  $("btn-thread-close").addEventListener("click", () => { setError("thread-close-error", ""); $("thread-close-dialog").hidden = false; });
-  $("btn-thread-close-cancel").addEventListener("click", () => { $("thread-close-dialog").hidden = true; });
-  $("btn-thread-close-no").addEventListener("click", () => closeThread(false));
-  $("btn-thread-close-yes").addEventListener("click", () => closeThread(true));
-  $("btn-projects").addEventListener("click", () => toggleProjectMenu());
-  document.addEventListener("click", (e) => { if (!$("project-picker").contains(e.target)) toggleProjectMenu(false); });
-  $("btn-projects-default").addEventListener("click", async () => {
-    try { config = await api("POST", "/api/config", { project: (chosenProjects || []).join(", ") }); renderProjectPicker(); toggleProjectMenu(false); }
-    catch (err) { setError("home-error", err.message); }
-  });
+
   $("outline-filter").addEventListener("input", renderOutline);
+
   $("btn-nav-back").addEventListener("click", goBack);
+
   $("btn-nav-forward").addEventListener("click", goForward);
-  window.addEventListener("popstate", () => {
-    // The browser's own Back: between the use cases by path; inside the
-    // board, one step back in the topic, not out of the page.
-    if (routeOf(location.pathname) !== currentRoute) { renderRoute(); return; }
-    if (currentRoute !== "board") return;
-    if (session && $("screen-home").hidden) goBack(); else if (session) goForward();
-  });
+
   $("btn-error-back").addEventListener("click", goBack);
+
   $("question").addEventListener("input", () => store.set("question", $("question").value));
+
   $("followup").addEventListener("input", () => saveDraft({ followup: $("followup").value }));
-  $("btn-error-options").addEventListener("click", openOptions);
-  $("btn-options").addEventListener("click", openOptions);
-  $("btn-options-cancel").addEventListener("click", () => { $("options-dialog").hidden = true; });
-  $("options-form").addEventListener("submit", saveOptions);
-  $("btn-browse").addEventListener("click", browse);
-  $("btn-browse-occonfig").addEventListener("click", browseConfigFile);
-  $("btn-install-roles").addEventListener("click", installRoles);
-  $("btn-browse-roles").addEventListener("click", browseRoles);
-  document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
 
   $("question").value = store.get("question") || "";
-  $("ask-question").value = store.get("ask-question") || "";
-  loadConfig()
-    .then(() => resumeSession())
-    .then(() => renderRoute())
-    .catch((err) => { $("home-hint").textContent = err.message; show("start"); });
+
+  // The board's memory step goes through the shell's proposal screen.
+  const memoryHandlers = {
+    write: async (body) => { session = await api("POST", `/api/sessions/${session.id}/memory`, body); render(); },
+    discard: async () => { session = await api("POST", `/api/sessions/${session.id}/discard-memory`); render(); },
+  };
+
+  PM.register({
+    id: "board",
+    match: (pathname) => (pathname === "/board" ? "board" : null),
+    render: () => { if (session) render(); else { show("home"); renderNav(); } },
+    onEnter: () => { lastPhase = null; },
+    onLeave: () => { stopPolling(); renderNav(); },
+    onPopState: () => { if (session && $("screen-home").hidden) goBack(); else if (session) goForward(); },
+    boot: () => { $("question").value = store.get("question") || ""; return resumeSession(); },
+    stats: () => session,
+    statsExtra: knowledgeSplitTable,
+  });
 })();

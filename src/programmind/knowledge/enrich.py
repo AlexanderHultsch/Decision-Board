@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiProvider
-from .knowledge import Note, _front_matter, estimate_tokens
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiProvider
+from programmind.knowledge.knowledge import Note, _front_matter, estimate_tokens
 
 SUMMARY_PREFIX = "AI summary, not official."
 SUMMARY_BATCH = 8             # pages per model call

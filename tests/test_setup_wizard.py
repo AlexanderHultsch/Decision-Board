@@ -20,9 +20,9 @@ from _subprocess_fake import patch_subprocess  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from decisionboard import setup_wizard  # noqa: E402
+from programmind import setup_wizard  # noqa: E402
 from _roles_fixture import make_roles  # noqa: E402
-from decisionboard.agent.opencode_client import describe_failure  # noqa: E402
+from programmind.ai.opencode_client import describe_failure  # noqa: E402
 
 
 class TestDescribeFailure(unittest.TestCase):
@@ -469,7 +469,7 @@ class TestConfigurationIsExplained(unittest.TestCase):
     def test_a_missing_configuration_names_the_setup_command(self):
         import io as _io
         import contextlib
-        from decisionboard import cli
+        from programmind import cli
         with tempfile.TemporaryDirectory() as tmp:
             stderr = _io.StringIO()
             with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
@@ -483,7 +483,7 @@ class TestConfigurationIsExplained(unittest.TestCase):
     def test_broken_json_is_reported_rather_than_crashing(self):
         import io as _io
         import contextlib
-        from decisionboard import cli
+        from programmind import cli
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.local.json"
             path.write_text("{not json", encoding="utf-8")
@@ -522,7 +522,7 @@ class TestOpenCodeConfigCheck(unittest.TestCase):
     the model string."""
 
     def test_the_boards_own_config_is_refused_with_the_reason(self):
-        from decisionboard.agent.opencode_client import opencode_config_problem
+        from programmind.ai.opencode_client import opencode_config_problem
         with tempfile.TemporaryDirectory() as tmp:
             wrong = Path(tmp) / "config.local.json"
             wrong.write_text(json.dumps({"setup": {"profile": "company"}, "knowledge": {}, "provider": {"models": {"board": "azure/x"}}}),
@@ -542,7 +542,7 @@ class TestOpenCodeConfigCheck(unittest.TestCase):
         self.assertIn("not found", opencode_config_problem("/nowhere/opencode.json"))
 
     def test_the_failure_text_and_the_diagnosis_name_the_configuration_file(self):
-        from decisionboard.agent.opencode_client import describe_failure
+        from programmind.ai.opencode_client import describe_failure
         stdout = json.dumps({"type": "error", "error": {"message": "Config file is invalid: unrecognized keys: _comment, setup, storage"}})
         text = describe_failure(stdout, "")
         self.assertIn("unrecognized keys", text)

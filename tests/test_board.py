@@ -18,8 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
-from decisionboard.agent.provider import AiNotConfiguredError, AiProvider, AiResult  # noqa: E402
-from decisionboard import board  # noqa: E402
+from programmind.ai.provider import AiNotConfiguredError, AiProvider, AiResult  # noqa: E402
+from programmind.agents.board import board  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
 
 # The board is whoever has a filled role profile in the roles folder

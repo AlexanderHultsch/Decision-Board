@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CLI entry point for the AI Board (decision 0005).
 
-    decisionboard board
-    decisionboard serve [--port N] [--no-browser]
+    programmind board
+    programmind serve [--port N] [--no-browser]
 
 ``board`` loads the local configuration and runs the board on a topic
 entered at the prompt (``board.py``, docs/spec.md chapter 9): isolated
@@ -74,10 +74,10 @@ def _get(config: dict, dotted: str, default: Any = None) -> Any:
 def cmd_board(config: dict) -> int:
     print("Decision Board")
 
-    from .agent.opencode_client import OpenCodeError
-    from .agent.provider import AiNotConfiguredError, build_provider
-    from .board import BoardConversation, ask_follow_up, render, render_follow_up, run_board
-    from .roles import load_board
+    from programmind.ai.opencode_client import OpenCodeError
+    from programmind.ai.provider import AiNotConfiguredError, build_provider
+    from programmind.agents.board.board import BoardConversation, ask_follow_up, render, render_follow_up, run_board
+    from programmind.agents.board.roles import load_board
 
     topic = input("Topic: ").strip()
     context = input("Context: ").strip()
@@ -97,7 +97,7 @@ def cmd_board(config: dict) -> int:
         constraints.append(line)
 
     provider = build_provider(config)
-    from .roles import RolesUnavailable
+    from programmind.agents.board.roles import RolesUnavailable
     try:
         board = load_board(config)   # section 3.4: fresh on every run, this is the board
     except RolesUnavailable as exc:
@@ -148,8 +148,9 @@ def cmd_enrich(config: dict, args: argparse.Namespace) -> int:
     """``phases`` and ``aliases`` on the task pages, a ``summary`` on every
     page (spec 5.1). Proposes first; writes only with --write after a yes."""
     from datetime import date
-    from . import enrich, knowledge
-    from .agent.provider import build_provider
+    from programmind.knowledge import enrich
+    from programmind.knowledge import knowledge
+    from programmind.ai.provider import build_provider
 
     vault_path = _get(config, "knowledge.vault_path")
     if not vault_path:
@@ -181,8 +182,8 @@ def cmd_enrich(config: dict, args: argparse.Namespace) -> int:
 
 def cmd_eval_knowledge(config: dict, args: argparse.Namespace) -> int:
     """Hit rate of the knowledge selection over the evaluation set (spec 5.1)."""
-    from . import evaluate
-    from .agent.provider import build_provider
+    from programmind.knowledge import evaluate
+    from programmind.ai.provider import build_provider
 
     path = Path(args.file) if args.file else evaluate.DEFAULT_SET
     try:
@@ -201,7 +202,7 @@ def cmd_eval_knowledge(config: dict, args: argparse.Namespace) -> int:
 
 
 def cmd_serve(config: dict, args: argparse.Namespace) -> int:
-    from .server import serve
+    from programmind.shell.server import serve
 
     return serve(config, args.config, port=args.port, open_browser=not args.no_browser)
 
@@ -213,7 +214,7 @@ COMMANDS: dict[str, Callable[..., int]] = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="decisionboard",
+        prog="programmind",
         description="Decision Board - standalone AI Board tool (decision 0005).",
     )
     parser.add_argument(

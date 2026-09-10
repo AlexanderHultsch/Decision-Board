@@ -19,8 +19,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .agent.prompts import load_prompt
-from .agent.provider import TASK_BOARD, AiProvider, AiResult
+from programmind.ai.prompts import load_prompt
+from programmind.ai.provider import TASK_BOARD, AiProvider, AiResult
 
 FALLBACK_QUESTION = (
     "What outcome would you consider a failure for this decision, and is "

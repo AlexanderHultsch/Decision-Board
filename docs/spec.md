@@ -1,9 +1,10 @@
-# Decision Board — specification
+# Program Mind — specification
 
 ## 1. Purpose and scope
 
-Decision Board is a standalone decision-support tool with two front ends: a
-command line and a local browser interface (section 9). Alex poses a
+Program Mind (Decision Board until 10 September 2026, see section 11) is a
+local site that hosts AI agents on an Obsidian vault; the board is its first
+agent, with two front ends: a command line and the browser interface (section 9). Alex poses a
 question — a topic, its context, the options under consideration and any hard
 constraints — and the board's members — whoever has a role profile in the roles folder,
 section 3.4 — answer it from their professional perspectives, each in a
@@ -422,7 +423,7 @@ company, a person or a machine; `config.example.json` is empty placeholders.
 
 ### 9.4 Server
 
-`decisionboard serve [--port N] [--no-browser]` starts `ThreadingHTTPServer`
+`programmind serve [--port N] [--no-browser]` starts `ThreadingHTTPServer`
 on `127.0.0.1` (`server.port`, default 8765) and opens the default browser.
 Every model call runs in a background thread; the page polls
 `GET /api/sessions/<id>` once a second. `run_board` reports each member's
@@ -526,7 +527,7 @@ first two.
 
 | # | Decision |
 |---|---|
-| 1 | **Name: Program Mind.** The repository is renamed `program-mind` and the Python package `programmind`, both now, together: the command becomes `programmind` (`programmind serve`, `programmind board`, `programmind enrich`, `programmind eval-knowledge`), `scripts/run_board.py` becomes `scripts/programmind.py` and the old script stays one release as a one-line pointer. GitHub redirects the old repository URL; the local clone needs one `git remote set-url`. The site name defaults to `mind` (`http://mind.localhost:8765/`); `server.site_name` still overrides it. |
+| 1 | **Name: Program Mind.** The repository is renamed `program-mind` and the Python package `programmind`, both now, together: the command becomes `programmind` (`programmind serve`, `programmind board`, `programmind enrich`, `programmind eval-knowledge`), `scripts/run_board.py` becomes `scripts/run.py` (not `programmind.py`: a script of the package's name on `sys.path` would shadow the package) and the old script stays one release as a pointer. GitHub redirects the old repository URL; the local clone needs one `git remote set-url`. The site name defaults to `mind` (`http://mind.localhost:8765/`); `server.site_name` still overrides it. |
 | 2 | **Mark: a small graph of linked nodes**, three or four connected dots in the accent colour, inline SVG, the same as the tab icon. Wordmark "Program Mind" beside it. |
 | 3 | **Look: a calm light workspace, dark mode kept.** White cards on a soft grey ground, one accent colour, generous spacing, app density on desktop, the system theme followed as today. One page, one script, one stylesheet, no build step, as before. |
 | 4 | **Shell: a top bar with a burger menu at the right.** From the left: the mark and wordmark as the home button, the project chip (click: back to the home page's picker), the three status icons, the burger. The step arrows go away. |
@@ -539,6 +540,17 @@ first two.
 | 11 | **Privacy: a written page.** What leaves the machine (the prompts, to the company gateway, with the model named), what never leaves (the vault stays on disk, history and audit stay local, no telemetry), and that every write into the vault is confirmed first. Text only, no live paths. |
 | 12 | **About**: the version, the site address, the link to this spec. **Report a bug**: a plain link to the repository's Issues page, opened in a new tab. |
 | 13 | The "N notes" chip goes; the Options gear and the Statistics button move into the menu. |
+
+**Built, step 1 (10 September 2026).** The renames and the restructuring:
+package `programmind` with `shell/`, `knowledge/`, `memory/`, `ai/` and one
+folder per agent under `agents/`, each with its module, its prompts and its
+script; the page is `web/index.html` with `shell.js` and one script per
+agent that registers itself through `PM.register` (id, `match(pathname)`,
+`render(route)`, `onEnter`, `onLeave`, `onPopState`, `boot`, `stats`,
+`statsExtra`). The prompt loader searches every prompt folder. The site name
+still defaults to `ai` until the shell (step 2) lands. The vault property
+`Part of Decision Board AI` keeps its name: it is the vault's convention,
+not the tool's.
 
 ### 11.2 Reuse
 
