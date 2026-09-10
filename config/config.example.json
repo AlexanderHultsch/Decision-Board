@@ -28,9 +28,9 @@
   },
 
   "server": {
-    "_comment": "The browser interface listens on 127.0.0.1 only. site_name is the name under .localhost the browser uses (http://<site_name>.localhost:<port>/): every name under .localhost resolves to this machine in Chrome, Edge and Firefox without admin rights, while the server still listens on 127.0.0.1 only. history_folder is where the work of every agent is kept, one JSON file per board topic and per Ask the vault thread, never in the vault; empty means history/ next to config.local.json. The older name threads_folder is still read.",
+    "_comment": "The browser interface listens on 127.0.0.1 only. site_name is the name the browser uses. A plain name becomes a name under .localhost (program-mind -> http://program-mind.localhost:<port>/): every name under .localhost resolves to this machine in Chrome, Edge and Firefox without admin rights. A name that already carries a dot is used as it stands (program-mind.local), but nothing here makes such a name resolve - that needs a hosts-file entry or an mDNS responder, and both need admin rights. The server listens on 127.0.0.1 only either way. history_folder is where the work of every agent is kept, one JSON file per board topic and per Ask the vault thread, never in the vault; empty means history/ next to config.local.json. The older name threads_folder is still read.",
     "port": 8765,
-    "site_name": "mind",
+    "site_name": "program-mind",
     "history_folder": ""
   },
 

@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from programmind import __version__  # noqa: E402
 from programmind.ai.provider import AiProvider, AiResult  # noqa: E402
-from programmind.shell.server import Session, _ranking_query, create_http_server, site_name  # noqa: E402
+from programmind.shell.server import Session, _ranking_query, create_http_server, site_host, site_name  # noqa: E402
 from programmind.memory import history as history_mod  # noqa: E402
 from programmind.agents.board import clarify as clarify_mod  # noqa: E402
 from _roles_fixture import CLASSIC, make_roles  # noqa: E402
@@ -696,10 +696,14 @@ class TestSiteName(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             return exc.code
 
-    def test_site_name_is_cleaned_and_defaults_to_mind(self):
-        self.assertEqual(site_name({}), "mind")          # spec 11.1, decision 1
+    def test_the_name_is_cleaned_and_a_plain_one_goes_under_localhost(self):
+        self.assertEqual(site_name({}), "program-mind")                       # spec 11.1, decision 1
+        self.assertEqual(site_host({}), "program-mind.localhost")
         self.assertEqual(site_name({"server": {"site_name": "My Site!"}}), "mysite")
-        self.assertEqual(site_name({"server": {"site_name": "!!"}}), "mind")
+        self.assertEqual(site_name({"server": {"site_name": "!!"}}), "program-mind")
+        # A name that carries a dot is the whole host: it is used as it stands.
+        self.assertEqual(site_host({"server": {"site_name": "Program-Mind.local"}}), "program-mind.local")
+        self.assertEqual(site_host({"server": {"site_name": ".mind."}}), "mind.localhost")
 
     def test_only_the_named_host_under_localhost_is_accepted(self):
         self.assertEqual(self.raw("GET", "/api/config", {"Host": f"ai.localhost:{self.port}"}), 200)
@@ -873,7 +877,8 @@ class TestAskThreads(unittest.TestCase):
 
     def test_config_carries_the_site_name_the_ask_budget_and_the_vault_name(self):
         _, cfg = self.call("GET", "/api/config")
-        self.assertEqual(cfg["site_name"], "mind")
+        self.assertEqual(cfg["site_name"], "program-mind")
+        self.assertEqual(cfg["site_host"], "program-mind.localhost")
         self.assertEqual(cfg["ask_budget"], 3000)
         self.assertEqual(cfg["vault_name"], "vault")
 

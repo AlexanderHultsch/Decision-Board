@@ -82,7 +82,7 @@
     $("home-hint").innerHTML = problem || `${status.notes} notes in the vault.`;
     $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
     $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question, one call.`;
-    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_name || "mind")}.localhost:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
+    $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_host || "program-mind.localhost")}:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
     $("link-bug").href = `${config.repository || ""}/issues`;
     const obsidian = $("link-obsidian");
     obsidian.hidden = !config.vault_name;
@@ -377,7 +377,7 @@
   function renderAbout() {
     const port = location.port || "80";
     $("about-version").textContent = config.version || "unknown";
-    $("about-address").innerHTML = `http://${esc(config.site_name || "mind")}.localhost:${esc(port)}/<br><span class="muted">also http://localhost:${esc(port)}/ · the server listens on this machine only</span>`;
+    $("about-address").innerHTML = `http://${esc(config.site_host || "program-mind.localhost")}:${esc(port)}/<br><span class="muted">also http://localhost:${esc(port)}/ · the server listens on this machine only</span>`;
     $("about-spec").innerHTML = config.spec
       ? `<a href="/spec" target="_blank" rel="noopener">Read it here</a> <span class="muted">· docs/spec.md, as it is on this machine</span>`
       : `<a href="${esc(config.repository || "")}/blob/main/docs/spec.md" target="_blank" rel="noopener">Read it on the repository</a> <span class="muted">· it is not next to this copy</span>`;

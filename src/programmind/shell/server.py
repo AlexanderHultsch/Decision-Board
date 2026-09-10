@@ -60,7 +60,7 @@ WEB_DIR = PACKAGE_DIR / "web"                       # the shell: index.html, she
 AGENTS_DIR = PACKAGE_DIR / "agents"                 # each agent ships its script under agents/<name>/web/
 DEFAULT_PORT = 8765
 BOARD_KIND = "board"                              # the ``kind`` of a board topic in the history folder
-DEFAULT_SITE_NAME = "mind"                         # http://mind.localhost:8765/ (spec 11.1, decision 1)
+DEFAULT_SITE_NAME = "program-mind"                 # http://program-mind.localhost:8765/ (spec 11.1, decision 1)
 STATUS_CHECK_PROMPT = "Reply with the single word OK."   # the confirmed test call of the AI status icon (11.1, decision 7)
 _GATE_LINE = re.compile(r"\bM[GP]\s?\d{1,2}\b", re.I)   # a line of the project page that names a gate or a phase
 _TABLE_RULE = re.compile(r"^\|[\s:|-]+\|$")             # the ---|--- row under a table header
@@ -167,13 +167,29 @@ DEFAULT_CALL_OVERHEAD = 6300      # tokens per call beyond the prompt, seen on t
 
 
 def site_name(config: dict) -> str:
-    """The site's name under ``.localhost`` (spec 9.5, decision 21):
-    ``server.site_name``, lower-cased and stripped to letters, digits and
-    hyphens; ``"mind"`` by default and when nothing is left (spec 11.1,
-    decision 1, since the shell of 10 September 2026)."""
+    """``server.site_name``, lower-cased and stripped to letters, digits,
+    hyphens and dots; ``"program-mind"`` by default and when nothing is
+    left (spec 9.5 decision 21, spec 11.1 decision 1)."""
     raw = str(_get(config, "server.site_name", "") or "").lower()
-    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch == "-")
+    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in "-.").strip(".-")
     return cleaned or DEFAULT_SITE_NAME
+
+
+def site_host(config: dict) -> str:
+    """The host the browser is sent to.
+
+    A plain name becomes a name under ``.localhost``
+    (``program-mind.localhost``): every name under that suffix resolves to
+    this machine in Chrome, Edge and Firefox, with no hosts file and no
+    admin rights, which is what a locked-down company laptop allows.
+
+    A name that already carries a dot is used as it stands
+    (``program-mind.local``, ``mind.visteon.net``). Nothing here makes such
+    a name resolve: that needs a hosts-file entry or an mDNS responder, and
+    both need rights this program does not have. The server still binds to
+    127.0.0.1 only, so a name that does not point here reaches nothing."""
+    name = site_name(config)
+    return name if "." in name else f"{name}.localhost"
 
 
 def _selection_value(value: Any) -> str:
@@ -594,6 +610,7 @@ class BoardServer:
             "theme": _get(self.config, "ui.theme", "system") or "system",
             "selection": _selection_value(_get(self.config, "knowledge.selection")),
             "site_name": site_name(self.config),
+            "site_host": site_host(self.config),
             "version": __version__,
             "repository": REPOSITORY,
             "spec": SPEC_FILE.is_file(),
@@ -2115,7 +2132,7 @@ def make_handler(server: BoardServer):
             hostname, _, host_port = host.rpartition(":") if not host.startswith("[") or "]:" in host else (host, "", "")
             if not host_port:
                 hostname, host_port = host, "80"
-            named_host = f"{site_name(server.config)}.localhost"   # the one name under .localhost (spec 9.5)
+            named_host = site_host(server.config)      # the one name this server answers to besides localhost (spec 9.5)
             if hostname.strip("[]") not in _LOCAL_HOSTS | {named_host} or host_port != str(port):
                 raise ApiError(403, "This server answers only its own page on this machine.")
             if post:
@@ -2332,7 +2349,7 @@ def serve(config: dict, config_path: Path | None, *, port: int = DEFAULT_PORT, o
         print(f"Cannot listen on 127.0.0.1:{port}: {exc}", file=sys.stderr)
         return 1
     listening_port = httpd.server_address[1]
-    url = f"http://{site_name(config)}.localhost:{listening_port}/"   # spec 9.5: the named address
+    url = f"http://{site_host(config)}:{listening_port}/"   # spec 9.5: the named address
     print(f"Program Mind is running at {url}  (Ctrl+C to stop)")
     print(f"Also reachable at http://127.0.0.1:{listening_port}/")
     if open_browser:

@@ -674,6 +674,18 @@ know which folder to leave out, so the knowledge module owns the question;
 `roles.py` keeps the name `DEFAULT_SUBFOLDER` pointing at the new
 constant. Behaviour is unchanged.
 
+**The address is `http://program-mind.localhost:8765/` (10 September 2026).**
+`server.site_name` defaults to `program-mind` rather than `mind`, and it may
+now carry a dot: a plain name is used under `.localhost`, which every
+browser resolves to this machine without a hosts file and without admin
+rights, while a name with a dot in it (`program-mind.local`,
+`mind.visteon.net`) is taken as the whole host name. Nothing in the program
+makes such a name resolve - `.local` is mDNS and a company name needs DNS or
+a hosts entry, both of which need rights this program does not have - so the
+dotted form is for a machine where someone has already arranged it. The
+server binds to 127.0.0.1 either way, and `http://localhost:8765/` stays the
+fallback.
+
 **Changed after the first day of use (10 September 2026).** Six things the
 first real session showed:
 

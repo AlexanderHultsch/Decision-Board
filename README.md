@@ -44,10 +44,12 @@ Then start the site:
 python scripts/run.py serve
 ```
 
-It listens on `127.0.0.1` only and opens `http://mind.localhost:8765/` in
-your browser (`http://localhost:8765/` works too; the name is
-`server.site_name`, and any name under `.localhost` resolves to your own
-machine without admin rights). The home page holds the project picker, one
+It listens on `127.0.0.1` only and opens `http://program-mind.localhost:8765/`
+in your browser (`http://localhost:8765/` works too). The name is
+`server.site_name`: a plain name is used under `.localhost`, which resolves
+to your own machine without admin rights, and a name with a dot in it
+(`program-mind.local`) is used as it stands, but you have to make that one
+resolve yourself. The home page holds the project picker, one
 card per agent and the open work of every agent. The top bar shows the
 project and three status lights (vault, AI, project; hover for the detail);
 the menu at the right holds Options, Statistics, the vault in Obsidian, the
