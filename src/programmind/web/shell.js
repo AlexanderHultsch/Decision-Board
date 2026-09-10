@@ -158,6 +158,7 @@
     $("opt-vault-status").textContent = !s.configured ? "Not set." : s.ok ? `${s.notes} notes found.` : s.error;
     renderRolesStatus(config.roles_status);
     setError("options-error", "");
+    $("options-nav").querySelector("button").click();     // always opens on the first section
     $("options-dialog").hidden = false;
   }
 
@@ -297,7 +298,7 @@
     const c = a.last_call;
     if (c) rows.push(`<dt>Test call</dt><dd>${c.ok ? `answered "${esc(c.answer)}" in ${esc(fmtSec(c.seconds))}` : `failed: ${esc(c.error)}`} · ${esc(fmtDate(c.at))}</dd>`);
     else rows.push(`<dt>Test call</dt><dd>none yet · click the icon to run one</dd>`);
-    return { title: "AI", rows, link: `<a href="#" data-open="options">Open Options</a>` };
+    return { title: "Model", rows, link: `<a href="#" data-open="options">Open Options</a>` };
   }
 
   function projectCard(pr) {
@@ -311,7 +312,8 @@
   }
 
   function cardHtml(name, item, card) {
-    const heading = `<div class="status-head"><span class="dot state-${esc(item.state)}"></span><strong>${esc(card.title)}</strong><span class="muted small">${esc(STATE_WORDS[item.state] || "")}</span></div>`;
+    const heading = `<div class="status-head"><strong>${esc(card.title)}</strong>
+      <span class="state-chip state-${esc(item.state)}"><span class="dot state-${esc(item.state)}"></span>${esc(STATE_WORDS[item.state] || "unknown")}</span></div>`;
     return `${heading}<p class="small status-detail">${esc(item.detail || "")}</p>${card.rows.length ? `<dl class="small">${card.rows.join("")}</dl>` : ""}<p class="small status-link">${card.link}</p>`;
   }
 
@@ -321,6 +323,7 @@
       const item = (status && status[name]) || { state: "unknown", detail: "Not checked yet." };
       $(`dot-${name}`).className = `dot ${stateClass(item)}`;
       $(`btn-status-${name}`).title = `${cards[name](item).title}: ${item.detail || ""}`;
+      $(`btn-status-${name}`).classList.toggle("is-bad", item.state === "red");
       $(`card-${name}`).innerHTML = cardHtml(name, item, cards[name](item));
     });
     document.querySelectorAll(".status-card a[data-open], #status-body a[data-open]").forEach((a) => a.addEventListener("click", (e) => {
@@ -385,6 +388,8 @@
 
   let archive = [];
 
+  let archiveKind = "all";      // the tab in force: all, board or ask
+
   const AGENT_NAME = { board: "Board", ask: "Ask the vault" };
 
   function workRow(r, extra) {
@@ -410,12 +415,15 @@
 
   function renderArchive() {
     const filter = ($("archive-filter").value || "").trim().toLowerCase();
-    const rows = archive.filter((r) => !filter || r.title.toLowerCase().includes(filter));
+    const rows = archive.filter((r) => (archiveKind === "all" || r.kind === archiveKind)
+      && (!filter || r.title.toLowerCase().includes(filter)));
     $("archive-count").textContent = archive.length
       ? `${rows.length} of ${archive.length} closed · newest first`
       : "Nothing closed yet. A topic or a thread moves here when you close it.";
-    $("archive-list").innerHTML = rows.map((r) => `${workRow(r, "archive-row")}
-      <button type="button" class="ghost small-btn archive-delete" title="Delete this for good">Delete</button></div>`).join("");
+    $("archive-list").innerHTML = rows.length
+      ? rows.map((r) => `${workRow(r, "archive-row")}
+        <button type="button" class="ghost small-btn archive-delete" title="Delete this for good">Delete</button></div>`).join("")
+      : `<p class="empty">${archive.length ? "Nothing here matches." : "Nothing closed yet. A topic or a thread moves here when you close it."}</p>`;
     openOnRowClick($("archive-list"), (row) => navigate(pathOf(row)));
     $("archive-list").querySelectorAll(".archive-delete").forEach((b) => b.addEventListener("click", async () => {
       const row = b.closest(".thread-row");
@@ -426,6 +434,8 @@
 
   function openArchive() {
     $("archive-filter").value = "";     // a fresh look each time the archive is opened
+    archiveKind = "all";
+    $("archive-tabs").querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.kind === "all")));
     loadArchive();
   }
 
@@ -496,6 +506,22 @@
   $("btn-about").addEventListener("click", () => navigate("/about"));
 
   $("archive-filter").addEventListener("input", renderArchive);
+
+  $("archive-tabs").addEventListener("click", (event) => {
+    const tab = event.target.closest(".tab");
+    if (!tab) return;
+    archiveKind = tab.dataset.kind;
+    $("archive-tabs").querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+    renderArchive();
+  });
+
+  // Options: one section at a time, the list beside the fields (spec 12.2)
+  $("options-nav").addEventListener("click", (event) => {
+    const tab = event.target.closest("button[data-pane]");
+    if (!tab) return;
+    $("options-nav").querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
+    $("options-panes").querySelectorAll("fieldset").forEach((f) => { f.hidden = f.id !== tab.dataset.pane; });
+  });
 
   document.querySelectorAll("a.tile, a.change-project, #link-threads, #btn-thread-new, #btn-board-new").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); navigate(a.getAttribute("href")); }));
 
@@ -578,6 +604,10 @@
 
   // -- statistics: tokens and time per step, for whichever agent is open ------
 
+  function statTile(value, label) {
+    return `<div class="stat"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`;
+  }
+
   function openStats() {
     const dialog = $("stats-dialog");
     const agent = agentFor(currentRoute);
@@ -602,7 +632,13 @@
     const wall = wallTimes(stats.marks || []);
     const last = stats.marks && stats.marks.length ? stats.marks[stats.marks.length - 1].at : Date.now() / 1000;
     const total = last - stats.started;
-    $("stats-summary").textContent = `${calls.length} model call(s) · ${fmtNum(sum("input_tokens"))} tokens in · ${fmtNum(sum("output_tokens"))} tokens out · ${fmtSec(sum("seconds"))} of model time · ${fmtSec(total)} from the question to now`;
+    $("stats-summary").innerHTML = `<div class="stat-grid">
+      ${statTile(calls.length, "model calls")}
+      ${statTile(fmtNum(sum("input_tokens")), "tokens in")}
+      ${statTile(fmtNum(sum("output_tokens")), "tokens out")}
+      ${statTile(fmtSec(sum("seconds")), "model time")}
+      ${statTile(fmtSec(total), "from the question")}
+    </div>`;
     const rows = [];
     groups.forEach((g) => {
       rows.push(`<tr><td>${esc(g.step)}</td><td class="num">${g.calls}</td><td class="num">${fmtNum(g.input)}</td><td class="num">${fmtNum(g.output)}</td><td class="num">${fmtSec(g.seconds)}</td></tr>`);

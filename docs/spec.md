@@ -729,7 +729,49 @@ An agents list in the menu, company brand colours, a layout made for
 phones beyond the responsive rules already in place, a real reachability
 call on a timer.
 
-## 12. Origin
+## 12. Look and feel: the design system
+
+**Decided 10 September 2026 from a mockup Alex drew up, built the same day**
+in `web/style.css`, `web/index.html` and the three scripts. The
+functionality and the information architecture do not change: this is how
+the same screens look, not what they do. The rule over everything else is
+**consistency before creativity** - one system, used everywhere, rather than
+a page designed twice.
+
+### 12.1 Decisions
+
+| # | Decision |
+|---|---|
+| 1 | **One stylesheet, in three layers**: the tokens (colour, type, space, radius), then the components, then the few screen-specific rules that are left. A component is defined once and used on every screen; there is no page's own version of a button, a card or a list row. Still one file, still no build step and no dependency (principle: stdlib only, section 9.1 decision 13). |
+| 2 | **The palette carries meaning, never decoration.** Primary `#2563eb` for the one action that matters on a screen; green for healthy, amber for a warning, red for an error or a destructive act, grey for everything secondary. A colour that says nothing is not used. Every token has a dark-mode value: the light workspace is the default, dark is kept (11.1 decision 3). |
+| 3 | **Thin borders, not heavy shadows.** One border colour, one radius scale (10px for controls, 14px for cards, 999px for chips). A shadow appears only where something floats above the page: a menu, a dialog, the picker. |
+| 4 | **One font**: Inter where the machine has it, the system sans otherwise. Four sizes carry the hierarchy - page title, section title, body, help text - and headings stay small; weight and colour do more work than size. |
+| 5 | **A spacing scale of one step size** (4px), used as tokens. Every gap on every screen comes from it, so the rhythm is the same everywhere. |
+| 6 | **The shell**: a white header with the mark and wordmark, the project selector, the three status checks as **labelled chips** (Vault, Model, Project) rather than bare icons, and the menu. Below it one centred column, at most 1120px wide, and every screen opens with a page title and, where it helps, one line of subtitle. |
+| 7 | **Every screen states its state.** Loading, empty, success and error are components of the system - a spinner with a line of text, a quiet line in place of a list, a green mark, a red mark - not something each screen invents. |
+| 8 | **Responsive by stacking, never by shrinking.** Below about 900px the two-column screens become one column, the header chips lose their labels and keep their dots, and the rows of work stack their meta line under the title. Nothing is hidden that the desktop shows, except a label whose dot carries the same meaning. |
+
+### 12.2 What the mockup asked for and what it got
+
+| From the mockup | Built | Why not, where not |
+|---|---|---|
+| Design tokens, one accent, status colours, thin borders, small radii, generous space | Yes | |
+| Header with project selector and named status chips | Yes | The three checks keep their meaning (11.1 decision 7); they gain their names back. |
+| Home: one card per agent with its own action, then the recent work as rows | Yes | |
+| Ask the vault: the thread as a conversation, the question as a bubble, the answer with its sources | Yes | |
+| Confirm: the question on the left, who is asked and with what on the right | Yes | The screen was one long column; the same fields now read as two. |
+| Archive: search and tabs (All, Board, Ask the vault) | Yes | The tabs filter what the archive already held. |
+| Options as a two-pane dialog with a section list | Yes | The four sections were already there as fieldsets: Knowledge, Board members, Model, Runtime. |
+| Privacy as four cards | Yes | The page already had exactly those four parts. |
+| About as labelled rows with links | Yes | |
+| Statistics: figures as tiles above the detail | Yes | |
+| Status: one row per check with a state chip | Yes | |
+| Loading, done, error, dialogs | Yes | |
+| Statistics: a bar chart of topics over time | No | The program keeps the calls of the open topic and the audit trail, not a history of topics per day. A chart would have to invent its own numbers. |
+| Clarify: a fixed four-step rail (Main question, Context, Constraints, Review) | No | The clarifier asks what it needs, a variable number of questions in up to five rounds; a fixed rail would misstate what is happening. The rounds are shown as they are, as numbered cards. |
+| A component library (Tailwind, headless UI) and a modern build | No | No dependency and no build step is a founding rule, and the machine this runs on is a locked-down company laptop with the vault on it. The design system is plain CSS in the same one file. |
+
+## 13. Origin
 
 Decision Board was TR-4 of the Program Lead Cockpit, a single-user automation
 system for a Program Lead at Visteon Electronics running the MB32829 Gen6

@@ -94,7 +94,10 @@
     const parse = t.parse_error ? `<p class="error small">${esc(t.parse_error)}; the text is shown as it came.</p>` : "";
     const fresh = (t.new_pages || []).length
       ? `<p class="fresh-pages small">Read from the vault for this question: ${t.new_pages.map(esc).join(" · ")}</p>` : "";
-    return `<div class="turn answer"><div class="q">${esc(t.question)}</div><div class="a">${md(t.answer)}</div>${parse}
+    // A thread reads as a conversation (spec 12.2): the question as a bubble,
+    // the answer as a card with its sources under it.
+    return `<div class="bubble"><div class="q">${esc(t.question)}</div></div>
+      <div class="turn answer"><div class="a">${md(t.answer)}</div>${parse}
       <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${fresh}${dropped}${hint}</div>`;
   }
 

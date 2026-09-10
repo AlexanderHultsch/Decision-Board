@@ -52,7 +52,12 @@ const { chromium } = require('playwright');
   await page.click('#btn-menu');
   await page.click('#btn-options');
   await page.waitForSelector('#options-dialog:not([hidden])');
+  console.log('options sections:', (await page.locator('#options-nav button').allTextContents()).join(' | '),
+    '| shown:', await page.locator('#options-panes fieldset:not([hidden])').count());
   await shot('02-options');
+  await page.click('#options-nav button[data-pane="opt-model"]');
+  console.log('after clicking Model:', await page.textContent('#options-panes fieldset:not([hidden]) legend'));
+  await shot('02b-options-model');
   await page.click('#btn-options-cancel');
 
   console.log('picker label:', await page.textContent('#projects-label'));
@@ -322,6 +327,12 @@ const { chromium } = require('playwright');
   console.log('archive path:', new URL(page.url()).pathname, '| rows:', archived, '|', await page.textContent('#archive-count'));
   console.log('archive agents:', await page.locator('.archive-row[data-kind="board"]').count(), 'board,', await page.locator('.archive-row[data-kind="ask"]').count(), 'ask');
   await shot('27-archive');
+  console.log('archive tabs:', (await page.locator('#archive-tabs .tab').allTextContents()).join(' | '));
+  await page.click('#archive-tabs .tab[data-kind="ask"]');
+  await page.waitForFunction(() => document.querySelectorAll('.archive-row[data-kind="board"]').length === 0, null, { timeout: 10000 });
+  console.log('ask tab:', await page.locator('.archive-row').count(), 'row(s) ·', await page.textContent('#archive-count'));
+  await page.click('#archive-tabs .tab[data-kind="all"]');
+  await page.waitForFunction(() => document.querySelectorAll('.archive-row[data-kind="board"]').length > 0, null, { timeout: 10000 });
   await page.fill('#archive-filter', 'design freeze');
   await page.waitForFunction(() => document.querySelectorAll('.archive-row').length === 1, null, { timeout: 10000 });
   console.log('search by title:', await page.textContent('#archive-count'), '|', (await page.textContent('.archive-row .thread-open')).slice(0, 40));
@@ -352,7 +363,7 @@ const { chromium } = require('playwright');
   await page.click('#btn-menu');
   await page.click('#btn-privacy');
   await page.waitForSelector('#screen-privacy:not([hidden])');
-  console.log('privacy path:', new URL(page.url()).pathname, '| sections:', await page.locator('#screen-privacy .prose h2').count(), '|', await page.textContent('#screen-privacy .prose h2'));
+  console.log('privacy path:', new URL(page.url()).pathname, '| cards:', await page.locator('#screen-privacy .privacy-card').count(), '|', await page.textContent('#screen-privacy .privacy-card h2'));
   await shot('30-privacy');
   await page.click('#btn-menu');
   await page.click('#btn-about');
@@ -364,6 +375,18 @@ const { chromium } = require('playwright');
   await page.goBack();
   await page.waitForSelector('#screen-privacy:not([hidden])');
   console.log('browser back from about ->', new URL(page.url()).pathname);
+  // the same page on a phone: the columns stack, nothing is cut off (spec 12.1 decision 8)
+  await page.setViewportSize({ width: 390, height: 840 });
+  await page.goto('http://127.0.0.1:8765/');
+  await page.waitForSelector('#screen-start:not([hidden])');
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  console.log('phone width: horizontal overflow', overflow, 'px | status names hidden:', await page.locator('#btn-status-vault .status-name').isHidden());
+  await shot('32-phone-home');
+  await page.click('#tile-board');
+  await page.waitForSelector('#screen-home:not([hidden])');
+  await shot('33-phone-board');
+  await page.setViewportSize({ width: 1100, height: 820 });
+
   // dark theme check
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.goto('http://127.0.0.1:8765/');

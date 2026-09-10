@@ -20,23 +20,20 @@
   <div class="topbar-right">
     <div class="status-icons" id="status-icons" aria-label="Status">
       <div class="status" id="status-vault">
-        <button type="button" class="status-btn" id="btn-status-vault" aria-label="Vault status" title="Vault">
-          <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/><path d="M9 7h7"/></svg>
-          <span class="dot" id="dot-vault"></span>
+        <button type="button" class="status-btn" id="btn-status-vault" aria-label="Vault status">
+          <span class="dot" id="dot-vault"></span><span class="status-name">Vault</span>
         </button>
         <div class="status-card" id="card-vault" role="tooltip"></div>
       </div>
       <div class="status" id="status-ai">
-        <button type="button" class="status-btn" id="btn-status-ai" aria-label="AI status" title="AI">
-          <svg viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></svg>
-          <span class="dot" id="dot-ai"></span>
+        <button type="button" class="status-btn" id="btn-status-ai" aria-label="Model status">
+          <span class="dot" id="dot-ai"></span><span class="status-name">Model</span>
         </button>
         <div class="status-card" id="card-ai" role="tooltip"></div>
       </div>
       <div class="status" id="status-project">
-        <button type="button" class="status-btn" id="btn-status-project" aria-label="Project status" title="Project">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/></svg>
-          <span class="dot" id="dot-project"></span>
+        <button type="button" class="status-btn" id="btn-status-project" aria-label="Project status">
+          <span class="dot" id="dot-project"></span><span class="status-name">Project</span>
         </button>
         <div class="status-card" id="card-project" role="tooltip"></div>
       </div>
@@ -92,11 +89,13 @@
         <span class="tile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M15 20a4.5 4.5 0 0 1 7 -3"/></svg></span>
         <span class="tile-title">Board</span>
         <span class="tile-text muted">A decision, assessed by every swim lane in isolation and consolidated into one direction. Asks what it needs to know first.</span>
+        <span class="tile-go">Start a decision →</span>
       </a>
       <a class="tile" href="/ask" id="tile-ask">
         <span class="tile-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M9 9h6M9 12h4"/></svg></span>
         <span class="tile-title">Ask the vault</span>
         <span class="tile-text muted">Any question, answered from the vault by one agent, with the pages it used and what it could not find. Ask back as often as you like.</span>
+        <span class="tile-go">Ask a question →</span>
       </a>
     </div>
     <p class="eyebrow">Open work <span class="muted small">newest first · closed work moves to the archive</span></p>
@@ -179,7 +178,12 @@
   <section id="screen-archive" class="screen" hidden>
     <h1 class="greeting">Archive</h1>
     <p class="lede">Everything you have closed, of every agent. Closed work moves here by itself; it stays readable and can be deleted. A note written into your vault stays there.</p>
-    <input id="archive-filter" type="text" class="outline-filter" placeholder="Search by title…" aria-label="Search the archive by title">
+    <input id="archive-filter" type="search" class="outline-filter" placeholder="Search by title…" aria-label="Search the archive by title">
+    <div class="tabs" id="archive-tabs" role="tablist">
+      <button type="button" class="tab" role="tab" data-kind="all" aria-selected="true">All</button>
+      <button type="button" class="tab" role="tab" data-kind="board" aria-selected="false">Board</button>
+      <button type="button" class="tab" role="tab" data-kind="ask" aria-selected="false">Ask the vault</button>
+    </div>
     <p id="archive-count" class="muted small"></p>
     <div id="archive-list" class="thread-list"></div>
     <p id="archive-error" class="error" hidden></p>
@@ -189,27 +193,37 @@
   <section id="screen-privacy" class="screen" hidden>
     <h1 class="greeting">Privacy</h1>
     <p class="lede">What leaves this machine, what never does, and what is written where. This page is a description, not a setting.</p>
-    <div class="prose">
-      <h2>What leaves this machine</h2>
-      <p>One thing: the prompt each agent builds, sent to your company's AI gateway and answered by the model named in Options. A prompt holds what that agent needs to answer:</p>
-      <ul>
-        <li>the question or the topic you typed, and your answers to the clarifying questions;</li>
-        <li>the sections of your vault the agent selected for that question, and one-line summaries of further pages;</li>
-        <li>the role profiles and the conduct note of the swim lanes being asked, and their KPI notes;</li>
-        <li>the earlier questions and answers of the same topic or thread, so a follow-up makes sense.</li>
-      </ul>
-      <p>You can read the whole of it before it goes: the confirm screen lists every section that would be sent, with its size, and you can add or leave out any of them. The estimate under the slider counts the same material.</p>
-      <h2>What never leaves it</h2>
-      <ul>
-        <li><strong>The vault.</strong> It stays a folder on your disk. Only the sections an agent selected for one question travel, never the whole vault, and never a page nobody asked about.</li>
-        <li><strong>Your work.</strong> Topics and threads are files next to this program's configuration. They are not in the vault and they are not sent anywhere.</li>
-        <li><strong>The audit trail.</strong> One line per model call, with the counts and the durations, never the text. It is a file on this machine.</li>
-        <li><strong>Anything about how you use the site.</strong> There is no telemetry, no analytics, no crash reporting, no check for updates. The server listens on this machine only and answers nothing but its own page.</li>
-      </ul>
-      <h2>Writing into the vault</h2>
-      <p>No agent writes into the vault on its own. When you close a topic or a thread you may ask for a note; the agent proposes the text and the place, you see exactly what would be written and where, and it is written only after you confirm. Discarding leaves the vault untouched. The enrich command works the same way: it proposes, and writes only when you say so.</p>
-      <h2>What the gateway does</h2>
-      <p>Once a prompt reaches the company gateway, what happens to it is governed by your company's agreement with that provider, not by this program. This program keeps no copy of a prompt beyond the topic or thread on this machine.</p>
+    <div class="privacy-grid">
+      <section class="privacy-card">
+        <h2><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg> What leaves this machine</h2>
+        <p>One thing: the prompt each agent builds, sent to your company's AI gateway and answered by the model named in Options. A prompt holds what that agent needs to answer:</p>
+        <ul>
+          <li>the question or the topic you typed, and your answers to the clarifying questions;</li>
+          <li>the sections of your vault the agent selected for that question, and one-line summaries of further pages;</li>
+          <li>the role profiles and the conduct note of the swim lanes being asked, and their KPI notes;</li>
+          <li>the earlier questions and answers of the same topic or thread, so a follow-up makes sense.</li>
+        </ul>
+        <p class="muted">You can read the whole of it before it goes: the confirm screen lists every section that would be sent, with its size, and you can add or leave out any of them.</p>
+      </section>
+      <section class="privacy-card">
+        <h2><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> What never leaves it</h2>
+        <ul>
+          <li><strong>The vault.</strong> It stays a folder on your disk. Only the sections an agent selected for one question travel, never the whole vault, and never a page nobody asked about.</li>
+          <li><strong>Your work.</strong> Topics and threads are files next to this program's configuration. They are not in the vault and they are not sent anywhere.</li>
+          <li><strong>The audit trail.</strong> One line per model call, with the counts and the durations, never the text.</li>
+          <li><strong>Anything about how you use the site.</strong> No telemetry, no analytics, no crash reporting, no check for updates. The server listens on this machine only and answers nothing but its own page.</li>
+        </ul>
+      </section>
+      <section class="privacy-card">
+        <h2><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg> Writing into the vault</h2>
+        <p>No agent writes into the vault on its own. When you close a topic or a thread you may ask for a note; the agent proposes the text and the place, you see exactly what would be written and where, and it is written only after you confirm.</p>
+        <p>Discarding leaves the vault untouched. The enrich command works the same way: it proposes, and writes only when you say so.</p>
+      </section>
+      <section class="privacy-card">
+        <h2><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg> What the gateway does</h2>
+        <p>Once a prompt reaches the company gateway, what happens to it is governed by your company's agreement with that provider, not by this program.</p>
+        <p>This program keeps no copy of a prompt beyond the topic or thread on this machine.</p>
+      </section>
     </div>
   </section>
 
@@ -257,12 +271,17 @@
   <section id="screen-confirm" class="screen" hidden>
     <h2>This is what the board will be asked</h2>
     <p class="muted">Edit anything that is wrong. The members you tick answer this, and only this.</p>
+    <div class="split-2">
+      <div class="col">
     <form id="confirm-form" class="stack">
       <label>Topic<input id="in-topic" type="text"></label>
       <label>Context<textarea id="in-context" rows="8"></textarea></label>
       <label>Options under consideration <span class="muted small">one per line</span><textarea id="in-options" rows="4"></textarea></label>
       <label>Hard constraints <span class="muted small">one per line</span><textarea id="in-constraints" rows="3"></textarea></label>
     </form>
+      </div>
+      <aside class="col col-side">
+
     <p class="eyebrow">How the board is asked <button type="button" class="info-btn" id="btn-mode-info" title="What is the difference?" aria-label="What is the difference?">i</button></p>
     <div class="select-wrap">
       <select id="run-mode" class="select-modern">
@@ -290,6 +309,8 @@
     </div>
     <div id="selection-info" class="small info-text" hidden><strong>AI assisted</strong> (recommended)<br>The model reads a list of candidate sections with their summaries and picks, per member, what that member needs, with a reason you can read.<br><span class="muted">Pro: picks by meaning, knows synonyms, improves as the vault grows.<br>Con: one extra call per question, about the size of one member call; the model can pick wrongly, so the picks are shown below before the board runs.<br>Cost: one call more.</span>
 <br><br><strong>Python only</strong><br>The program ranks sections by how often the question's words and the member's own words appear, plus the page properties (lead, affected swim lanes, phase).<br><span class="muted">Pro: free, instant, the same result every time.<br>Con: literal; misses pages that say the same thing in other words; weaker as the vault grows.<br>Cost: none.</span></div>
+      </aside>
+    </div>
     <p id="pick-status" class="muted small"></p>
     <p id="pick-banner" class="banner small" hidden></p>
     <p id="estimate" class="estimate muted small">Estimating…</p>
@@ -393,6 +414,7 @@
   <!-- Done -->
   <section id="screen-done" class="screen" hidden>
     <div class="card centered">
+      <span class="state-mark good" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg></span>
       <h2 id="done-title">Topic closed</h2>
       <p id="done-detail" class="muted"></p>
       <button id="btn-new" type="button" class="primary">New topic</button>
@@ -402,6 +424,7 @@
   <!-- Error -->
   <section id="screen-error" class="screen" hidden>
     <div class="card centered">
+      <span class="state-mark bad" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg></span>
       <h2>The board could not continue</h2>
       <p id="error-detail" class="error"></p>
       <div class="row">
@@ -474,7 +497,15 @@
   <div class="modal-card wide">
     <h2>Options</h2>
     <form id="options-form" class="stack">
-      <fieldset>
+      <div class="pane">
+        <div class="pane-nav" id="options-nav" role="tablist">
+          <button type="button" role="tab" data-pane="opt-knowledge" aria-selected="true">Knowledge</button>
+          <button type="button" role="tab" data-pane="opt-roles-pane" aria-selected="false">Board members</button>
+          <button type="button" role="tab" data-pane="opt-model" aria-selected="false">Model</button>
+          <button type="button" role="tab" data-pane="opt-runtime" aria-selected="false">Runtime &amp; theme</button>
+        </div>
+        <div class="pane-body stack" id="options-panes">
+      <fieldset id="opt-knowledge">
         <legend>Knowledge source</legend>
         <label>Obsidian vault folder
           <div class="row">
@@ -485,7 +516,7 @@
         <p id="opt-vault-status" class="small muted"></p>
         <label>Token budget for notes per model call<input id="opt-budget" type="number" min="500" step="500"></label>
       </fieldset>
-      <fieldset>
+      <fieldset id="opt-roles-pane" hidden>
         <legend>Board members</legend>
         <label>Roles folder <span class="muted small">one folder; one file per member or one file with several; blank finds a Roles… or R&amp;R folder inside the vault</span>
           <div class="row">
@@ -496,7 +527,7 @@
         <p id="opt-roles-status" class="small muted"></p>
         <button id="btn-install-roles" type="button" class="ghost" hidden>Add the conduct note and the profile template to that folder</button>
       </fieldset>
-      <fieldset>
+      <fieldset id="opt-model" hidden>
         <legend>Model</legend>
         <label>OpenCode configuration file <span class="muted small">opencode.json with the company provider; blank uses OpenCode's own lookup</span>
           <div class="row">
@@ -508,13 +539,15 @@
         <label>Token limit per call <span class="muted small">observed, never enforced; blank for none</span><input id="opt-limit" type="number" min="0"></label>
         <label class="check"><input id="opt-auto" type="checkbox"> Auto-approve OpenCode runs (passed only if your OpenCode version has the --auto flag)</label>
       </fieldset>
-      <fieldset>
-        <legend>Runtime</legend>
+      <fieldset id="opt-runtime" hidden>
+        <legend>Runtime &amp; theme</legend>
         <label>Audit folder<input id="opt-audit" type="text"></label>
         <label>Theme
           <select id="opt-theme"><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select>
         </label>
       </fieldset>
+        </div>
+      </div>
       <p id="opt-path" class="muted small"></p>
       <p id="options-error" class="error small" hidden></p>
       <div class="row end">
