@@ -11,8 +11,6 @@
 
   let askPicks = { extra: [], exclude: [] };
 
-  let askOutlineCache = null;
-
   let askEstimateTimer = null;
 
   let askEstimateSeq = 0;
@@ -68,7 +66,7 @@
       store.del("ask-question");
       $("ask-question").value = "";
       PM.setPath(`/ask/${thread.id}`);
-      askPicks = { extra: [], exclude: [] }; askOutlineCache = null;
+      askPicks = { extra: [], exclude: [] };
       renderThread();
     } catch (err) { setError("ask-error", err.message); }
     $("btn-ask-new").disabled = false;
@@ -77,7 +75,7 @@
   async function openThread(id) {
     try {
       thread = await api("GET", `/api/ask/${id}`);
-      askPicks = { extra: thread.extra || [], exclude: thread.exclude || [] }; askOutlineCache = null;
+      askPicks = { extra: thread.extra || [], exclude: thread.exclude || [] };
       $("thread-question").value = store.get(`thread-draft:${id}`) || "";
       renderThread();
     } catch (err) { setError("ask-error", err.message); PM.navigate("/ask"); }
@@ -184,11 +182,12 @@
     if (picks) {
       $("thread-picks-question").textContent = thread.pending_question;
       const parts = [];
-      if (thread.picks) parts.push(`The model chose ${thread.picks.full.length} item(s) from the table of contents; its reasons are beside them.`);
-      else parts.push(`The model's choice did not come back usable${thread.pick_error ? ` (${thread.pick_error})` : ""}: the word ranking chose instead.`);
+      if (thread.whole_vault) parts.push(`The whole vault fits in one read: all ${thread.page_count} page(s) are read unless you untick one.`);
+      else if (thread.picks) parts.push(`The vault is larger than one read (the ceiling). The model ranked ${thread.picks.full.length} item(s) first; the rest follows in the vault's order and the ceiling cuts at the end.`);
+      else parts.push(`The vault is larger than one read, and the model's ranking did not come back usable${thread.pick_error ? ` (${thread.pick_error})` : ""}: the word ranking leads instead.`);
       if (thread.pick_dropped) parts.push(`${thread.pick_dropped} pick(s) named nothing in the vault and were dropped.`);
-      parts.push("Pages are read whole; the answer is checked and more pages are read until nothing is missing.");
-      const keptCount = (thread.kept || []).length, droppedKept = Object.keys(thread.dropped_kept || {}).length;
+      if (!thread.whole_vault) parts.push("After the answer a check looks for pages left unread and swaps them in, once.");
+      const keptCount = thread.whole_vault ? 0 : (thread.kept || []).length, droppedKept = Object.keys(thread.dropped_kept || {}).length;
       if (keptCount) parts.push(`${keptCount} page(s) read earlier in this thread are kept.`);
       if (droppedKept) parts.push(`The model let ${droppedKept} kept page(s) go.`);
       if (thread.contents_trimmed) parts.push("The table of contents was trimmed to fit; a page may be missing.");
@@ -241,70 +240,49 @@
 
   let lastEstimate = null;    // what the last estimate said, for the count of the "not chosen" group
 
-  // Spec 5.5, decision 6: two groups, chosen by the model and not chosen,
-  // whole pages; a third, beyond the ceiling, only when the ceiling cuts.
+  // Spec 5.6: every page of the vault, ticked, whole; a page beyond the
+  // ceiling only when the vault does not fit, where a tick moves it to the front.
   function renderAskSections(e) {
     lastEstimate = e;
+    const filter = ($("ask-outline-filter").value || "").toLowerCase();
+    const hit = (path, reason) => !filter || path.toLowerCase().includes(filter) || (reason || "").toLowerCase().includes(filter);
     const row = (s) => `
-      <li><input type="checkbox" data-id="${esc(s.path)}" ${askPicks.exclude.includes(s.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(s.path)}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.kept ? ' <span class="kept-tag" title="Read for an earlier question of this thread">kept</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
+      <li ${hit(s.path, s.reason) ? "" : "hidden"}><input type="checkbox" data-id="${esc(s.path)}" ${askPicks.exclude.includes(s.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(s.path)}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.kept ? ' <span class="kept-tag" title="Read for an earlier question of this thread">kept</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
     const beyondRow = (o) => `
-      <li class="over">${esc(o.path)}${o.kept ? ' <span class="kept-tag">kept</span>' : ""} <span class="over-tag">beyond the ceiling</span><span class="tok">${fmtNum(o.tokens || 0)}</span>${o.reason ? `<span class="reason">${esc(o.reason)}</span>` : ""}</li>`;
+      <li class="over" ${hit(o.path, o.reason) ? "" : "hidden"}><input type="checkbox" data-id="${esc(o.path)}" data-beyond="1" ${askPicks.extra.includes(o.path) ? "checked" : ""} title="Tick to read this page first; another falls out at the ceiling"> ${esc(o.path)}${o.kept ? ' <span class="kept-tag">kept</span>' : ""} <span class="over-tag">beyond the ceiling</span><span class="tok">${fmtNum(o.tokens || 0)}</span>${o.reason ? `<span class="reason">${esc(o.reason)}</span>` : ""}</li>`;
     const group = (key, title, count, extra, body) => `<details class="group" data-group="${key}" ${openGroups.has(key) ? "open" : ""}><summary><span class="group-title">${title}</span> <span class="count">${count}</span>${extra ? ` <span class="muted small">${extra}</span>` : ""}</summary>${body}</details>`;
     const pages = e.pages || [];
     const n = (k) => `${k} page${k === 1 ? "" : "s"}`;
-    const who = e.picked_by === "model" ? "Chosen by the model" : "By the word ranking";
-    let html = group("chosen", who, n(pages.length), `${fmtNum(e.knowledge_tokens)} tokens, whole pages · KPI notes ${fmtNum(e.kpi_tokens)} tokens on top`,
+    const who = e.whole_vault ? "Read for this question" : e.picked_by === "model" ? "Ranked by the model, within the ceiling" : "By the word ranking, within the ceiling";
+    let html = group("chosen", who, n(pages.length), `${e.whole_vault ? "the whole vault · " : ""}${fmtNum(e.knowledge_tokens)} tokens, whole pages · KPI notes ${fmtNum(e.kpi_tokens)} tokens on top`,
       pages.length ? `<ul class="sec-list">${pages.map(row).join("")}</ul>` : "<p class='muted small'>Nothing from the vault.</p>");
-    const droppedKept = (thread && thread.dropped_kept) || {};
+    const droppedKept = (thread && !thread.whole_vault && thread.dropped_kept) || {};
     if (Object.keys(droppedKept).length) {
-      html += group("kept", "Let go by the model", n(Object.keys(droppedKept).length), "read for an earlier question, not for this one",
+      html += group("kept", "Let go by the model", n(Object.keys(droppedKept).length), "read for an earlier question; ranked last for this one",
         `<ul class="sec-list">${Object.keys(droppedKept).map((p) => `<li class="muted">${esc(p)}${droppedKept[p] ? `<span class="reason">${esc(droppedKept[p])}</span>` : ""}</li>`).join("")}</ul>`);
     }
     if ((e.beyond || []).length) {
-      html += group("beyond", "Beyond the ceiling", n(e.beyond.length), `one read may hold ${fmtNum(e.ceiling)} tokens; these did not fit and are not read`,
+      html += group("beyond", "Beyond the ceiling", n(e.beyond.length), `one read may hold ${fmtNum(e.ceiling)} tokens; these did not fit. Tick one to read it first`,
         `<ul class="sec-list">${e.beyond.map(beyondRow).join("")}</ul>`);
     }
     $("ask-estimate-notes").innerHTML = html;
     $("ask-estimate-notes").querySelectorAll("details.group").forEach((d) => d.addEventListener("toggle", () => {
       if (d.open) openGroups.add(d.dataset.group); else openGroups.delete(d.dataset.group);
     }));
-    renderNotChosenCount();
     $("ask-estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
       const id = box.dataset.id;
-      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
-      if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
+      if (box.dataset.beyond) {
+        askPicks.extra = askPicks.extra.filter((x) => x !== id);
+        if (box.checked) askPicks.extra.push(id);
+      } else {
+        askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
+        if (!box.checked) { askPicks.exclude.push(id); askPicks.extra = askPicks.extra.filter((x) => x !== id); }
+      }
       requestAskEstimate();
     }));
   }
 
   const openGroups = new Set();     // which of the folded groups Alex has opened, kept across estimates
-
-  function renderNotChosenCount() {
-    if (!askOutlineCache) return;
-    const e = lastEstimate || {};
-    const shown = new Set([...(e.pages || []).map((s) => s.path), ...(e.beyond || []).map((o) => o.path)]);
-    const rest = askOutlineCache.filter((n) => !shown.has(n.path)).length;
-    $("ask-not-chosen-count").textContent = `${rest} page${rest === 1 ? "" : "s"}`;
-  }
-
-  function renderAskOutline() {
-    renderNotChosenCount();
-    const filter = ($("ask-outline-filter").value || "").toLowerCase();
-    const e = lastEstimate || {};
-    const shown = new Set([...(e.pages || []).map((s) => s.path), ...(e.beyond || []).map((o) => o.path)]);
-    // Whole pages (spec 5.5, decision 2): one tick per page adds it to the read.
-    const rows = (askOutlineCache || []).filter((note) => !shown.has(note.path))
-      .filter((note) => !filter || note.path.toLowerCase().includes(filter) || (note.summary || "").toLowerCase().includes(filter) || note.sections.some((s) => (s.heading || "").toLowerCase().includes(filter)))
-      .map((note) => `<label class="page-row"><input type="checkbox" data-id="${esc(note.path)}" ${askPicks.extra.includes(note.path) ? "checked" : ""}> ${esc(note.path)}<span class="tok">${fmtNum(note.sections.reduce((a, s) => a + (s.tokens || 0), 0))}</span>${note.summary ? `<span class="reason">${esc(note.summary)}</span>` : ""}</label>`).join("");
-    $("ask-outline").innerHTML = rows || "<span class='muted small'>Nothing matches.</span>";
-    $("ask-outline").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
-      const id = box.dataset.id;
-      askPicks.extra = askPicks.extra.filter((x) => x !== id);
-      askPicks.exclude = askPicks.exclude.filter((x) => x !== id);
-      if (box.checked) askPicks.extra.push(id);
-      requestAskEstimate();
-    }));
-  }
 
   function requestAskEstimate() {
     if (askEstimateTimer) clearTimeout(askEstimateTimer);
@@ -314,15 +292,14 @@
       try {
         const e = await api("POST", `/api/ask/${thread.id}/estimate`, {
           question: inPicks() ? thread.pending_question : $("thread-question").value,
-          extra: askPicks.extra, exclude: askPicks.exclude, outline: !askOutlineCache,
+          extra: askPicks.extra, exclude: askPicks.exclude,
         });
         if (seq !== askEstimateSeq) return;
         const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} learned from ${e.overhead_learned_from} real call(s) of this thread` : `overhead of ${fmtNum(e.overhead_per_call)} assumed until the first real call`;
-        const who = e.picked_by === "model" ? "the model's choice" : "the word ranking";
-        $("ask-estimate").innerHTML = `<strong>${inPicks() ? "2 more model calls per round" : "1 choosing call, then 2 calls per round"}</strong>, up to ${e.max_reads} rounds; the first read about <strong>${fmtNum(e.tokens_in)} tokens in</strong> (${fmtNum(e.knowledge_tokens)} of pages, ${fmtNum(e.contents_tokens)} of the table of contents) · pages by ${who} · ${esc(learned)} · tokens are an estimate`;
+        const who = e.whole_vault ? "the whole vault" : e.picked_by === "model" ? "the model's ranking" : "the word ranking";
+        const calls = e.whole_vault ? "1 model call" : (inPicks() ? "2 more model calls per round" : "1 ranking call, then 2 calls per round") + `, up to ${e.max_reads} rounds`;
+        $("ask-estimate").innerHTML = `<strong>${calls}</strong>, the read about <strong>${fmtNum(e.tokens_in)} tokens in</strong> (${fmtNum(e.knowledge_tokens)} of pages${e.contents_tokens ? `, ${fmtNum(e.contents_tokens)} of the table of contents` : ""}) · pages by ${who} · ${esc(learned)} · tokens are an estimate`;
         renderAskSections(e);
-        if (e.outline) { askOutlineCache = e.outline; renderAskOutline(); }
-        else renderAskOutline();
       } catch (err) {
         if (seq === askEstimateSeq) $("ask-estimate").textContent = `No estimate: ${err.message}`;
       }
@@ -344,7 +321,7 @@
 
   $("btn-ask-info").addEventListener("click", () => { $("ask-info").hidden = !$("ask-info").hidden; });
 
-  $("ask-outline-filter").addEventListener("input", renderAskOutline);
+  $("ask-outline-filter").addEventListener("input", () => { if (lastEstimate) renderAskSections(lastEstimate); });
 
   $("btn-thread-stop").addEventListener("click", stopThread);
 

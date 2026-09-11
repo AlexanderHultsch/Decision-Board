@@ -36,7 +36,7 @@ MARKER = "## Question to the vault"       # the line the statistics recognise an
 DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: kept on the record; no read is capped by it since spec 5.5
 MAX_ANSWER_CHARS = 8000
 MAX_MISSING = 40                          # pages the model may ask for in one answer (spec 5.4, decision 7; 5.5)
-MAX_READS = 4                             # ``ask.max_reads``: answer rounds per question (spec 5.5, decision 4)
+MAX_READS = 2                             # ``ask.max_reads``: answer rounds per question on a partial read (spec 5.5, decision 4; 5.6, decision 4)
 
 
 @dataclass

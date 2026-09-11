@@ -397,6 +397,33 @@ earlier answer and the checker's note), the server (the loop in `_ask`,
 the `checking` phase, the rounds on the turn), the thread page (no
 slider, two groups, the rounds in the fold) and the walk.
 
+### 5.6 Read the whole vault
+
+**Decided 11 September 2026, after the first real run of 5.5.** The
+question "which VPDS tasks are owned by [a named person]" got three lookup
+pages from the chooser (the project page, the process overview, the org
+chart) and none of the task pages, because the chooser did not yet know
+the person's role. The checker then added four or five pages per round
+and four rounds were not enough. The model reads timidly, and no prompt
+makes it bold reliably. The vault is small: its table of contents is
+12,580 tokens, its pages fit in one read. So the choice goes.
+
+| # | Decision |
+|---|---|
+| 1 | **Every question reads the whole vault** - every page of the chosen project(s), the role pages included, whole - when the whole fits the ceiling `ask.max_read_tokens`. No choosing call, no checker, one answer call. The model cannot miss a page it has in front of it. |
+| 2 | **The picks screen stays, inverted.** A question goes to it at once, without a call: every page ticked, "Read for this question · N pages, the whole vault". Alex unticks what he wants left out, or reads. The rest of the machinery of 5.3 to 5.5 - the chooser, the kept pages, the checker loop - runs only when the vault does not fit. |
+| 3 | **When the vault outgrows the ceiling, the model ranks.** One call: the chooser of 5.3 is told that the vault is larger than one read and names every page that might bear on the question, most important first. The read order is then Alex's own ticks, the model's list, the kept pages, and the rest of the vault in its own order; Python reads from the top until the ceiling and lists the rest as beyond the ceiling, where a tick moves a page to the front. Python cuts at the ceiling and interprets nothing else. |
+| 4 | **The checker runs only when a page was left unread by the ceiling**, and it swaps: the pages it names go to the front of the order and the lowest-ranked pages fall out at the ceiling. `ask.max_reads` defaults to 2 rounds now; four rounds of four pages each were the problem, not the answer. |
+| 5 | **The answer call carries the table of contents and the pages read earlier only when the read is partial.** When every page is read, both are noise. |
+| 6 | **The steps follow the path**: your picks, reading N notes, writing the answer; the choosing and checking steps appear only on the partial path. The statistics count one call per question on the whole-vault path. |
+| 7 | **The ceiling is a guess** (120,000) until the gateway model's context limit is known. If the vault is over it, the ranking path runs and the picks screen says so; then the ceiling should be raised to what the model can take, not the vault trimmed. |
+
+**Built 11 September 2026** in the server (`ask_question` decides the
+path from the packer's own answer, `_ask_pages` builds the order, the
+checker runs only on a partial read), `picker.choose_prompt` (the ranking
+paragraph), the thread page (every page ticked, a filter over the list,
+beyond-the-ceiling rows tickable) and the walk.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that

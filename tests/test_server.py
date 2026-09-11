@@ -831,10 +831,11 @@ class TestAskThreads(unittest.TestCase):
         self.assertEqual([s["path"] for s in turn["sources"]], ["Tooling.md"])   # the invented one is dropped
         self.assertEqual(turn["dropped"], 1)
         self.assertEqual(turn["gaps"], ["the new date"])
-        self.assertEqual(turn["paths"], ["Tooling.md"])
-        self.assertEqual([c["step"] for c in state["stats"]["calls"]], ["knowledge pick", "ask the vault", "answer check"])   # 5.3: choose, read; 5.5: check
-        self.assertEqual(state["llm_calls"], 3)
+        self.assertIn("Tooling.md", turn["paths"])                       # 5.6: the whole vault, role pages included
+        self.assertEqual([c["step"] for c in state["stats"]["calls"]], ["ask the vault"])   # 5.6: the whole vault, one call
+        self.assertEqual(state["llm_calls"], 1)
         self.assertEqual(len(turn["rounds"]), 1)
+        self.assertEqual(turn["chosen_by"], "vault")
         prompt = [p for p in self.provider.prompts[first_prompt:] if "## Question to the vault" in p][0]
         self.assertIn("Tooling is late.", prompt)
         self.assertNotIn("## Earlier in this thread", prompt)
@@ -849,11 +850,38 @@ class TestAskThreads(unittest.TestCase):
         self.assertEqual((row["questions"], row["title"]), (2, "Is the tooling late?"))
         # The estimate: the pages the first read would take, whole.
         _, est = self.call("POST", f"/api/ask/{created['id']}/estimate", {"question": "x"})
-        self.assertEqual(est["calls"], 2)
+        self.assertEqual(est["calls"], 1)
         self.assertEqual(est["per_call"][0]["label"], "ask the vault")
         self.assertIn("Tooling.md", [s["path"] for s in est["pages"]])
         self.assertGreater(est["tokens_in"], 0)
-        self.assertEqual(est["max_reads"], 4)
+        self.assertEqual(est["max_reads"], 2)
+        self.assertTrue(est["whole_vault"])
+
+    def test_the_whole_vault_is_read_when_it_fits_and_a_page_can_be_unticked(self):
+        first_prompt = len(self.provider.prompts)
+        _, created = self.call("POST", "/api/ask", {})
+        tid = created["id"]
+        status, state = self.call("POST", f"/api/ask/{tid}/question", {"question": "Is the tooling late?"})
+        self.assertEqual((status, state["phase"], state["busy"], state["whole_vault"]), (200, "picks", False, True))   # no call, straight to the picks screen
+        self.assertGreater(state["page_count"], 1)
+        self.assertEqual([s["key"] for s in state["steps"]], ["picks", "read1", "ask1"])   # no choosing, no check
+        _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"]})
+        self.assertEqual(est["picked_by"], "vault")
+        self.assertEqual(len(est["pages"]), state["page_count"])
+        self.assertEqual(est["beyond"], [])
+        role_page = next(s["path"] for s in est["pages"] if s["path"].startswith("Roles"))
+        _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"], "exclude": [role_page]})
+        self.assertNotIn(role_page, [s["path"] for s in est["pages"]])
+        self.call("POST", f"/api/ask/{tid}/read", {"exclude": [role_page]})
+        state = self._wait(tid)
+        turn = state["turns"][0]
+        self.assertEqual(len(turn["paths"]), est["pages"].__len__())
+        self.assertNotIn(role_page, turn["paths"])
+        self.assertIn("Tooling.md", turn["paths"])
+        self.assertEqual([c["step"] for c in state["stats"]["calls"]], ["ask the vault"])
+        prompt = [p for p in self.provider.prompts[first_prompt:] if "## Question to the vault" in p][-1]
+        self.assertNotIn("## Table of contents", prompt)                   # 5.6, decision 5: noise when everything is read
+        self.assertNotIn("## Pages read earlier", prompt)
 
     def test_a_busy_thread_refuses_a_second_question(self):
         self.provider.delay = 0.6
@@ -861,7 +889,12 @@ class TestAskThreads(unittest.TestCase):
             _, created = self.call("POST", "/api/ask", {})
             self.call("POST", f"/api/ask/{created['id']}/question", {"question": "One?"})
             status, body = self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Two?"})
-            self.assertEqual(status, 409)
+            self.assertEqual(status, 409)                                  # a choice waits on the picks screen (5.6: at once, no call)
+            self.assertIn("picks screen", body["error"])
+            status, _ = self.call("POST", f"/api/ask/{created['id']}/read", {})
+            self.assertEqual(status, 200)
+            status, body = self.call("POST", f"/api/ask/{created['id']}/question", {"question": "Two?"})
+            self.assertEqual(status, 409)                                  # now the read runs
             self.assertIn("Wait", body["error"])
             status, _ = self.call("POST", f"/api/ask/{created['id']}/close", {"remember": False})
             self.assertEqual(status, 409)
@@ -1372,8 +1405,8 @@ class TestFreshKnowledge(unittest.TestCase):
         asked = self.prompts_with("## Question to the vault")
         self.assertIn("housing tooling at supplier X is late", asked[0])
         self.assertIn("project managers are Ana Adler", asked[1])
-        self.assertIn("Tooling.md", state["turns"][0]["new_pages"])
-        self.assertIn("People.md", state["turns"][1]["new_pages"])
+        self.assertIn("Tooling.md", state["turns"][0]["paths"])
+        self.assertIn("People.md", state["turns"][1]["paths"])           # 5.6: the whole vault, again
 
     def wait_for_thread(self, thread_id, timeout=10):
         deadline = time.monotonic() + timeout
@@ -1420,9 +1453,15 @@ class TestChoosing(unittest.TestCase):
             "---\nkind: process\nlead_swimlane: HW Engineering\n---\n# EMC\n\nThe hardware lead books the EMC chamber.\n", encoding="utf-8")
         (self.vault / "Tasks" / "Budget review.md").write_text(
             "---\nkind: process\nlead_swimlane: Finance\n---\n# Budget review\n\nFinance reviews the budget.\n", encoding="utf-8")
+        # Two long manuals (spec 5.6): the vault does not fit the ceiling, so the model ranks and the checker runs.
+        (self.vault / "Tasks" / "Manual A.md").write_text(
+            "---\nkind: guide\n---\n# Manual A\n\n" + "Alpha manual line. " * 400 + "\n", encoding="utf-8")
+        (self.vault / "Tasks" / "Manual B.md").write_text(
+            "---\nkind: guide\n---\n# Manual B\n\n" + "Bravo manual line. " * 400 + "\n", encoding="utf-8")
         self.config_path = Path(self.tmp.name) / "config.local.json"
         self.config = {"provider": {"models": {"board": "fake/m"}},
                        "knowledge": {"vault_path": str(self.vault), "roles_folder": str(self.vault / "Roles"), "token_budget": 3000},
+                       "ask": {"max_read_tokens": 2400},
                        "server": {"history_folder": str(Path(self.tmp.name) / "history")}}
         self.config_path.write_text(json.dumps(self.config), encoding="utf-8")
         self.provider = RoutingFakeProvider()
@@ -1479,28 +1518,35 @@ class TestChoosing(unittest.TestCase):
         self.assertEqual(state["pick_dropped"], 1)                     # Nowhere.md
         self.assertGreater(state["contents_tokens"], 0)
         # The estimate shows the choice with its reasons, and a follow-up question would be refused.
-        _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"], "budget": 3000})
+        self.assertFalse(state["whole_vault"])
+        _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"]})
         self.assertEqual(est["picked_by"], "model")
-        self.assertEqual([s["path"] for s in est["pages"]], ["Roles/HW Engineering.md", "Tasks/DV testing.md", "Tasks/EMC.md"])
+        paths = [s["path"] for s in est["pages"]]
+        self.assertEqual(paths[:3], ["Roles/HW Engineering.md", "Tasks/DV testing.md", "Tasks/EMC.md"])   # the ranking leads
+        self.assertIn("Tasks/Budget review.md", paths)                     # 5.6: then the rest of the vault, up to the ceiling
+        self.assertEqual([o["path"] for o in est["beyond"]], ["Tasks/Manual B.md"])   # what the ceiling cut
         self.assertEqual(est["pages"][0]["reason"], "names the holder of the role")
-        self.assertNotIn("Tasks/Budget review.md", [s["path"] for s in est["pages"]])   # not topped up (decision 4)
+        ranking = [p for p in self.provider.prompts if "## Candidate sections" in p][-1]
+        self.assertIn("## The vault is larger than one read", ranking)
         status, _ = self.call("POST", f"/api/ask/{tid}/question", {"question": "Another?"})
         self.assertEqual(status, 409)
-        # Read: the answer call carries the role page and both of that role's tasks, not Finance's.
-        status, state = self.call("POST", f"/api/ask/{tid}/read", {"budget": 3000})
+        # Read: the answer call carries the role page, both of that role's tasks and the rest that fits.
+        status, state = self.call("POST", f"/api/ask/{tid}/read", {})
         self.assertEqual(status, 200)
         state = self.until(tid, lambda s: s["phase"] == "idle" and not s["busy"])
         prompt = [p for p in self.provider.prompts if "## Question to the vault" in p][-1]
         self.assertIn("aliases: [Cleder Gomes]", prompt)
         self.assertIn("The hardware lead runs DV testing.", prompt)
         self.assertIn("books the EMC chamber", prompt)
-        self.assertNotIn("Finance reviews the budget", prompt)
+        self.assertIn("Finance reviews the budget", prompt)
+        self.assertNotIn("Bravo manual line", prompt)
         turn = state["turns"][0]
         self.assertEqual(turn["chosen_by"], "model")
+        self.assertEqual(turn["left"], ["Tasks/Manual B.md"])
         self.assertEqual(turn["pick_reasons"]["Roles/HW Engineering.md"], "names the holder of the role")
         self.assertEqual([c["step"] for c in state["stats"]["calls"]], ["knowledge pick", "ask the vault", "answer check"])
-        self.assertIn("## Table of contents of the vault", prompt)      # 5.5, decision 3
-        self.assertIn("- page: Tasks/Budget review.md", prompt)
+        self.assertIn("## Table of contents of the vault", prompt)      # 5.5, decision 3: only on a partial read
+        self.assertIn("- page: Tasks/Manual B.md", prompt)
 
     def test_the_ceiling_is_the_only_cap_and_what_it_cuts_is_listed(self):
         self.provider.pick_answer = json.dumps({"members": [{"member": "Ask the vault",
@@ -1515,7 +1561,7 @@ class TestChoosing(unittest.TestCase):
             sent = [s["path"] for s in est["pages"]]
             self.assertLess(len(sent), 3)                                  # the ceiling cut the choice
             beyond = [o["path"] for o in est["beyond"]]
-            self.assertEqual(sorted(sent + beyond), ["Tasks/Budget review.md", "Tasks/DV testing.md", "Tasks/EMC.md"])
+            self.assertEqual(len(sent + beyond), 7)                        # every page of the vault is in the order
             self.assertEqual(est["ceiling"], 90)
             self.call("POST", f"/api/ask/{tid}/read", {})
             state = self.until(tid, lambda s: s["phase"] == "idle" and not s["busy"])
@@ -1541,9 +1587,11 @@ class TestChoosing(unittest.TestCase):
         self.assertIn("members", state["pick_error"])
         _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"]})
         self.assertEqual(est["picked_by"], "python")
-        self.assertIn("Tasks/EMC.md", [s["path"] for s in est["pages"]])   # the word ranking still finds it
+        self.assertEqual([s["path"] for s in est["pages"]][0], "Tasks/EMC.md")   # the word ranking still puts it first
 
-    # -- spec 5.4 and 5.5: follow-ups, sticky pages and the loop -------------
+    # -- spec 5.4 to 5.6: follow-ups, kept pages and the loop on a partial read --
+
+    SMALL = ["Org chart.md", "Roles/HW Engineering.md", "Tasks/Budget review.md", "Tasks/DV testing.md", "Tasks/EMC.md"]
 
     def _first_turn(self, tid, pick):
         self.provider.pick_answer = json.dumps({"members": [{"member": "Ask the vault", "read": pick, "reasons": {}}]})
@@ -1557,7 +1605,7 @@ class TestChoosing(unittest.TestCase):
         _, created = self.call("POST", "/api/ask", {})
         tid = created["id"]
         state = self._first_turn(tid, ["Roles/HW Engineering.md", "Tasks/DV testing.md", "Tasks/EMC.md"])
-        self.assertEqual(state["turns"][0]["paths"], ["Roles/HW Engineering.md", "Tasks/DV testing.md", "Tasks/EMC.md"])
+        self.assertEqual(state["turns"][0]["paths"], self.SMALL + ["Tasks/Manual A.md"])   # the ranking, then the rest; Manual B beyond
         self.assertEqual(state["turns"][0]["kept"], [])
         # The follow-up: the chooser drops the role page and names one task first.
         self.provider.pick_answer = json.dumps({"members": [{"member": "Ask the vault", "read": ["Tasks/EMC.md"], "reasons": {"Tasks/EMC.md": "named again"},
@@ -1569,23 +1617,23 @@ class TestChoosing(unittest.TestCase):
         self.assertIn("x" * 900, choosing)                                     # 5.4, decision 1: no 600-character cut
         self.assertIn("## Pages already read in this thread\n\n", choosing)
         self.assertIn("- Tasks/DV testing.md", choosing)
-        self.assertEqual(state["kept"], ["Tasks/DV testing.md", "Tasks/EMC.md"])   # 5.4, decision 2: kept unless dropped
+        self.assertEqual(state["kept"], [p for p in self.SMALL if p != "Roles/HW Engineering.md"] + ["Tasks/Manual A.md"])   # 5.4: kept unless dropped
         self.assertEqual(state["dropped_kept"], {"Roles/HW Engineering.md": "the role is settled"})
         _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"]})
+        paths = [s["path"] for s in est["pages"]]
         rows = {s["path"]: s for s in est["pages"]}
-        self.assertEqual([s["path"] for s in est["pages"]], ["Tasks/EMC.md", "Tasks/DV testing.md"])   # chosen first, then kept
+        self.assertEqual(paths[0], "Tasks/EMC.md")                               # chosen first
+        self.assertEqual(paths[1:5], ["Org chart.md", "Tasks/Budget review.md", "Tasks/DV testing.md", "Tasks/Manual A.md"])   # then the kept ones
+        self.assertEqual(paths[5], "Roles/HW Engineering.md")                    # the dropped one is read last, as it still fits
         self.assertFalse(rows["Tasks/EMC.md"]["kept"])
         self.assertTrue(rows["Tasks/DV testing.md"]["kept"])
-        self.assertEqual(est["kept"], ["Tasks/DV testing.md", "Tasks/EMC.md"])
-        self.assertNotIn("Roles/HW Engineering.md", rows)
+        self.assertEqual([o["path"] for o in est["beyond"]], ["Tasks/Manual B.md"])
         self.call("POST", f"/api/ask/{tid}/read", {})
         state = self.until(tid, lambda s: s["phase"] == "idle" and not s["busy"])
         prompt = [p for p in self.provider.prompts if "## Question to the vault" in p][-1]
-        self.assertIn("## Pages read earlier in this thread\n\n- Roles/HW Engineering.md\n- Tasks/DV testing.md\n- Tasks/EMC.md", prompt)
+        self.assertIn("## Pages read earlier in this thread\n\n- Org chart.md\n- Roles/HW Engineering.md\n", prompt)
         self.assertIn("The hardware lead runs DV testing.", prompt)             # the kept page is read again
-        self.assertNotIn("Hardware lead.", prompt.split("## Table of contents", 1)[0])   # the dropped one is not
-        self.assertEqual(state["turns"][1]["kept"], ["Tasks/DV testing.md"])
-        self.assertEqual(state["turns"][1]["paths"], ["Tasks/DV testing.md", "Tasks/EMC.md"])
+        self.assertEqual(state["turns"][1]["kept"], [p for p in self.SMALL if p != "Roles/HW Engineering.md" and p != "Tasks/EMC.md"] + ["Tasks/Manual A.md"])
 
     def test_a_failed_choice_keeps_every_earlier_page(self):
         _, created = self.call("POST", "/api/ask", {})
@@ -1594,87 +1642,69 @@ class TestChoosing(unittest.TestCase):
         self.provider.pick_answer = "{}"
         self.call("POST", f"/api/ask/{tid}/question", {"question": "And the budget review?"})
         state = self.until(tid, lambda s: s["phase"] == "picks")
-        self.assertEqual(state["kept"], ["Tasks/EMC.md"])
+        self.assertEqual(state["kept"], self.SMALL + ["Tasks/Manual A.md"])
         _, est = self.call("POST", f"/api/ask/{tid}/estimate", {"question": state["pending_question"]})
         paths = [s["path"] for s in est["pages"]]
-        self.assertIn("Tasks/EMC.md", paths)                                    # the kept page is read
-        self.assertIn("Tasks/Budget review.md", paths)                          # and the word ranking stands in for the choice
+        self.assertEqual(paths[0], "Tasks/Budget review.md")                    # the word ranking stands in for the choice
+        self.assertIn("Tasks/EMC.md", paths)
         self.assertEqual(est["picked_by"], "python")
 
-    def test_the_check_names_pages_and_the_loop_reads_them_until_nothing_is_missing(self):
-        first = json.dumps({"answer": "Two tasks, wording not sent.", "sources": [{"path": "Roles/HW Engineering.md", "heading": "", "why": "the role"}],
-                            "gaps": ["the exact wording"], "decision_question": False, "missing": ["Tasks/DV testing.md", "Roles/HW Engineering.md"]})
-        later = json.dumps({"answer": "DV testing: the hardware lead runs it. EMC: books the chamber.",
-                            "sources": [{"path": "Tasks/DV testing.md", "heading": "", "why": "wording"}, {"path": "Tasks/EMC.md", "heading": "", "why": "wording"},
-                                        {"path": "Roles/HW Engineering.md", "heading": "", "why": "the role"}],
+    def test_the_check_swaps_in_a_page_the_ceiling_left_out_and_stops_when_content(self):
+        first = json.dumps({"answer": "Alpha only.", "sources": [{"path": "Tasks/Manual A.md", "heading": "", "why": "alpha"}],
+                            "gaps": ["bravo"], "decision_question": False, "missing": ["Roles/HW Engineering.md"]})
+        later = json.dumps({"answer": "Alpha and bravo.", "sources": [{"path": "Tasks/Manual B.md", "heading": "", "why": "bravo"},
+                                                                      {"path": "Roles/HW Engineering.md", "heading": "", "why": "the role"}],
                             "gaps": [], "decision_question": False, "missing": []})
         self.provider.ask_answer, self.provider.second_answer = first, later
         self.provider.check_answers = [
-            json.dumps({"complete": False, "read": [{"kind": "process", "lead": "HW Engineering", "why": "every task of that role"}, "Roles/HW Engineering.md", "Nowhere.md"],
-                        "reasons": {"Tasks/EMC.md": "the EMC task was not read"}, "note": "One of the two tasks was not read."}),
+            json.dumps({"complete": False, "read": ["Tasks/Manual B.md", "Roles/HW Engineering.md", "Nowhere.md"],
+                        "reasons": {"Tasks/Manual B.md": "the bravo manual was not read"}, "note": "Manual B was left unread."}),
             json.dumps({"complete": True, "read": [], "note": "The pages read cover the question."}),
         ]
         _, created = self.call("POST", "/api/ask", {})
         tid = created["id"]
         state = self._first_turn(tid, ["Roles/HW Engineering.md"])
         turn = state["turns"][0]
-        self.assertEqual(turn["answer"], "DV testing: the hardware lead runs it. EMC: books the chamber.")
+        self.assertEqual(turn["answer"], "Alpha and bravo.")
         self.assertEqual(len(turn["rounds"]), 2)
-        self.assertEqual(turn["rounds"][0]["answer"], "Two tasks, wording not sent.")
-        self.assertEqual(turn["rounds"][0]["check"]["wanted"], ["Tasks/DV testing.md", "Tasks/EMC.md"])   # the answer's missing and the check's rule, resolved
-        self.assertEqual(turn["rounds"][0]["check"]["reasons"], {"Tasks/EMC.md": "the EMC task was not read", "Tasks/DV testing.md": "every task of that role"})
-        self.assertEqual(turn["rounds"][0]["check"]["note"], "One of the two tasks was not read.")
-        self.assertEqual(turn["rounds"][0]["check"]["dropped"], 1)              # Nowhere.md; the role page already read is simply not named again
-        self.assertEqual(turn["rounds"][1]["read"], ["Tasks/DV testing.md", "Tasks/EMC.md"])
+        self.assertEqual(turn["rounds"][0]["answer"], "Alpha only.")
+        self.assertEqual(turn["rounds"][0]["check"]["wanted"], ["Tasks/Manual B.md"])   # the role page was read; Nowhere dropped
+        self.assertEqual(turn["rounds"][0]["check"]["dropped"], 1)
+        self.assertEqual(turn["rounds"][0]["check"]["note"], "Manual B was left unread.")
+        self.assertEqual(turn["rounds"][1]["read"], ["Tasks/Manual B.md"])            # 5.6, decision 4: swapped in ...
+        self.assertEqual(turn["left"], ["Tasks/Manual A.md"])                          # ... and the lowest-ranked fell out
         self.assertTrue(turn["rounds"][1]["check"]["complete"])
-        self.assertEqual(turn["paths"], ["Roles/HW Engineering.md", "Tasks/DV testing.md", "Tasks/EMC.md"])
-        self.assertEqual([s["path"] for s in turn["sources"]], ["Tasks/DV testing.md", "Tasks/EMC.md", "Roles/HW Engineering.md"])
+        self.assertIn("Tasks/Manual B.md", turn["paths"])
+        self.assertEqual([s["path"] for s in turn["sources"]], ["Tasks/Manual B.md", "Roles/HW Engineering.md"])
         self.assertFalse(turn["cap_hit"])
         self.assertEqual([c["step"] for c in state["stats"]["calls"]],
                          ["knowledge pick", "ask the vault", "answer check", "ask the vault", "answer check"])
         prompts = [p for p in self.provider.prompts if "## Question to the vault" in p]
-        self.assertIn("## Your answer so far (round 1)\n\nTwo tasks, wording not sent.", prompts[-1])
-        self.assertIn("What the check said: One of the two tasks was not read.", prompts[-1])
-        self.assertIn("This is round 2", prompts[-1])
-        self.assertIn("books the EMC chamber", prompts[-1])
-        self.assertIn("Hardware lead.", prompts[-1])                            # everything read so far, not only the new pages
+        self.assertIn("## Your answer so far (round 1)\n\nAlpha only.", prompts[-1])
+        self.assertIn("What the check said: Manual B was left unread.", prompts[-1])
+        self.assertIn("Bravo manual line", prompts[-1])
+        self.assertNotIn("Alpha manual line", prompts[-1].split("## Table of contents", 1)[0])
         check = [p for p in self.provider.prompts if "## Answer to check" in p][0]
-        self.assertIn("## Pages read\n\n- Roles/HW Engineering.md\n", check)
-        self.assertIn("- page: Tasks/EMC.md", check)
+        self.assertIn("## Pages read\n\n- Org chart.md\n", check)
+        self.assertIn("- page: Tasks/Manual B.md", check)
 
     def test_the_loop_stops_at_the_round_cap_and_says_what_was_still_wanted(self):
-        self.provider.check_answers = [json.dumps({"complete": False, "read": ["Tasks/EMC.md"], "note": "wants EMC"})] * 6
-        self.board_server.config.setdefault("ask", {})["max_reads"] = 2
-        try:
-            _, created = self.call("POST", "/api/ask", {})
-            tid = created["id"]
-            state = self._first_turn(tid, ["Roles/HW Engineering.md"])
-        finally:
-            self.board_server.config["ask"].pop("max_reads", None)
-            self.provider.check_answers = []
+        self.provider.check_answers = [json.dumps({"complete": False, "read": ["Tasks/Manual B.md"], "note": "wants B"}),
+                                       json.dumps({"complete": False, "read": ["Tasks/Manual A.md"], "note": "wants A"})]
+        _, created = self.call("POST", "/api/ask", {})
+        tid = created["id"]
+        state = self._first_turn(tid, ["Roles/HW Engineering.md"])
         turn = state["turns"][0]
-        self.assertEqual(len(turn["rounds"]), 2)
-        self.assertEqual(turn["rounds"][1]["read"], ["Tasks/EMC.md"])
-        # Round two's check asks for EMC again, which is read: nothing new is wanted, and the loop is at its cap anyway.
-        self.assertEqual(turn["rounds"][1]["check"]["wanted"], [])
-        self.assertFalse(turn["cap_hit"])
-        self.assertEqual([c["step"] for c in state["stats"]["calls"]][-4:], ["ask the vault", "answer check", "ask the vault", "answer check"])
-
-    def test_a_check_that_wants_a_new_page_at_the_cap_is_recorded_as_still_wanted(self):
-        self.provider.check_answers = [json.dumps({"complete": False, "read": ["Tasks/EMC.md"], "note": "wants EMC"}),
-                                       json.dumps({"complete": False, "read": ["Tasks/DV testing.md"], "note": "wants DV"})]
-        self.board_server.config.setdefault("ask", {})["max_reads"] = 2
-        try:
-            _, created = self.call("POST", "/api/ask", {})
-            tid = created["id"]
-            state = self._first_turn(tid, ["Roles/HW Engineering.md"])
-        finally:
-            self.board_server.config["ask"].pop("max_reads", None)
-            self.provider.check_answers = []
-        turn = state["turns"][0]
+        self.assertEqual(len(turn["rounds"]), 2)                                       # ask.max_reads defaults to 2
         self.assertTrue(turn["cap_hit"])
-        self.assertEqual(turn["still_wanted"], ["Tasks/DV testing.md"])
-        self.assertEqual(len(turn["rounds"]), 2)
+        self.assertEqual(turn["still_wanted"], ["Tasks/Manual A.md"])
+        self.assertEqual([c["step"] for c in state["stats"]["calls"]][-4:], ["ask the vault", "answer check", "ask the vault", "answer check"])
+        # The next question keeps Manual B (read in round 2 of the first turn); a check that wants it has nothing to swap.
+        self.provider.check_answers = [json.dumps({"complete": False, "read": ["Tasks/Manual B.md"], "note": "wants B, which is kept"})]
+        state = self._first_turn(tid, ["Tasks/EMC.md"])
+        self.assertIn("Tasks/Manual B.md", state["turns"][1]["kept"])
+        self.assertEqual(state["turns"][1]["rounds"][0]["check"]["wanted"], [])         # already read: nothing to swap
+        self.assertEqual(len(state["turns"][1]["rounds"]), 1)
 
     def test_a_check_that_does_not_parse_ends_the_loop_with_the_answer_as_it_stands(self):
         self.provider.check_answers = ["not json"]
@@ -1698,5 +1728,5 @@ class TestChoosing(unittest.TestCase):
         self.call("POST", f"/api/ask/{tid}/read", {})
         state = self.until(tid, lambda s: s["phase"] == "idle" and not s["busy"])
         self.assertEqual(state["steps"], [])
-        self.assertEqual(state["turns"][0]["rounds"][0]["read"], ["Tasks/DV testing.md"])
+        self.assertEqual(state["turns"][0]["rounds"][0]["read"][0], "Tasks/DV testing.md")
 

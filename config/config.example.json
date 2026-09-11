@@ -37,10 +37,10 @@
   },
 
   "ask": {
-    "_comment": "Ask the vault (spec section 10): one agent answering any question from the vault. Since section 5.5 a read has no budget: the model chooses whole pages, the answer is checked and read again until nothing is missing. max_read_tokens is the ceiling of one read (the pages sent in one call), so a call cannot fail at the model's context limit; set it to what the gateway model can take. max_reads is how many answer rounds one question may take before it stops and says so. token_budget is kept on the record of older threads and caps nothing.",
+    "_comment": "Ask the vault (spec section 10): one agent answering any question from the vault. Since section 5.6 every question reads the whole vault, every page whole, in one call, as long as it fits max_read_tokens (the ceiling of one read; set it to what the gateway model can take, so a call cannot fail at its context limit). Only when the vault outgrows the ceiling does the model rank the pages first and a check after the answer swap in pages left unread, up to max_reads rounds. token_budget is kept on the record of older threads and caps nothing.",
     "token_budget": 12000,
     "max_read_tokens": 120000,
-    "max_reads": 4
+    "max_reads": 2
   },
 
   "ui": {

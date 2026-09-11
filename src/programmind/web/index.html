@@ -159,14 +159,11 @@
         <p id="thread-picks-status" class="muted small"></p>
       </div>
       <p class="eyebrow">Knowledge for this question <button type="button" class="info-btn" id="btn-ask-info" title="How the pages are chosen and read" aria-label="How the pages are chosen and read">i</button></p>
-      <div id="ask-info" class="small info-text" hidden><strong>No budget.</strong> The model chooses pages from the vault's table of contents; you see the choice before anything is read; the pages are read whole. After every answer a separate check looks for pages that should also have been read, and the answer is written again with them, up to a few rounds. Only a ceiling per read stands, so a call cannot fail at the model's limit.<br><span class="muted">A page read once in this thread is kept for its later questions unless the model or you let it go. The shared core (project page, gate definitions, the abbreviations the question uses) and the KPI notes come with every read.</span></div>
+      <div id="ask-info" class="small info-text" hidden><strong>The whole vault, whole pages.</strong> Every page of the project is read for every question, as long as the whole fits one read (the ceiling). You see the list before anything is read and may untick a page. One model call.<br><span class="muted">Only when the vault outgrows the ceiling does the model rank the pages first, the read fills from the top, and a check after the answer swaps in pages left unread, once. The shared core and the KPI notes come with every read.</span></div>
       <p id="ask-estimate" class="estimate muted small">Estimating…</p>
       <details id="ask-estimate-detail" class="estimate-detail"><summary class="muted small">What the agent would receive, and what to add or leave out</summary>
+        <input id="ask-outline-filter" type="text" class="outline-filter" placeholder="Filter pages…">
         <div id="ask-estimate-notes"></div>
-        <details class="group" data-group="rest"><summary><span class="group-title">Not chosen</span> <span class="count" id="ask-not-chosen-count"></span> <span class="muted small">the rest of the vault; tick a page to read it too</span></summary>
-          <input id="ask-outline-filter" type="text" class="outline-filter" placeholder="Filter pages…">
-          <div id="ask-outline" class="outline"></div>
-        </details>
       </details>
       <div class="row between">
         <button id="btn-thread-close" type="button" class="ghost">Close thread</button>

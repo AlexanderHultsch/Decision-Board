@@ -35,9 +35,9 @@ class Slow(AiProvider):
             text = json.dumps({"complete": not wanted, "read": wanted, "reasons": {p: "the EMC booking lead time bears on the freeze" for p in wanted},
                                "note": "The lessons page holds the EMC booking lead time." if wanted else "The pages read cover the question."})
         elif "## Question to the vault" in prompt:
-            time.sleep(1.0)
+            time.sleep(2.5)                       # long enough for the page to show the steps of the read
             later = "## Earlier in this thread" in prompt
-            again = "## Your answer so far" in prompt
+            again = "Lessons learned.md" in prompt          # the whole vault is read (spec 5.6): the lessons page is there
             text = json.dumps({"answer": ("**Design freeze** is the milestone before the DV build.\n\n- The housing tooling at supplier X is six weeks late, so the freeze is at risk." + ("\n- Lessons learned: book the EMC chamber twelve weeks ahead of DV, or the freeze is followed by a test gap." if again else "\n- In general, not from the vault: a freeze slips when a supplier tool is not qualified.")) if not later else "The Program Lead approves it, with the swim lane project managers.\n\n- Nothing in the vault names a date for this project.",
                                "sources": [{"path": "Suppliers/Housing tooling.md", "heading": "", "why": "the tooling delay"}, {"path": "Projects/Dual DCDC.md", "heading": "", "why": "the project page"}, {"path": "Invented/Page.md", "heading": "", "why": "made up"}]
                                           + ([{"path": "Lessons learned.md", "heading": "EMC chamber booking", "why": "the booking lead time"}] if again else []),

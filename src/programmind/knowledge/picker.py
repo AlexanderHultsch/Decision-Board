@@ -136,7 +136,8 @@ def pick(provider: AiProvider, question: str, members: dict[str, str],
 # -- spec 5.3: the model chooses from the whole table of contents ------------
 
 def choose_prompt(question: str, members: dict[str, str], pages: list[dict[str, Any]], *, trimmed: bool = False,
-                  history: list[tuple[str, str]] | None = None, read_before: list[str] | None = None) -> str:
+                  history: list[tuple[str, str]] | None = None, read_before: list[str] | None = None,
+                  overflow: bool = False) -> str:
     """``members`` maps a member's name to one line on what it judges; the
     empty name is Ask the vault's one agent. ``pages`` is
     ``knowledge.contents(...)["pages"]``. ``read_before`` are the pages the
@@ -144,6 +145,13 @@ def choose_prompt(question: str, members: dict[str, str], pages: list[dict[str, 
     unless the chooser drops them."""
     from programmind.knowledge.knowledge import contents_lines
     lines = [load_prompt("knowledge_choose"), "", "## Question", "", question.strip(), ""]
+    if overflow:
+        # Spec 5.6, decision 3: the vault is larger than one read, so the choice is a ranking.
+        lines += ["## The vault is larger than one read", "",
+                  "The program reads pages from the top of your list until the read is full, then the rest of the "
+                  "vault in its own order, and cuts at the ceiling. So name every page that might bear on the question, "
+                  "most important first - the pages you are surest of at the top, the ones that only might at the end. "
+                  "A page you leave out is read last, if at all.", ""]
     if history:
         lines += ["## Earlier in this thread", ""] + history_lines(history) + [""]
     if read_before:
@@ -243,12 +251,12 @@ def parse_choice(text: str, members: dict[str, str], pages: list[dict[str, Any]]
 
 def choose(provider: AiProvider, question: str, members: dict[str, str], pages: list[dict[str, Any]], *,
            trimmed: bool = False, history: list[tuple[str, str]] | None = None,
-           read_before: list[str] | None = None) -> PickResult:
+           read_before: list[str] | None = None, overflow: bool = False) -> PickResult:
     """The one choosing call (5.3). A bad answer never raises: the result
     says why the word ranking stays in force. A provider failure raises,
     as every other call's does."""
     ai_result = provider.complete(TASK_BOARD, choose_prompt(question, members, pages, trimmed=trimmed, history=history,
-                                                            read_before=read_before))
+                                                            read_before=read_before, overflow=overflow))
     result = parse_choice(ai_result.text, members, pages)
     result.ai_result = ai_result
     return result
