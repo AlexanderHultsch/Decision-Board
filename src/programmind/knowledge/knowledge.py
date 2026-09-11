@@ -1036,27 +1036,60 @@ def gather_for_members(
     return result
 
 
-def gather_pages(config: dict, paths: list[str], *, token_budget: int, projects=None,
-                 include_roles: bool = True) -> KnowledgeSelection:
-    """The block of the second pass (spec 5.4, decision 8): the named pages,
-    whole, in the order given, packed into ``token_budget`` - no core, no
-    ranking, no one-line tier. A page that does not fit whole stays out
-    and is listed in ``left``; a name that is not a page of the vault is
-    ignored here (the caller resolved the names). No source configured:
-    an empty selection."""
+MAX_READ_TOKENS = 120000      # ``ask.max_read_tokens``: the ceiling of one read of Ask the vault (spec 5.5, decision 1)
+
+
+def page_of(key: str) -> str:
+    """The page a pick stands for: a section id ``path#heading`` reads its
+    whole page (spec 5.5, decision 2)."""
+    return str(key).split("#", 1)[0]
+
+
+def gather_whole(config: dict, question: str, paths: list[str], *, ceiling: int | None = None, projects=None,
+                 exclude: list[str] | tuple[str, ...] = (), include_roles: bool = True) -> KnowledgeSelection:
+    """The block of Ask the vault (spec 5.5): the shared core, then the
+    named pages, whole, in the order given, within ``ceiling`` - no
+    ranking, no one-line tier, no budget. A page that does not fit whole
+    stays out and is listed in ``left``; a name that is not a page of the
+    vault is ignored here (the caller resolved the names); a page in
+    ``exclude`` is never sent. No source configured: an empty selection."""
     vault, chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
     selection = KnowledgeSelection(vault_path=vault, total_notes=len(notes), picked_by="model")
     if vault is None:
         return selection
+    limit = int(ceiling or _config_value(config, "ask.max_read_tokens") or MAX_READ_TOKENS)
     selection.project = ", ".join(chosen) if chosen else None
-    by_path = {note.relative: note for note in notes}
-    remaining = token_budget - estimate_tokens("## Knowledge from the vault\n\n")
-    parts: list[str] = []
-    for path in paths:
-        note = by_path.get(path)
-        if note is None:
+    banned = {page_of(x) for x in exclude}
+    prepared = _Prepared.of(notes)
+    core = [sec for sec in core_sections(prepared, notes, chosen, question_phases(question), question, core_skip_headings(config))
+            if sec.relative not in banned]
+    remaining = limit - estimate_tokens("## Knowledge from the vault\n\n")
+    core_parts: list[str] = []
+    for sec in core:
+        chunk = f"{_label(sec)}\n{sec.body}\n\n"
+        cost = estimate_tokens(chunk)
+        if cost > remaining:
             continue
-        sections = split_sections(note)
+        remaining -= cost
+        core_parts.append(chunk)
+        selection.sections.append(sec)
+        selection.core_ids.add(section_id(sec))
+        if sec.note not in selection.notes and sec.index < _ABBREV_INDEX:
+            selection.notes.append(sec.note)
+        selection.sent[sec.relative] = selection.sent.get(sec.relative, "") + sec.body + "\n"
+    core_pages = {sec.relative for sec in core if sec.index < _ABBREV_INDEX and section_id(sec) in selection.core_ids}
+    by_path = {note.relative: note for note in notes}
+    parts: list[str] = []
+    seen: set[str] = set()
+    for key in paths:
+        path = page_of(key)
+        note = by_path.get(path)
+        if note is None or path in seen or path in banned:
+            continue
+        seen.add(path)
+        sections = [sec for sec in split_sections(note) if section_id(sec) not in selection.core_ids]
+        if path in core_pages and not sections:
+            continue                                    # the core already carries the whole page
         chunks = [f"{_label(sec)}\n{sec.body}\n\n" for sec in sections]
         cost = estimate_tokens("".join(chunks))
         if cost > remaining:
@@ -1064,14 +1097,19 @@ def gather_pages(config: dict, paths: list[str], *, token_budget: int, projects=
             continue
         remaining -= cost
         parts.append("".join(chunks))
-        selection.notes.append(note)
+        if note not in selection.notes:
+            selection.notes.append(note)
         selection.sections.extend(sections)
-        selection.sent[path] = "".join(sec.body + "\n" for sec in sections)
-    if parts:
-        selection.own_text = "## Pages read for the second pass\n\n" + "".join(parts).rstrip()
-        selection.text = "## Knowledge from the vault\n\n" + selection.own_text
-        selection.own_tokens = estimate_tokens(selection.own_text)
-        selection.tokens = estimate_tokens(selection.text)
+        selection.sent[path] = selection.sent.get(path, "") + "".join(sec.body + "\n" for sec in sections)
+    core_body = "".join(core_parts).rstrip()
+    own_body = "".join(parts).rstrip()
+    selection.core_text = ("## Knowledge from the vault, the shared core\n\n" + core_body) if core_body else ""
+    selection.own_text = ("## Pages read for this question\n\n" + own_body) if own_body else ""
+    blocks = [b for b in (selection.core_text, selection.own_text) if b]
+    selection.text = ("## Knowledge from the vault\n\n" + "\n\n".join(blocks)) if blocks else ""
+    selection.core_tokens = estimate_tokens(selection.core_text)
+    selection.own_tokens = estimate_tokens(selection.own_text)
+    selection.tokens = estimate_tokens(selection.text)
     return selection
 
 

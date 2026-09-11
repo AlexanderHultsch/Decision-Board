@@ -104,10 +104,10 @@ def _call_label(prompt: str, phase: str) -> tuple[str, str]:
     """What a model call was for, read from the markers each prompt builder
     puts in (the same markers the tests route on): a step name and, for a
     member call, the member. Deterministic, no model involved."""
+    if picker.MARKER_CHECK in prompt:
+        return ("answer check", "")                    # spec 5.5, decision 10
     if picker.MARKER in prompt:
         return ("knowledge pick", "")
-    if ask_mod.MARKER_SECOND in prompt:
-        return ("ask the vault, second pass", "")     # spec 5.4, decision 11
     if ask_mod.MARKER in prompt:
         return ("ask the vault", "")
     if "## Question from Alex" in prompt:
@@ -506,7 +506,7 @@ class AskSession:
         self.lock = threading.RLock()
         self.cancelled = threading.Event()
         self.active_threads: set[int] = set()
-        self.phase = "idle"                 # idle, choosing, picks, asking, reading_more, proposing, proposal, written
+        self.phase = "idle"                 # idle, choosing, picks, asking, checking, reading_more, proposing, proposal, written
         self.busy = False
         self.error: str | None = None
         self.pending_question: str | None = None
@@ -517,12 +517,13 @@ class AskSession:
         self.contents_tokens = 0
         self.contents_trimmed = False
         self.page_tokens: dict[str, int] = {}       # page path or section id -> size, from the table of contents
+        self.table: dict[str, Any] | None = None    # the table of contents of the question (spec 5.5: the checker and the answer see it)
         # Spec 5.4, decision 2: the pages the thread has read that stay with it for this question.
         self.kept: list[str] = []
         self.dropped_kept: dict[str, str] = {}      # pages the chooser let go, with its reason
-        # Spec 5.4, decision 9: the steps, with real numbers.
-        self.read_count = 0                         # pages sent in full for the question
-        self.more_count = 0                         # pages the second pass read
+        # Spec 5.5: the loop's rounds; the steps carry them with real numbers.
+        self.round = 0                              # the answer round running, 1-based
+        self.read_counts: list[int] = []            # pages read per round, 0 while a round's read is not done
         self.proposal: memory_writer.MemoryProposal | None = None
         self.marks: list[dict[str, Any]] = []
         self.started = time.time()
@@ -558,24 +559,30 @@ class AskSession:
         self.busy, self.phase, self.pending_question = False, "idle", None
         self.picks, self.pick_error = None, None
         self.kept, self.dropped_kept = [], {}
-        self.read_count = self.more_count = 0
+        self.round, self.read_counts = 0, []
 
     def steps(self) -> list[dict[str, str]]:
         """The steps of the running question and which one it is on (spec
-        5.4, decision 9). Reading is Python's step and is over the moment
-        the call starts, so "writing" is the one that waits. Empty when
-        nothing runs. Under the lock."""
+        5.4, decision 9; 5.5, decision 7: the rounds). Reading is Python's
+        step and is over the moment the call starts, so "writing" is the
+        one that waits. Empty when nothing runs. Under the lock."""
         phase = self.phase
-        if phase not in ("choosing", "picks", "asking", "reading_more"):
+        if phase not in ("choosing", "picks", "asking", "checking", "reading_more"):
             return []
-        read = f"Reading {self.read_count} note{'s' if self.read_count != 1 else ''}" if self.read_count else "Reading the notes"
-        rows = [("choosing", "Looking through the table of contents"), ("picks", "Your picks"),
-                ("reading", read), ("asking", "Writing the answer")]
-        if phase == "reading_more":
-            rows += [("more", f"Reading {self.more_count} more note{'s' if self.more_count != 1 else ''} it asked for"),
-                     ("second", "Writing the final answer")]
-        current = {"choosing": "choosing", "picks": "picks", "asking": "asking" if self.read_count else "reading",
-                   "reading_more": "second"}[phase]
+        rows = [("choosing", "Looking through the table of contents"), ("picks", "Your picks")]
+        rounds = max(self.round, 1)
+        for r in range(1, rounds + 1):
+            n = self.read_counts[r - 1] if len(self.read_counts) >= r else 0
+            notes = f"{n} note{'s' if n != 1 else ''}"
+            if r == 1:
+                rows += [("read1", f"Reading {notes}" if n else "Reading the notes"), ("ask1", "Writing the answer"),
+                         ("check1", "Checking the answer")]
+            else:
+                rows += [(f"read{r}", f"Reading {notes} more" if n else "Reading more notes"),
+                         (f"ask{r}", "Writing the answer again"), (f"check{r}", "Checking again")]
+        current = {"choosing": "choosing", "picks": "picks",
+                   "asking": f"read{rounds}" if not (self.read_counts and self.read_counts[-1]) else f"ask{rounds}",
+                   "checking": f"check{rounds}", "reading_more": f"read{rounds}"}[phase]
         keys = [key for key, _label in rows]
         at = keys.index(current)
         return [{"key": key, "label": label, "state": "done" if i < at else "current" if i == at else "todo"}
@@ -596,6 +603,7 @@ class AskSession:
                 "picks": deepcopy(self.picks), "pick_error": self.pick_error, "pick_dropped": self.pick_dropped,
                 "contents_tokens": self.contents_tokens, "contents_trimmed": self.contents_trimmed,
                 "kept": list(self.kept), "dropped_kept": dict(self.dropped_kept), "steps": self.steps(),
+                "round": self.round,
                 "projects": list(thread.projects), "budget": thread.budget,
                 "extra": list(thread.extra), "exclude": list(thread.exclude),
                 "turns": deepcopy(thread.turns),
@@ -661,6 +669,7 @@ class BoardServer:
             "repository": REPOSITORY,
             "spec": SPEC_FILE.is_file(),
             "ask_budget": int(_get(self.config, "ask.token_budget", ask_mod.DEFAULT_TOKEN_BUDGET) or ask_mod.DEFAULT_TOKEN_BUDGET),
+            "ask_ceiling": self._ceiling(), "ask_max_reads": self._max_reads(),
             "vault_name": self.vault_name(),
             "knowledge_status": status,
             "roles_folder": _get(self.config, "knowledge.roles_folder", "") or "",
@@ -1766,79 +1775,92 @@ class BoardServer:
         except OSError as exc:
             session.error = f"The thread could not be saved: {exc}"
 
-    def _ask_selection(self, session: AskSession, question: str, budget: int,
-                       extra: list[str] | None = None, exclude: list[str] | None = None):
-        """The agent's knowledge: the board's ranking for one nameless
-        member, the shared core included, within ``budget``."""
-        thread = session.thread
-        query = _ranking_query(question, [t["question"] for t in thread.turns[-2:]])
-        with session.lock:
-            picks = self._picks_with_kept(session)
-        selections = knowledge_mod.gather_for_members(
-            self.config, query, {"": []}, token_budget=max(budget, 1), projects=thread.projects,
-            extra=list(extra if extra is not None else thread.extra),
-            exclude=list(exclude if exclude is not None else thread.exclude),
-            picks=picks, include_roles=True)
-        return selections[""]
+    def _ceiling(self) -> int:
+        return int(_get(self.config, "ask.max_read_tokens") or knowledge_mod.MAX_READ_TOKENS)
 
-    @staticmethod
-    def _picks_with_kept(session: AskSession) -> dict[str, dict[str, Any]] | None:
-        """The model's choice with the thread's kept pages queued behind it
-        (spec 5.4, decision 2). A failed choice leaves the word ranking in
-        force, the kept pages leading its queue. Under the session's lock."""
-        chosen = list((session.picks or {}).get("full") or [])
-        reasons = dict((session.picks or {}).get("reasons") or {})
-        kept = [path for path in session.kept if path not in chosen]
-        if not chosen and not kept:
-            return None
-        return {"": {"full": chosen + kept, "brief": [], "reasons": reasons, "exclusive": bool(session.picks)}}
+    def _max_reads(self) -> int:
+        return max(1, int(_get(self.config, "ask.max_reads") or ask_mod.MAX_READS))
+
+    def _table(self, session: AskSession, question: str) -> dict[str, Any]:
+        """The table of contents of this question, made once in the choosing
+        call and reused by the answer and the check (spec 5.5)."""
+        with session.lock:
+            table = session.table
+        if table is None:
+            table = knowledge_mod.contents(self.config, session.thread.projects, question=question)
+            with session.lock:
+                session.table = table
+        return table
+
+    def _ask_pages(self, session: AskSession, question: str, extra: list[str] | None = None) -> tuple[list[str], dict[str, str]]:
+        """The pages a read starts from, in order (spec 5.5): the model's
+        choice as whole pages, the kept pages behind it, Alex's own picks
+        on top; with the reason for each. When the choice failed, the word
+        ranking's pages stand in for it (5.3, decision 5). Under the lock."""
+        thread = session.thread
+        chosen = [knowledge_mod.page_of(k) for k in ((session.picks or {}).get("full") or [])]
+        reasons = {knowledge_mod.page_of(k): why for k, why in ((session.picks or {}).get("reasons") or {}).items()}
+        if session.picks is None and _get(self.config, "knowledge.vault_path"):
+            query = _ranking_query(question, [t["question"] for t in thread.turns[-2:]])
+            ranked = knowledge_mod.gather_for_members(self.config, query, {"": []}, token_budget=self._ceiling() // 4,
+                                                      projects=thread.projects, include_roles=True)[""]
+            chosen = [note.relative for note in ranked.notes]
+        order: list[str] = []
+        for path in chosen + list(session.kept) + [knowledge_mod.page_of(x) for x in (extra if extra is not None else thread.extra)]:
+            if path not in order:
+                order.append(path)
+        return order, reasons
 
     def ask_estimate(self, session: AskSession, body: dict[str, Any]) -> dict[str, Any]:
-        """One call: the prompt with the thread so far, the question, the
-        KPI notes and the knowledge block; plus the section list."""
+        """The first read as it would go (spec 5.5): the pages, whole, with
+        the reason each; what the ceiling cuts; the size of the call."""
         thread = session.thread
         question = str(body.get("question") or "").strip() or "(the next question)"
-        budget = int(body.get("budget") if body.get("budget") not in (None, "") else thread.budget)
         extra = [str(x) for x in body.get("extra") or []] if "extra" in body else None
-        exclude = [str(x) for x in body.get("exclude") or []] if "exclude" in body else None
+        exclude = [str(x) for x in body.get("exclude") or []] if "exclude" in body else list(thread.exclude)
         if not _get(self.config, "knowledge.vault_path"):
-            sel = None
-            text, kpi_text = "", ""
+            sel, order, reasons = None, [], {}
+            text, kpi_text, contents_text = "", "", ""
         else:
             try:
-                sel = self._ask_selection(session, question, budget, extra, exclude)
+                with session.lock:
+                    order, reasons = self._ask_pages(session, question, extra)
+                    picked_by = "model" if session.picks else "python"
+                sel = knowledge_mod.gather_whole(self.config, question, order, ceiling=self._ceiling(),
+                                                 projects=thread.projects, exclude=exclude)
                 kpi_text = ask_mod.project_kpi_text(self.config, thread.projects)
+                table = self._table(session, question)
+                contents_text = "\n".join(knowledge_mod.contents_lines(table["pages"]))
             except knowledge_mod.KnowledgeUnavailable as exc:
                 raise ApiError(409, str(exc))
             text = sel.text
         prompt = ask_mod.ask_prompt(question, text, kpi_text, thread.history(), ", ".join(thread.projects),
-                                    read_before=self._read_before(thread))
+                                    read_before=self._read_before(thread), contents_text=contents_text)
         overhead, learned_from = session.overhead_per_call()
         tokens = knowledge_mod.estimate_tokens(prompt) + overhead
         with session.lock:
-            chosen = set((session.picks or {}).get("full") or [])
+            chosen = {knowledge_mod.page_of(k) for k in ((session.picks or {}).get("full") or [])}
             kept = list(session.kept)
-        over = self._over_budget(session, sel) if sel else []
-        # Spec 5.4, decision 3: the slider setting that would hold the whole choice, to the slider's step.
-        needed = (sel.tokens if sel else 0) + sum(o["tokens"] + 12 for o in over)
+            sizes = dict(session.page_tokens)
+        forced = {knowledge_mod.page_of(x) for x in (extra if extra is not None else thread.extra)}
+        pages = []
+        if sel:
+            for note in sel.notes:
+                path = note.relative
+                pages.append({"path": path, "tokens": knowledge_mod.estimate_tokens(sel.sent.get(path, "")),
+                              "core": path not in order or all(knowledge_mod.section_id(sec) in sel.core_ids for sec in sel.sections if sec.relative == path),
+                              "kept": path in kept and path not in chosen, "forced": path in forced,
+                              "reason": reasons.get(path, "")})
         return {
-            "calls": 1, "tokens_in": tokens, "per_call": [{"label": "ask the vault", "tokens": tokens}],
-            "overhead_per_call": overhead, "overhead_learned_from": learned_from, "budget": budget,
-            "knowledge_tokens": sel.tokens if sel else 0, "brief_tokens": sel.brief_tokens if sel else 0,
-            "kpi_tokens": knowledge_mod.estimate_tokens(kpi_text) if kpi_text else 0,
-            "briefs": [{"path": n.relative, "summary": n.summary} for n in sel.briefs] if sel else [],
-            "sections": [{"id": knowledge_mod.section_id(sec), "path": sec.relative, "heading": sec.heading,
-                          "tokens": knowledge_mod.estimate_tokens(sec.body),
-                          "forced": knowledge_mod.section_id(sec) in (extra or thread.extra) or sec.relative in (extra or thread.extra),
-                          "core": knowledge_mod.section_id(sec) in sel.core_ids,
-                          "kept": sec.relative in kept and knowledge_mod.section_id(sec) not in sel.core_ids
-                                  and knowledge_mod.section_id(sec) not in chosen and sec.relative not in chosen,
-                          "reason": sel.reasons.get(knowledge_mod.section_id(sec)) or sel.reasons.get(sec.relative, "")}
-                         for sec in sel.sections] if sel else [],
-            "forced_tokens": sel.forced_tokens if sel else 0,
-            "picked_by": "model" if (sel and session.picks) else "python",
-            "over_budget": over,
-            "budget_needed": (-(-needed // 500)) * 500 if over else 0,
+            "calls": 2, "tokens_in": tokens, "per_call": [{"label": "ask the vault", "tokens": tokens}, {"label": "answer check", "tokens": 0}],
+            "overhead_per_call": overhead, "overhead_learned_from": learned_from,
+            "ceiling": self._ceiling(), "max_reads": self._max_reads(),
+            "knowledge_tokens": sel.tokens if sel else 0, "kpi_tokens": knowledge_mod.estimate_tokens(kpi_text) if kpi_text else 0,
+            "contents_tokens": knowledge_mod.estimate_tokens(contents_text) if contents_text else 0,
+            "pages": pages,
+            "beyond": [{"path": path, "tokens": sizes.get(path, 0), "reason": reasons.get(path, ""), "kept": path in kept and path not in chosen}
+                       for path in (sel.left if sel else [])],
+            "picked_by": picked_by if sel else "python",
             "kept": kept,
             "outline": knowledge_mod.outline(self.config, thread.projects) if body.get("outline") else None,
         }
@@ -1853,26 +1875,6 @@ class BoardServer:
                 if path not in seen:
                     seen.append(path)
         return seen
-
-    @staticmethod
-    def _over_budget(session: AskSession, sel) -> list[dict[str, Any]]:
-        """What the model chose, or the thread kept, that did not fit the
-        slider (5.3, decision 4; 5.4, decision 3): listed with its size so
-        Alex sees it and can raise the budget or tick it."""
-        with session.lock:
-            picks = session.picks or {}
-            kept = list(session.kept)
-            sizes = dict(session.page_tokens)
-        sent_ids = {knowledge_mod.section_id(sec) for sec in sel.sections}
-        sent_paths = {sec.relative for sec in sel.sections}
-        out = []
-        chosen = list(picks.get("full") or [])
-        for key in chosen + [path for path in kept if path not in chosen]:
-            if key in sent_ids or key in sent_paths or any(o["id"] == key for o in out):
-                continue
-            out.append({"id": key, "reason": (picks.get("reasons") or {}).get(key, "") or ("kept from an earlier turn" if key in kept else ""),
-                        "tokens": sizes.get(key, 0), "kept": key not in chosen})
-        return out
 
     def ask_question(self, session: AskSession, body: dict[str, Any]) -> None:
         question = str(body.get("question") or "").strip()
@@ -1900,6 +1902,7 @@ class BoardServer:
             session.error = None
             session.pending_question = question
             session.pick_dropped = 0
+            session.table = None
             if _get(self.config, "knowledge.vault_path"):
                 session.phase = "choosing"                 # spec 5.3: the model chooses first
                 session.mark("choosing")
@@ -1926,6 +1929,7 @@ class BoardServer:
             with session.lock:
                 session.contents_tokens, session.contents_trimmed = table["tokens"], table["trimmed"]
                 session.page_tokens = sizes
+                session.table = table
             result = picker.choose(RecordingProvider(self.provider(), session), question,
                                    {"": "the one agent answering the question from the vault"},
                                    table["pages"], trimmed=table["trimmed"], history=thread.history(),
@@ -1978,48 +1982,80 @@ class BoardServer:
         self._spawn(session, self._ask, session, question)
 
     def _ask(self, session: AskSession, question: str) -> None:
-        """The answering call, and the second pass when the answer asks for
-        pages (spec 5.4, decisions 7 and 8): once, within a budget of its
-        own, the first answer standing for the first pages."""
+        """The answer, and the loop that secures it (spec 5.5, decision 4):
+        read whole pages, answer, check the answer against the table of
+        contents, read what the check and the answer asked for, answer
+        again - until the check names nothing new, the reads reach the cap,
+        or the ceiling has no room left."""
         thread = session.thread
         started = time.monotonic()
         provider = RecordingProvider(self.provider(), session)
         vault = bool(_get(self.config, "knowledge.vault_path"))
         read_before = self._read_before(thread)
-        first: ask_mod.Answer | None = None
-        missing: list[str] = []
-        missing_dropped = 0
-        more_pages: list[str] = []
-        more_left: list[str] = []
+        rounds: list[dict[str, Any]] = []
+        sent: dict[str, str] = {}
+        left: list[str] = []
+        still_wanted: list[str] = []
+        cap_hit = False
+        answer: ask_mod.Answer | None = None
+        check_note = ""
         try:
-            if vault:
-                sel = self._ask_selection(session, question, thread.budget)
-                kpi_text = ask_mod.project_kpi_text(self.config, thread.projects)
-                text, sent, briefs = sel.text, dict(sel.sent), dict(sel.brief_sent)
+            kpi_text = ask_mod.project_kpi_text(self.config, thread.projects) if vault else ""
+            table = self._table(session, question) if vault else {"pages": [], "trimmed": False}
+            contents_text = "\n".join(knowledge_mod.contents_lines(table["pages"])) if vault else ""
+            with session.lock:
+                order, _reasons = self._ask_pages(session, question) if vault else ([], {})
+            max_reads = self._max_reads()
+            for round_no in range(1, max_reads + 1):
+                if session.cancelled.is_set():
+                    break
+                added: list[str] = []
+                if vault:
+                    with session.lock:
+                        session.round = round_no
+                        session.read_counts.append(0)
+                        session.phase = "asking"
+                    sel = knowledge_mod.gather_whole(self.config, question, order, ceiling=self._ceiling(),
+                                                     projects=thread.projects, exclude=thread.exclude)
+                    added = [path for path in sel.sent if path not in sent]
+                    sent, left, text = dict(sel.sent), list(sel.left), sel.text
+                    with session.lock:
+                        session.read_counts[-1] = len(added) if round_no > 1 else len(sel.sent)
+                else:
+                    text = ""
+                    with session.lock:
+                        session.round = round_no
+                        session.read_counts.append(0)
+                        session.phase = "asking"
+                answer = ask_mod.ask(provider, question, text, kpi_text, thread.history(), sent, None,
+                                     ", ".join(thread.projects), read_before=read_before, contents_text=contents_text,
+                                     earlier=rounds[-1]["_answer"] if rounds else None, check_note=check_note, round_no=round_no)
+                record: dict[str, Any] = {"n": round_no, "read": added, "answer": answer.answer, "gaps": answer.gaps,
+                                          "sources": answer.sources, "_answer": answer}
+                if not vault or session.cancelled.is_set():
+                    rounds.append(record)
+                    break
                 with session.lock:
-                    session.read_count = len(sel.sent)
-            else:
-                text, kpi_text, sent, briefs = "", "", {}, {}
-            answer = ask_mod.ask(provider, question, text, kpi_text, thread.history(), sent, briefs,
-                                 ", ".join(thread.projects), read_before=read_before)
-            if vault and answer.missing and not session.cancelled.is_set():
-                found, missing_dropped = knowledge_mod.resolve_page_names(self.config, answer.missing, thread.projects)
-                missing = [path for path in found if path not in sent]
-                missing_dropped += len(found) - len(missing)      # already sent in full: not missing
-            if missing:
-                more = knowledge_mod.gather_pages(self.config, missing, token_budget=max(thread.budget, 1), projects=thread.projects)
-                more_pages, more_left = sorted(more.sent), list(more.left)
-                first = answer
+                    session.phase = "checking"
+                    session.mark("checking")
+                result = picker.check(provider, question, answer.answer, sorted(sent), table["pages"],
+                                      history=thread.history(), trimmed=table["trimmed"])
+                wanted_names = list(answer.missing) + list(result.paths)
+                found, dropped = knowledge_mod.resolve_page_names(self.config, wanted_names, thread.projects)
+                wanted = [path for path in found if path not in sent and path not in left and path not in thread.exclude]
+                record["check"] = {"note": result.note, "wanted": wanted, "reasons": dict(result.reasons),
+                                   "dropped": result.dropped + dropped, "error": result.error, "complete": result.complete}
+                rounds.append(record)
+                check_note = result.note
+                if result.error or not wanted:
+                    break
+                if round_no == max_reads:
+                    cap_hit, still_wanted = True, wanted
+                    break
+                order = order + [path for path in wanted if path not in order]
                 with session.lock:
-                    if not session.cancelled.is_set():
-                        session.phase = "reading_more"
-                        session.more_count = len(more.sent)
-                        session.mark("reading more")
-                both = dict(sent)
-                both.update(more.sent)
-                answer = ask_mod.ask_again(provider, question, first, more.own_text, thread.history(), both, briefs,
-                                           ", ".join(thread.projects), read_before=read_before)
-                sent = both
+                    session.phase = "reading_more"
+                    session.mark("reading more")
         except Exception as exc:
             with session.lock:
                 cancelled = session.cancelled.is_set()
@@ -2027,7 +2063,13 @@ class BoardServer:
                 if not cancelled:
                     session.error = f"The call failed: {exc}"
             return
+        if answer is None:
+            with session.lock:
+                session.clear_question()
+            return
         paths = sorted(sent)
+        for record in rounds:
+            record.pop("_answer", None)
         with session.lock:
             if session.cancelled.is_set():
                 session.clear_question()
@@ -2035,22 +2077,17 @@ class BoardServer:
             # Which of the pages sent for this question the thread had not
             # seen before (spec 5.2): every question selects its own.
             seen = {path for turn in thread.turns for path in turn.get("paths") or []}
-            turn = {
+            chosen = {knowledge_mod.page_of(k) for k in ((session.picks or {}).get("full") or [])}
+            thread.turns.append({
                 "question": question, "answer": answer.answer, "sources": answer.sources, "gaps": answer.gaps,
                 "dropped": answer.dropped, "decision_question": answer.decision_question,
                 "parse_error": answer.parse_error, "paths": paths, "new_pages": sorted(set(paths) - seen),
-                "kept": [path for path in session.kept if path in sent
-                         and path not in set((session.picks or {}).get("full") or [])],   # kept, not chosen anew
-                "briefs": sorted(briefs), "at": time.time(),
+                "kept": [path for path in session.kept if path in sent and path not in chosen],   # kept, not chosen anew
+                "at": time.time(),
                 "chosen_by": "model" if session.picks else "python",
-                "pick_reasons": dict((session.picks or {}).get("reasons") or {}),
-            }
-            if first is not None:
-                turn.update({"first_answer": first.answer, "first_gaps": first.gaps, "missing": missing,
-                             "missing_dropped": missing_dropped, "more_pages": more_pages, "more_left": more_left})
-            elif answer.missing:
-                turn.update({"missing": [], "missing_dropped": missing_dropped or len(answer.missing)})
-            thread.turns.append(turn)
+                "pick_reasons": {knowledge_mod.page_of(k): why for k, why in ((session.picks or {}).get("reasons") or {}).items()},
+                "rounds": rounds, "left": left, "cap_hit": cap_hit, "still_wanted": still_wanted,
+            })
             session.clear_question()
             session.mark("answered")
             self._save_thread(session)
@@ -2058,7 +2095,7 @@ class BoardServer:
         log_run("ask", audit_folder=_get(self.config, "runtime.audit_folder"), pc_name=_get(self.config, "storage.pc_name", ""),
                 duration_seconds=time.monotonic() - started,
                 counts={"questions": len(thread.turns), "sources": len(answer.sources), "gaps": len(answer.gaps),
-                        "dropped_sources": answer.dropped, "second_pass_pages": len(more_pages)},
+                        "dropped_sources": answer.dropped, "rounds": len(rounds), "pages": len(paths)},
                 provider=ai_result.provider if ai_result else None, model=ai_result.model if ai_result else None,
                 tokens=ai_result.total_tokens if ai_result else None)
 

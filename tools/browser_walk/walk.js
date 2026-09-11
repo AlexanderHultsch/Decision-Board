@@ -262,37 +262,36 @@ const { chromium } = require('playwright');
   console.log('picks screen:', (await page.textContent('#thread-picks-status')).slice(0, 90), '| button:', await page.textContent('#btn-thread-ask'),
     '| reasons:', await page.locator('#ask-estimate-notes .reason').count(), '| answers so far:', await page.locator('.turn.answer').count());
   console.log('groups:', (await page.locator('#ask-estimate-detail details.group > summary').allTextContents()).map((t) => t.replace(/\s+/g, ' ').trim().slice(0, 60)).join(' | '));
-  console.log('budget banner:', await page.locator('#ask-budget-banner').isHidden() ? 'hidden' : (await page.textContent('#ask-budget-banner')).slice(0, 90));
+  console.log('no slider on the thread page:', await page.locator('#screen-thread input[type=range]').count() === 0, '| not-chosen rows:', await page.locator('#ask-outline label.page-row').count());
   await page.click('#ask-estimate-detail details.group[data-group="chosen"] > summary');
   await shot('20b-picks');
   await page.click('#btn-thread-ask');
-  // The steps (spec 5.4, decision 9), then the second pass the demo's first answer asks for.
+  // The steps (spec 5.4, decision 9) and the loop (spec 5.5): the demo's check wants one more page once.
   await page.waitForFunction(() => /Reading \d+ notes/.test(document.querySelector('#thread-steps').textContent), null, { timeout: 15000 });
   console.log('steps while answering:', (await page.locator('#thread-steps .step').allTextContents()).join(' > '));
-  await page.waitForFunction(() => /more note/.test(document.querySelector('#thread-steps').textContent), null, { timeout: 15000 });
-  console.log('steps in the second pass:', (await page.locator('#thread-steps .step').allTextContents()).join(' > '));
-  await shot('20c-second-pass');
-  await page.waitForSelector('.turn.answer', { timeout: 15000 });
+  await page.waitForFunction(() => /Checking again|Writing the answer again/.test(document.querySelector('#thread-steps').textContent), null, { timeout: 20000 });
+  console.log('steps in round 2:', (await page.locator('#thread-steps .step').allTextContents()).join(' > '));
+  await shot('20c-round-two');
+  await page.waitForSelector('.turn.answer', { timeout: 20000 });
   await page.click('.turn.answer .sources-fold > summary');
   await shot('21-thread-answer');
   console.log('answer sources:', await page.locator('.turn.answer .sources a').count(), '| first link:', await page.locator('.turn.answer .sources a').first().getAttribute('href'),
     '| fold:', await page.textContent('.turn.answer .sources-fold > summary'));
   console.log('gaps:', await page.locator('.turn.answer .gaps li').count(), '| gap title:', await page.textContent('.turn.answer .gaps-title'), '| dropped note:', (await page.locator('.turn.answer .muted.small').count()) > 0, '| state:', await page.textContent('#thread-state'));
-  console.log('second pass on the turn:', (await page.locator('.turn.answer .read-title').allTextContents()).join(' | '), '| first answer folded:', await page.locator('.turn.answer .first-answer').count());
-  await page.waitForFunction(() => /model call/.test(document.querySelector('#ask-estimate').textContent), null, { timeout: 10000 });
+  console.log('rounds on the turn:', (await page.locator('.turn.answer .read-title').allTextContents()).join(' | '), '| earlier answers folded:', await page.locator('.turn.answer .first-answer').count(), '| round rows:', (await page.locator('.turn.answer .rounds li').allTextContents()).map((t) => t.slice(0, 70)).join(' || '));
+  await page.waitForFunction(() => /calls? per round/.test(document.querySelector('#ask-estimate').textContent), null, { timeout: 10000 });
   console.log('ask estimate:', await page.textContent('#ask-estimate'));
   await page.click('#ask-estimate-detail summary');
   await page.waitForSelector('#ask-estimate-notes .sec-list li', { state: 'attached', timeout: 10000 });
-  console.log('ask sections:', await page.locator('#ask-estimate-notes .sec-list li').count(), 'core tags:', await page.locator('#ask-estimate-notes .core-tag').count());
-  await page.click('#btn-ask-budget-info');
-  console.log('ask budget info shown:', !(await page.locator('#ask-budget-info').isHidden()));
+  console.log('ask pages:', await page.locator('#ask-estimate-notes .sec-list li').count(), 'core tags:', await page.locator('#ask-estimate-notes .core-tag').count());
+  await page.click('#btn-ask-info');
+  console.log('ask info shown:', !(await page.locator('#ask-info').isHidden()));
   await page.fill('#thread-question', 'And who approves it?');
   await page.click('#btn-thread-ask');
   await page.waitForSelector('#thread-picks-head:not([hidden])', { timeout: 15000 });
   await page.waitForSelector('#ask-estimate-notes .sec-list li', { state: 'attached', timeout: 10000 });
-  console.log('follow-up picks screen shown; kept group:', await page.locator('#ask-estimate-detail details.group[data-group="kept"]').count(),
-    '| status:', (await page.textContent('#thread-picks-status')).slice(0, 160), '| kept tags:', await page.locator('#ask-estimate-notes .kept-tag').count());
-  await page.click('#ask-estimate-detail details.group[data-group="kept"] > summary');
+  console.log('follow-up picks screen shown; status:', (await page.textContent('#thread-picks-status')).slice(0, 200), '| kept tags:', await page.locator('#ask-estimate-notes .kept-tag').count());
+  await page.click('#ask-estimate-detail details.group[data-group="chosen"] > summary');
   await shot('22a-follow-up-picks');
   console.log('cancel keeps the question:');
   await page.click('#btn-thread-cancel');

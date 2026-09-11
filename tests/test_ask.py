@@ -51,40 +51,37 @@ class TestPrompt(unittest.TestCase):
         self.assertLess(text.index("Q: q4"), text.index("Q: q5"))
 
 
-class TestSecondPass(unittest.TestCase):
-    """Spec 5.4, decisions 7 and 8: the answer may ask for pages once, and
-    the second call carries the first answer, not the first pages."""
+class TestLoopPrompt(unittest.TestCase):
+    """Spec 5.5: the answer names pages it wants, sees the table of
+    contents, and a later round carries the answer so far and the check."""
 
     def test_missing_is_parsed_in_either_shape_and_capped(self):
         text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": ["A.md", {"path": "B.md"}, "A.md", ""]})
         self.assertEqual(ask.parse_answer(text, SENT).missing, ["A.md", "B.md"])
         text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": "C.md"})
         self.assertEqual(ask.parse_answer(text, SENT).missing, ["C.md"])
-        text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": [f"P{i}.md" for i in range(40)]})
+        text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": [f"P{i}.md" for i in range(80)]})
         self.assertEqual(len(ask.parse_answer(text, SENT).missing), ask.MAX_MISSING)
         self.assertEqual(ask.parse_answer(json.dumps({"answer": "x"}), SENT).missing, [])
 
-    def test_the_prompt_lists_the_pages_read_earlier(self):
-        text = ask.ask_prompt("next?", "K", "", [], read_before=["A.md", "B.md"])
+    def test_the_prompt_lists_the_pages_read_earlier_and_the_table_of_contents(self):
+        text = ask.ask_prompt("next?", "K", "", [], read_before=["A.md", "B.md"], contents_text="- page: A.md | A | 3 tokens")
         self.assertIn("## Pages read earlier in this thread\n\n- A.md\n- B.md\n\n" + ask.MARKER, text)
+        self.assertIn("## Table of contents of the vault", text)
+        self.assertLess(text.index("K"), text.index("## Table of contents"))
         self.assertNotIn("## Pages read earlier", ask.ask_prompt("next?", "K", "", []))
+        self.assertNotIn("## Table of contents", ask.ask_prompt("next?", "K", "", []))
 
-    def test_the_second_pass_carries_the_first_answer_and_the_new_pages_only(self):
+    def test_a_later_round_carries_the_answer_so_far_and_the_check(self):
         first = ask.Answer(answer="Half an answer.", gaps=["the wording"])
-        provider = FixedProvider(json.dumps({"answer": "Whole answer.", "sources": [{"path": "Process/VPDS/VPDS_Overview.md"}, {"path": "New.md"}],
-                                             "gaps": [], "missing": ["Again.md"]}))
-        both = dict(SENT)
-        both["New.md"] = "the new page\n"
-        answer = ask.ask_again(provider, "The question?", first, "## Pages read for the second pass\n\n### New.md\nthe new page", [("q", "a")], both, BRIEFS, "Dual DCDC")
+        provider = FixedProvider(json.dumps({"answer": "Whole answer.", "sources": [{"path": "Process/VPDS/VPDS_Overview.md"}], "gaps": [], "missing": []}))
+        answer = ask.ask(provider, "The question?", "## Knowledge from the vault\n\nall pages", "", [("q", "a")], SENT, None, "Dual DCDC",
+                         earlier=first, check_note="One task was not read.", round_no=2)
         prompt = provider.prompts[0]
-        self.assertIn("## Your first answer\n\nHalf an answer.\n\nGaps you named: the wording\n\n" + ask.MARKER_SECOND, prompt)
-        self.assertIn("### New.md\nthe new page", prompt)
-        self.assertNotIn("## Knowledge from the vault", prompt)      # the first pages are not sent again
-        self.assertNotIn("## KPI notes", prompt)
-        self.assertLess(prompt.index(ask.MARKER), prompt.index(ask.MARKER_SECOND))
+        self.assertIn("## Your answer so far (round 1)\n\nHalf an answer.\n\nGaps you named: the wording\n\nWhat the check said: One task was not read.\n\nThis is round 2", prompt)
+        self.assertLess(prompt.index(ask.MARKER), prompt.index("## Your answer so far"))
+        self.assertLess(prompt.index("## Your answer so far"), prompt.index("## Knowledge from the vault"))
         self.assertEqual(answer.answer, "Whole answer.")
-        self.assertEqual([s["path"] for s in answer.sources], ["Process/VPDS/VPDS_Overview.md", "New.md"])   # either pass checks out
-        self.assertEqual(answer.missing, [])                          # once per question
 
 
 class TestParse(unittest.TestCase):

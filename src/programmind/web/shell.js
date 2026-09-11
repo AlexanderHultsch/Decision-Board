@@ -81,7 +81,7 @@
       : !status.ok ? `<span class="error">${esc(status.error)}</span>` : "";
     $("home-hint").innerHTML = problem || `${status.notes} notes in the vault.`;
     $("board-hint").innerHTML = problem || `Reads up to ${fmtNum(config.token_budget)} tokens of notes from your vault per member.`;
-    $("ask-hint").innerHTML = problem || `Reads up to ${fmtNum(config.ask_budget)} tokens of notes from your vault per question: one call chooses the pages, one reads them and answers, a third only when the answer asks for more.`;
+    $("ask-hint").innerHTML = problem || `Reads whole pages from your vault, as many as the model wants, up to ${fmtNum(config.ask_ceiling)} tokens per read: you see the choice first, and every answer is checked and read again until nothing is missing, up to ${config.ask_max_reads} rounds.`;
     $("site-address").innerHTML = `This site: <strong>http://${esc(config.site_host || "program-mind.localhost")}:${esc(location.port || "80")}/</strong> · also reachable at http://localhost:${esc(location.port || "80")}/`;
     $("link-bug").href = `${config.repository || ""}/issues`;
     const obsidian = $("link-obsidian");

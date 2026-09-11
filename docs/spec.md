@@ -365,6 +365,38 @@ pass in `_ask`), the thread page (four groups, the budget line and its
 button, the folded sources, the step card) and the walk. The chooser's
 `drop` is applied to the kept list, never to its own picks.
 
+### 5.5 Quality first: whole pages, no budget, and the loop
+
+**Decided 11 September 2026, after the first real run of 5.4.** The
+follow-up "what are the exact subtasks within those VPDS tasks" read 13
+pages: the slider at 12,000 tokens held the core, the kept pages and three
+task pages, and the other task pages fell out and went in as one-line
+summaries. The model saw that and said so, in `gaps` rather than in
+`missing`, so the second pass never ran. Alex's direction: tokens no
+longer matter, quality does; Python should interpret as little as
+possible and the model should have the power, with loops that secure the
+quality. Decided in one exchange; every recommendation accepted.
+
+| # | Decision |
+|---|---|
+| 1 | **Ask the vault has no budget.** The slider goes from the thread page. One ceiling stays, `ask.max_read_tokens` (default 120,000), so that a call cannot fail at the model's context limit; it is a config key because the gateway model's limit is not known for sure. What the ceiling cuts is listed on the picks screen as beyond the ceiling, and the turn says when a round could not read everything it wanted. |
+| 2 | **A page is read whole or not at all.** The one-line tier goes for Ask the vault. A section id in a pick reads the page it belongs to. The shared core stays as it was (project page without the skipped sections, the gate definitions, the abbreviations the question uses, the phase definitions); it is small and the model may ask for anything beyond it. |
+| 3 | **The answering call sees the table of contents.** Every answer call carries the whole table of contents after the pages read, so the model can name any page of the vault in `missing`, not only pages it happened to see. |
+| 4 | **A checker call after every answer, and that is the loop.** A separate call gets the question, the thread so far, the answer, the list of pages read and the table of contents, and answers one thing: which pages should also have been read, as paths or rules, with reasons. What it names, and what the answer itself named in `missing`, is read on top of everything read so far, and the answer is written again with all of it, the earlier answer and the checker's note in the prompt. The loop stops when the checker names nothing new, when the reads reach `ask.max_reads` (default 4 per question), or when the ceiling has no room left. A checker that fails or does not parse ends the loop with the answer as it stands and the turn says so. |
+| 5 | **Later rounds run by themselves.** Only the first read waits on the picks screen. Stop ends the loop at any point and nothing is recorded. The turn shows the final answer; the earlier answers, what each round added and what the checker said sit folded in the sources. A round cap that was hit is said on the turn, with what the checker still wanted. |
+| 6 | **The picks screen is two groups**: chosen by the model, whole pages with the reasons, the core and the kept pages tagged; and not chosen, the rest of the vault with the search box, one tick per page to add it. A third group, beyond the ceiling, appears only when decision 1 cuts. |
+| 7 | **The steps carry the rounds.** Looking through the table of contents; your picks; reading N notes; writing the answer; checking the answer; then per further round, reading M more notes, writing the answer again, checking again. |
+| 8 | **Python does not second-guess the model.** Two deterministic guarantees were proposed (read every page named in an earlier answer; read every page a named person's role leads) and dropped on Alex's instruction: the loop is the mechanism, not a Python rule. What Python still does is what it always did: resolve names against the vault, expand rules, drop what does not exist, count what it dropped. |
+| 9 | **The second pass of 5.4 is withdrawn**, replaced by the loop. The chooser's memory, the kept pages, the folded sources, the gap wording and the core skip list of 5.4 stay. The board is unchanged in this round; it follows once this works. |
+| 10 | **The statistics count the checker as "answer check"**; every answer call, first or later, is "ask the vault". |
+
+**Built 11 September 2026** in `knowledge.gather_whole` (the core and
+whole pages within the ceiling), `picker.check` and the prompt
+`knowledge_check.md`, `ask.ask_prompt` (the table of contents, the
+earlier answer and the checker's note), the server (the loop in `_ask`,
+the `checking` phase, the rounds on the turn), the thread page (no
+slider, two groups, the rounds in the fold) and the walk.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that

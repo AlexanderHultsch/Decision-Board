@@ -35,7 +35,8 @@ why.
 
 **What you may name in `read`, most important first:**
 
-- a section id exactly as listed after `- id:`, to read that section;
+- a section id exactly as listed after `- id:`, to read that section (for
+  Ask the vault the whole page is read: a page is read whole or not at all);
 - a page path exactly as listed after `- page:`, to read the whole page;
 - a rule, as an object naming property values, to read every page that
   matches all of them: `{"kind": "process", "lead": "HW Engineering", "why": "..."}`.

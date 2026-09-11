@@ -23,6 +23,7 @@ MAX_FULL = 8        # sections in full per member (the 5.1 pick from Python's sh
 MAX_BRIEF = 20      # one-line pages per member
 MAX_CHOSEN = 300    # the 5.3 choice from the whole table of contents: the budget caps it, this only stops a runaway
 MARKER = "## Candidate sections"     # what the statistics route on
+MARKER_CHECK = "## Answer to check"   # ... and the checker of spec 5.5 by
 AGENT_NAME = "Ask the vault"         # how the nameless chooser of Ask the vault is called in the prompt
 MAX_HISTORY_CHARS = 12000            # spec 5.4, decision 1: the chooser sees the thread as the answering call does
 
@@ -251,3 +252,88 @@ def choose(provider: AiProvider, question: str, members: dict[str, str], pages: 
     result = parse_choice(ai_result.text, members, pages)
     result.ai_result = ai_result
     return result
+
+
+# -- spec 5.5: the checker, and that is the loop ----------------------------
+
+@dataclass
+class CheckResult:
+    complete: bool = True
+    paths: list[str] = field(default_factory=list)     # pages that should also be read, in the checker's order
+    reasons: dict[str, str] = field(default_factory=dict)
+    note: str = ""
+    dropped: int = 0
+    error: str | None = None                            # why the loop ends with the answer as it stands
+    ai_result: AiResult | None = None
+
+
+def check_prompt(question: str, answer: str, read: list[str], pages: list[dict[str, Any]], *,
+                 history: list[tuple[str, str]] | None = None, trimmed: bool = False) -> str:
+    from programmind.knowledge.knowledge import contents_lines
+    lines = [load_prompt("knowledge_check"), "", "## Question", "", question.strip(), ""]
+    if history:
+        lines += ["## Earlier in this thread", ""] + history_lines(history) + [""]
+    lines += [MARKER_CHECK, "", answer.strip() or "(empty)", "", "## Pages read", ""]
+    lines += [f"- {path}" for path in read] or ["(none)"]
+    lines += ["", "## Table of contents", ""]
+    if trimmed:
+        lines += ["(The vault is larger than this list: the program kept the pages its word ranking puts first "
+                  "for the question.)", ""]
+    lines += contents_lines(pages)
+    lines += ["", "Answer now, as the JSON object described above."]
+    return "\n".join(lines)
+
+
+def parse_check(text: str, read: list[str], pages: list[dict[str, Any]]) -> CheckResult:
+    """The checker's answer with Python's checks applied: a page must
+    exist, a rule must match, a page already read is not named again;
+    the rest is dropped and counted. A section id stands for its page."""
+    from programmind.knowledge.knowledge import expand_rules, page_of
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return CheckResult(error="the check did not parse as JSON")
+    if not isinstance(data, dict):
+        return CheckResult(error="the check was not an object")
+    paths = {page["path"] for page in pages}
+    ids = {sec["id"] for page in pages for sec in page.get("sections") or []}
+    already = {page_of(x) for x in read}
+    result = CheckResult(complete=bool(data.get("complete", False)), note=str(data.get("note") or "").strip()[:600])
+    reasons_raw = data.get("reasons") if isinstance(data.get("reasons"), dict) else {}
+    for value in (data.get("read") if isinstance(data.get("read"), list) else []):
+        if isinstance(value, dict):
+            found = expand_rules([value], pages)
+            if not found:
+                result.dropped += 1
+            why = str(value.get("why") or "").strip()
+            for path in found:
+                if path not in already and path not in result.paths:
+                    result.paths.append(path)
+                    if why:
+                        result.reasons[path] = why
+            continue
+        key = str(value).strip()
+        if key in ids or key in paths or page_of(key) in paths:     # a page is read whole: any id of it names the page
+            path = page_of(key)
+            if path not in already and path not in result.paths:
+                result.paths.append(path)
+        else:
+            result.dropped += 1
+    for key, why in reasons_raw.items():
+        path = page_of(str(key).strip())
+        if path in result.paths and str(why).strip():
+            result.reasons[path] = str(why).strip()
+    if result.paths:
+        result.complete = False
+    return result
+
+
+def check(provider: AiProvider, question: str, answer: str, read: list[str], pages: list[dict[str, Any]], *,
+          history: list[tuple[str, str]] | None = None, trimmed: bool = False) -> CheckResult:
+    """The checker call (5.5, decision 4). A bad answer never raises: the
+    result says why the loop ends. A provider failure raises."""
+    ai_result = provider.complete(TASK_BOARD, check_prompt(question, answer, read, pages, history=history, trimmed=trimmed))
+    result = parse_check(ai_result.text, read, pages)
+    result.ai_result = ai_result
+    return result
+

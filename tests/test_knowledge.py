@@ -482,15 +482,37 @@ class TestFollowUpRound(unittest.TestCase):
         self.assertEqual(knowledge.core_skip_headings({"knowledge": {"core_skip_headings": "Vehicle concepts, Volumes"}}),
                          ("Vehicle concepts", "Volumes"))
 
-    def test_gather_pages_reads_the_named_pages_whole_within_its_budget(self):
-        sel = knowledge.gather_pages(self.config, ["Tasks/EMC.md", "Tasks/DV testing.md", "Nowhere.md"], token_budget=300)
-        self.assertEqual(sorted(sel.sent), ["Tasks/EMC.md"])                # the long page did not fit
-        self.assertEqual(sel.left, ["Tasks/DV testing.md"])
-        self.assertIn("### Tasks/EMC.md\n", sel.text)
+    def test_gather_whole_reads_the_core_and_the_named_pages_whole_within_the_ceiling(self):
+        sel = knowledge.gather_whole(self.config, "When is MG3?", ["Tasks/EMC.md", "Tasks/DV testing.md#anything", "Nowhere.md"], ceiling=600)
+        self.assertIn("Projects/Dual DCDC.md", sel.sent)                       # the core comes first
+        self.assertNotIn("Concept lines.", sel.text)                          # without the skipped sections
         self.assertIn("Book the chamber.", sel.text)
-        self.assertIn("## Pages read for the second pass", sel.own_text)
-        self.assertNotIn("SOP 2028", sel.text)                              # no core
-        self.assertEqual(knowledge.gather_pages({}, ["Tasks/EMC.md"], token_budget=300).sent, {})
+        self.assertEqual(sel.left, ["Tasks/DV testing.md"])                   # the long page did not fit the ceiling
+        self.assertIn("## Pages read for this question", sel.own_text)
+        self.assertIn("## Knowledge from the vault, the shared core", sel.core_text)
+        self.assertEqual(knowledge.gather_whole({}, "q", ["Tasks/EMC.md"]).sent, {})
+        excluded = knowledge.gather_whole(self.config, "When is MG3?", ["Tasks/EMC.md"], ceiling=6000, exclude=["Tasks/EMC.md"])
+        self.assertNotIn("Tasks/EMC.md", excluded.sent)
+        big = knowledge.gather_whole(self.config, "When is MG3?", ["Tasks/EMC.md", "Tasks/DV testing.md"], ceiling=60000)
+        self.assertEqual(big.left, [])
+        self.assertEqual([n.relative for n in big.notes], ["Projects/Dual DCDC.md", "Tasks/EMC.md", "Tasks/DV testing.md"])
+
+    def test_the_check_prompt_and_its_parse(self):
+        from programmind.knowledge import picker
+        table = knowledge.contents(self.config)
+        prompt = picker.check_prompt("Which tasks?", "EMC only.", ["Tasks/EMC.md"], table["pages"], history=[("q", "a")])
+        self.assertIn(picker.MARKER_CHECK + "\n\nEMC only.\n\n## Pages read\n\n- Tasks/EMC.md\n\n## Table of contents", prompt)
+        self.assertIn("## Earlier in this thread\n\nQ: q\nA: a", prompt)
+        result = picker.parse_check(json.dumps({"complete": False, "read": ["Tasks/DV testing.md#anything", "Tasks/EMC.md", "Nowhere.md",
+                                                                               {"kind": "project", "why": "the project page"}],
+                                                "reasons": {"Tasks/DV testing.md": "not read"}, "note": "One task is missing."}),
+                                    ["Tasks/EMC.md"], table["pages"])
+        self.assertEqual(result.paths, ["Tasks/DV testing.md", "Projects/Dual DCDC.md"])   # the read page is not named again
+        self.assertEqual(result.reasons, {"Tasks/DV testing.md": "not read", "Projects/Dual DCDC.md": "the project page"})
+        self.assertEqual((result.dropped, result.complete, result.note), (1, False, "One task is missing."))
+        done = picker.parse_check(json.dumps({"complete": True, "read": []}), [], table["pages"])
+        self.assertTrue(done.complete and not done.paths and done.error is None)
+        self.assertIn("JSON", picker.parse_check("nope", [], table["pages"]).error)
 
     def test_page_names_resolve_by_path_or_unique_file_name(self):
         found, dropped = knowledge.resolve_page_names(self.config, ["Tasks/EMC.md", "dv testing", "[[EMC]]", "Nowhere.md", "Projects/Dual DCDC"])

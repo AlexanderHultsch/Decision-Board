@@ -33,10 +33,10 @@ from programmind.knowledge.picker import MAX_HISTORY_CHARS, history_lines
 
 KIND = "ask"                              # the ``kind`` of this agent's records in the history folder
 MARKER = "## Question to the vault"       # the line the statistics recognise an ask call by
-MARKER_SECOND = "## What you asked for"   # ... and the second pass (spec 5.4, decision 8) by
-DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: twice a member's, there is only one call
+DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: kept on the record; no read is capped by it since spec 5.5
 MAX_ANSWER_CHARS = 8000
-MAX_MISSING = 20                          # pages the model may ask for in one answer (spec 5.4, decision 7)
+MAX_MISSING = 40                          # pages the model may ask for in one answer (spec 5.4, decision 7; 5.5)
+MAX_READS = 4                             # ``ask.max_reads``: answer rounds per question (spec 5.5, decision 4)
 
 
 @dataclass
@@ -52,12 +52,13 @@ class Answer:
 
 
 def ask_prompt(question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
-               project: str = "", *, read_before: list[str] | None = None, first_answer: "Answer | None" = None,
-               more_text: str = "") -> str:
+               project: str = "", *, read_before: list[str] | None = None, contents_text: str = "",
+               earlier: "Answer | None" = None, check_note: str = "", round_no: int = 1) -> str:
     """The one prompt: instructions, the thread so far, the pages read for
-    it, the question, the knowledge block, the KPI notes. The second pass
-    (spec 5.4, decision 8) carries the first answer and the pages the model
-    asked for under ``MARKER_SECOND`` instead of the first pass's block."""
+    it, the question, the KPI notes, the knowledge block, and (spec 5.5)
+    the table of contents so the model can name any page. A later round
+    carries the earlier answer and what the checker said, before the
+    pages, which are everything read so far."""
     lines = [load_prompt("ask"), ""]
     if project:
         lines += [f"Project: {project}", ""]
@@ -66,16 +67,22 @@ def ask_prompt(question: str, knowledge_text: str, kpi_text: str, history: list[
     if read_before:
         lines += ["## Pages read earlier in this thread", ""] + [f"- {path}" for path in read_before] + [""]
     lines += [MARKER, "", question.strip(), ""]
-    if first_answer is not None:
-        lines += ["## Your first answer", "", first_answer.answer.strip() or "(empty)", ""]
-        if first_answer.gaps:
-            lines += ["Gaps you named: " + "; ".join(first_answer.gaps), ""]
-        lines += [MARKER_SECOND, "", more_text.strip() or "(none of the pages you named could be read)", ""]
-        return "\n".join(lines)
+    if earlier is not None:
+        lines += [f"## Your answer so far (round {round_no - 1})", "", earlier.answer.strip() or "(empty)", ""]
+        if earlier.gaps:
+            lines += ["Gaps you named: " + "; ".join(earlier.gaps), ""]
+        if check_note:
+            lines += ["What the check said: " + check_note.strip(), ""]
+        lines += [f"This is round {round_no}: the pages below are everything read so far, the pages added for this "
+                  "round among them. Write the whole answer again, complete.", ""]
     if kpi_text:
         lines += ["## KPI notes of the project", "", kpi_text, ""]
     if knowledge_text:
         lines += [knowledge_text, ""]
+    if contents_text:
+        lines += ["## Table of contents of the vault", "",
+                  "Every page of the vault, read or not. Name in `missing` any page here that would change the answer.", "",
+                  contents_text, ""]
     return "\n".join(lines)
 
 
@@ -149,26 +156,13 @@ def parse_answer(text: str, sent: dict[str, str], briefs: dict[str, str] | None 
 
 def ask(provider: AiProvider, question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
         sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "", *,
-        read_before: list[str] | None = None) -> Answer:
-    """One call. Raises whatever the provider raises."""
+        read_before: list[str] | None = None, contents_text: str = "", earlier: Answer | None = None,
+        check_note: str = "", round_no: int = 1) -> Answer:
+    """One call, first round or later. Raises whatever the provider raises."""
     ai_result = provider.complete(TASK_BOARD, ask_prompt(question, knowledge_text, kpi_text, history, project,
-                                                         read_before=read_before))
+                                                         read_before=read_before, contents_text=contents_text,
+                                                         earlier=earlier, check_note=check_note, round_no=round_no))
     answer = parse_answer(ai_result.text, sent, briefs)
-    answer.ai_result = ai_result
-    return answer
-
-
-def ask_again(provider: AiProvider, question: str, first: Answer, more_text: str, history: list[tuple[str, str]],
-              sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "", *,
-              read_before: list[str] | None = None) -> Answer:
-    """The second pass (spec 5.4, decision 8): the first answer and the
-    pages it asked for, one more call. ``sent`` is the pages of both
-    passes, so a source from either checks out; a ``missing`` list in this
-    answer is dropped."""
-    ai_result = provider.complete(TASK_BOARD, ask_prompt(question, "", "", history, project, read_before=read_before,
-                                                         first_answer=first, more_text=more_text))
-    answer = parse_answer(ai_result.text, sent, briefs)
-    answer.missing = []
     answer.ai_result = ai_result
     return answer
 

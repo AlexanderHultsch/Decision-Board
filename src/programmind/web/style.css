@@ -498,6 +498,9 @@ legend { padding: 0 var(--s1); font-size: var(--fs-help); font-weight: 600; colo
 .outline .note-title { font-weight: 600; font-size: var(--fs-help); }
 .outline label { display: flex; align-items: center; gap: var(--s1); padding: 2px 0 2px var(--s4); font-size: var(--fs-help); }
 .outline label .tok { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.outline label.page-row { flex-wrap: wrap; padding-left: var(--s1); }
+.outline label.page-row .reason { display: block; flex-basis: 100%; margin: 0 0 2px 1.7rem; color: var(--muted); font-size: .75rem; }
+.turn .read-list.rounds li { margin-bottom: var(--s1); }
 
 /* The project picker */
 .picker { position: relative; }
