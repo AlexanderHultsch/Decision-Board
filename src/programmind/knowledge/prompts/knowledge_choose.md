@@ -23,6 +23,16 @@ names: take the org chart, the role pages, and every task page that could
 be that role's - or say the rule that selects them. Breadth costs tokens,
 which the person sees and controls; a missed page costs the answer.
 
+**A follow-up that points back.** Some prompts carry the earlier
+questions and answers of the thread. When the new question points at
+what an earlier answer listed or drew on - "the tasks you listed", "each
+of them", "the exact wording of those" - read in full every page that
+answer came from: name them in `read`, first. Under "Pages already read
+in this thread" you see the pages the thread has read so far; they stay
+with the thread and are read again unless you put them in `drop`. Drop a
+kept page only when the new question plainly no longer needs it, and say
+why.
+
 **What you may name in `read`, most important first:**
 
 - a section id exactly as listed after `- id:`, to read that section;
@@ -45,8 +55,12 @@ no markdown code fences, in this exact shape:
   {"member": "Ask the vault",
    "read": ["Process/Org chart.md", "Roles/HW Engineering.md#Responsibilities",
             {"kind": "process", "lead": "HW Engineering", "why": "every task that role leads"}],
-   "reasons": {"Process/Org chart.md": "names who holds which role"}}
+   "reasons": {"Process/Org chart.md": "names who holds which role"},
+   "drop": [{"path": "Suppliers/Housing tooling.md", "why": "the question moved on from the tooling"}]}
 ]}
 ```
+
+`drop` may be left out or empty; it may only name pages listed under
+"Pages already read in this thread".
 
 Every member listed in the input appears once. An empty list is allowed.

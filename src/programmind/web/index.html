@@ -144,6 +144,9 @@
     <div id="thread-turns" class="stack"></div>
     <div id="thread-pending" class="card centered" hidden>
       <div class="spinner"></div>
+      <p id="thread-pending-question" class="picks-question"></p>
+      <!-- The steps of the running question (spec 5.4, decision 9), with real numbers. -->
+      <div id="thread-steps" class="step-line ask-steps" hidden></div>
       <p id="thread-pending-text" class="muted">Reading the vault and answering…</p>
       <button type="button" class="ghost small-btn" id="btn-thread-stop">Stop</button>
     </div>
@@ -160,13 +163,15 @@
         <input id="ask-budget" type="range" min="0" max="40000" step="500" value="12000" aria-label="Knowledge tokens for this question">
         <span id="ask-budget-value" class="budget-value">12,000 tokens</span>
       </div>
-      <div id="ask-budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections sent in full for this question - the shared core (project page, phase and gate definitions, the abbreviations the question uses, the tasks active in the phase the question names) and the best-ranked sections for the question's words.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the KPI notes of the project with their age, the sections you add below, and the earlier questions and answers of this thread.<br><span class="muted">Two calls per question: one reads the table of contents and chooses, one reads the chosen pages and answers. What the model chose is read, and nothing is added behind its back; you add or leave out below.</span></div>
+      <div id="ask-budget-info" class="small info-text" hidden><strong>What the slider caps:</strong> the sections sent in full for this question - the shared core (project page, phase and gate definitions, the abbreviations the question uses, the tasks active in the phase the question names) and the best-ranked sections for the question's words.<br><strong>On top, not counted by the slider:</strong> one line each for up to 20 further pages (at most 800 tokens), the KPI notes of the project with their age, the sections you add below, and the earlier questions and answers of this thread.<br><span class="muted">Two calls per question: one reads the table of contents and chooses, one reads the chosen pages and answers; a third runs only when the answer asks for pages it did not get, within the same budget. What the model chose is read, and nothing is added behind its back; you add or leave out below. A page read once in this thread is kept for its later questions unless the model or you let it go.</span></div>
       <p id="ask-estimate" class="estimate muted small">Estimating…</p>
+      <p id="ask-budget-banner" class="banner small" hidden></p>
       <details id="ask-estimate-detail" class="estimate-detail"><summary class="muted small">What the agent would receive, and what to add or leave out</summary>
         <div id="ask-estimate-notes"></div>
-        <p class="eyebrow">Add <span class="muted small">sent whole, on top of the slider</span></p>
-        <input id="ask-outline-filter" type="text" class="outline-filter" placeholder="Filter notes and sections…">
-        <div id="ask-outline" class="outline"></div>
+        <details class="group" data-group="rest"><summary><span class="group-title">Not chosen</span> <span class="count" id="ask-not-chosen-count"></span> <span class="muted small">the rest of the vault; tick to send a section whole, on top of the slider</span></summary>
+          <input id="ask-outline-filter" type="text" class="outline-filter" placeholder="Filter notes and sections…">
+          <div id="ask-outline" class="outline"></div>
+        </details>
       </details>
       <div class="row between">
         <button id="btn-thread-close" type="button" class="ghost">Close thread</button>

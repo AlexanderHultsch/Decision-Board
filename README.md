@@ -14,8 +14,11 @@ exist today:
   vault. Who sits on the board is decided by role profiles in the vault, not
   by code.
 * **Ask the vault.** Any question, answered by one agent from the vault, in a
-  thread you can ask back in. Every answer names the pages it used, marks
-  what was not in the vault, and never invents a rule, a date or an owner.
+  thread you can ask back in. The model chooses the pages from the vault's
+  table of contents, you see the choice before anything is read, and a page
+  read once stays with the thread. Every answer names the pages it used,
+  marks what was not in the pages read, and never invents a rule, a date or
+  an owner.
 
 The full specification, including every decision and the reason behind it,
 is `docs/spec.md`.

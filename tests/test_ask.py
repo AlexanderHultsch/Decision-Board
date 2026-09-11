@@ -51,6 +51,42 @@ class TestPrompt(unittest.TestCase):
         self.assertLess(text.index("Q: q4"), text.index("Q: q5"))
 
 
+class TestSecondPass(unittest.TestCase):
+    """Spec 5.4, decisions 7 and 8: the answer may ask for pages once, and
+    the second call carries the first answer, not the first pages."""
+
+    def test_missing_is_parsed_in_either_shape_and_capped(self):
+        text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": ["A.md", {"path": "B.md"}, "A.md", ""]})
+        self.assertEqual(ask.parse_answer(text, SENT).missing, ["A.md", "B.md"])
+        text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": "C.md"})
+        self.assertEqual(ask.parse_answer(text, SENT).missing, ["C.md"])
+        text = json.dumps({"answer": "x", "sources": [], "gaps": [], "missing": [f"P{i}.md" for i in range(40)]})
+        self.assertEqual(len(ask.parse_answer(text, SENT).missing), ask.MAX_MISSING)
+        self.assertEqual(ask.parse_answer(json.dumps({"answer": "x"}), SENT).missing, [])
+
+    def test_the_prompt_lists_the_pages_read_earlier(self):
+        text = ask.ask_prompt("next?", "K", "", [], read_before=["A.md", "B.md"])
+        self.assertIn("## Pages read earlier in this thread\n\n- A.md\n- B.md\n\n" + ask.MARKER, text)
+        self.assertNotIn("## Pages read earlier", ask.ask_prompt("next?", "K", "", []))
+
+    def test_the_second_pass_carries_the_first_answer_and_the_new_pages_only(self):
+        first = ask.Answer(answer="Half an answer.", gaps=["the wording"])
+        provider = FixedProvider(json.dumps({"answer": "Whole answer.", "sources": [{"path": "Process/VPDS/VPDS_Overview.md"}, {"path": "New.md"}],
+                                             "gaps": [], "missing": ["Again.md"]}))
+        both = dict(SENT)
+        both["New.md"] = "the new page\n"
+        answer = ask.ask_again(provider, "The question?", first, "## Pages read for the second pass\n\n### New.md\nthe new page", [("q", "a")], both, BRIEFS, "Dual DCDC")
+        prompt = provider.prompts[0]
+        self.assertIn("## Your first answer\n\nHalf an answer.\n\nGaps you named: the wording\n\n" + ask.MARKER_SECOND, prompt)
+        self.assertIn("### New.md\nthe new page", prompt)
+        self.assertNotIn("## Knowledge from the vault", prompt)      # the first pages are not sent again
+        self.assertNotIn("## KPI notes", prompt)
+        self.assertLess(prompt.index(ask.MARKER), prompt.index(ask.MARKER_SECOND))
+        self.assertEqual(answer.answer, "Whole answer.")
+        self.assertEqual([s["path"] for s in answer.sources], ["Process/VPDS/VPDS_Overview.md", "New.md"])   # either pass checks out
+        self.assertEqual(answer.missing, [])                          # once per question
+
+
 class TestParse(unittest.TestCase):
     def test_only_sent_sources_survive_and_headings_are_checked(self):
         text = json.dumps({

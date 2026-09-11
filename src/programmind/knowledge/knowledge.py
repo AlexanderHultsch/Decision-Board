@@ -112,6 +112,7 @@ class KnowledgeSelection:
     picked_by: str = "python"                             # "python" or "model"
     ranked: list[Section] = field(default_factory=list)   # the sent sections in rank order (``sections`` is grouped per page)
     core_ids: set[str] = field(default_factory=set)       # ids of the sent sections that sit in the shared core
+    left: list[str] = field(default_factory=list)         # spec 5.4: pages of a second pass that did not fit its budget
 
     @property
     def relative_paths(self) -> list[str]:
@@ -444,6 +445,26 @@ _BOOST_LEAD = 6               # spec 5.1: the page's lead_swimlane is this membe
 _BOOST_AFFECTED = 3           # the member is among the page's affected_swimlanes
 _BOOST_PHASE = 3              # the task is active in a phase the question names
 _GATE_SECTION = "maturity phases and gates"    # the overview section every member gets in the core
+CORE_SKIP_HEADINGS = ("Vehicle concepts", "Awarded volumes")   # spec 5.4, decision 10: project-page sections left out of the core
+
+
+def core_skip_headings(config: dict | None) -> tuple[str, ...]:
+    """``knowledge.core_skip_headings``: the headings of the project page
+    that the core leaves out (spec 5.4, decision 10). Matched without
+    regard to case, by their start, so "Awarded volumes (2026)" is skipped
+    by "Awarded volumes". The default when the key is absent; an empty
+    list in the config skips nothing."""
+    raw = _config_value(config or {}, "knowledge.core_skip_headings")
+    if raw is None:
+        return CORE_SKIP_HEADINGS
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    return tuple(str(x).strip() for x in (raw if isinstance(raw, (list, tuple)) else []) if str(x).strip())
+
+
+def _skipped_heading(heading: str, skip: tuple[str, ...]) -> bool:
+    low = heading.strip().lower()
+    return bool(low) and any(low.startswith(h.lower()) for h in skip)
 
 # Words that name a maturity phase without its number (decided 10 September
 # 2026): DV testing closes MP4, PV MP6, SOP is MP7. "MPn" and "MGn" are read
@@ -565,14 +586,17 @@ def abbreviation_rows(notes: list[Note], question: str) -> Section | None:
 
 
 def core_sections(prepared: "_Prepared", notes: list[Note], projects: list[str], phases: tuple[str, ...],
-                  question: str = "") -> list[Section]:
+                  question: str = "", skip: tuple[str, ...] | None = None) -> list[Section]:
     """The shared core (spec 5.1): the project page(s), the section of the
     process overview that defines the phases and gates, the rows of the
     abbreviations table the question uses, and the Definition of every task
     active in a phase the question names. In that order; the packing caps
-    it at ``CORE_SHARE`` of the budget."""
+    it at ``CORE_SHARE`` of the budget. The project page's sections under
+    a heading in ``skip`` (spec 5.4, decision 10: the vehicle concepts and
+    the awarded volumes) are left out; they stay choosable."""
     pinned = {n.relative for n in _pinned(notes, projects)}
-    core = [s for s in prepared.sections if s.relative in pinned]
+    skip = CORE_SKIP_HEADINGS if skip is None else skip
+    core = [s for s in prepared.sections if s.relative in pinned and not _skipped_heading(s.heading, skip)]
     core += [s for s in prepared.sections if s.heading.lower() == _GATE_SECTION and s.note.kind == "process"]
     abbreviations = abbreviation_rows(notes, question)
     if abbreviations is not None:
@@ -986,14 +1010,15 @@ def gather_for_members(
     budget; ``exclude`` ids are never sent. ``picks`` is the model's
     choice per member (``{"full": [ids], "brief": [ids], "reasons": {id:
     why}}``, ``picker.pick``): its full picks lead the queue, its brief
-    picks lead the brief tier. The vault is read once. No source
-    configured: empty selections."""
+    picks lead the brief tier; ``exclusive`` (default: a non-empty
+    ``full``) makes them the whole block (spec 5.3). The vault is read
+    once. No source configured: empty selections."""
     vault, chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
     budget = int(token_budget or _config_value(config, "knowledge.token_budget") or DEFAULT_TOKEN_BUDGET)
     result: dict[str, KnowledgeSelection] = {}
     prepared = _Prepared.of(notes) if vault is not None else None      # split and lower-case the vault once
     phases = question_phases(question)
-    core = core_sections(prepared, notes, chosen, phases, question) if prepared is not None else []
+    core = core_sections(prepared, notes, chosen, phases, question, core_skip_headings(config)) if prepared is not None else []
     expanded = expand_terms(query_terms(question), question, notes) if prepared is not None else []
     for member, terms in member_terms.items():
         if vault is None:
@@ -1003,11 +1028,84 @@ def gather_for_members(
         selection = select_sections(notes, question, budget, extra_terms=tuple(terms), extra=extra, exclude=exclude,
                                     prepared=prepared, member=member, phases=phases, core=core, projects=chosen, terms=expanded,
                                     preferred=tuple(pick.get("full") or ()), brief_first=tuple(pick.get("brief") or ()),
-                                    reasons=dict(pick.get("reasons") or {}), exclusive=bool(pick.get("full")))
+                                    reasons=dict(pick.get("reasons") or {}),
+                                    exclusive=bool(pick.get("exclusive", bool(pick.get("full")))))
         selection.vault_path = vault
         selection.project = ", ".join(chosen) if chosen else None
         result[member] = selection
     return result
+
+
+def gather_pages(config: dict, paths: list[str], *, token_budget: int, projects=None,
+                 include_roles: bool = True) -> KnowledgeSelection:
+    """The block of the second pass (spec 5.4, decision 8): the named pages,
+    whole, in the order given, packed into ``token_budget`` - no core, no
+    ranking, no one-line tier. A page that does not fit whole stays out
+    and is listed in ``left``; a name that is not a page of the vault is
+    ignored here (the caller resolved the names). No source configured:
+    an empty selection."""
+    vault, chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
+    selection = KnowledgeSelection(vault_path=vault, total_notes=len(notes), picked_by="model")
+    if vault is None:
+        return selection
+    selection.project = ", ".join(chosen) if chosen else None
+    by_path = {note.relative: note for note in notes}
+    remaining = token_budget - estimate_tokens("## Knowledge from the vault\n\n")
+    parts: list[str] = []
+    for path in paths:
+        note = by_path.get(path)
+        if note is None:
+            continue
+        sections = split_sections(note)
+        chunks = [f"{_label(sec)}\n{sec.body}\n\n" for sec in sections]
+        cost = estimate_tokens("".join(chunks))
+        if cost > remaining:
+            selection.left.append(path)
+            continue
+        remaining -= cost
+        parts.append("".join(chunks))
+        selection.notes.append(note)
+        selection.sections.extend(sections)
+        selection.sent[path] = "".join(sec.body + "\n" for sec in sections)
+    if parts:
+        selection.own_text = "## Pages read for the second pass\n\n" + "".join(parts).rstrip()
+        selection.text = "## Knowledge from the vault\n\n" + selection.own_text
+        selection.own_tokens = estimate_tokens(selection.own_text)
+        selection.tokens = estimate_tokens(selection.text)
+    return selection
+
+
+def resolve_page_names(config: dict, names: list[str], projects=None, *, include_roles: bool = True) -> tuple[list[str], int]:
+    """The vault paths the model's page names stand for (spec 5.4,
+    decision 7): a path as listed, or a file name that is unique in the
+    vault, with or without ``.md``; anything else is dropped and counted."""
+    vault, _chosen, notes = _knowledge_notes(config, projects, include_roles=include_roles)
+    if vault is None:
+        return [], len(names)
+
+    def key(path: str) -> str:
+        low = path.replace("\\", "/").strip().strip("[]").lower()
+        return low[:-3] if low.endswith(".md") else low
+
+    by_key: dict[str, str] = {}
+    by_name: dict[str, list[str]] = {}
+    for note in notes:
+        k = key(note.relative)
+        by_key[k] = note.relative
+        by_name.setdefault(k.rsplit("/", 1)[-1], []).append(note.relative)
+    found: list[str] = []
+    dropped = 0
+    for name in names:
+        k = key(str(name))
+        path = by_key.get(k)
+        if path is None:
+            same = by_name.get(k.rsplit("/", 1)[-1]) or []
+            path = same[0] if len(same) == 1 else None
+        if path is None:
+            dropped += 1
+        elif path not in found:
+            found.append(path)
+    return found, dropped
 
 
 CANDIDATES_PER_MEMBER = 40
@@ -1023,7 +1121,7 @@ def candidates(config: dict, question: str, member_terms: dict[str, list[str] | 
         return {m: [] for m in member_terms}
     prepared = _Prepared.of(notes)
     phases = question_phases(question)
-    core = core_sections(prepared, notes, chosen, phases, question)
+    core = core_sections(prepared, notes, chosen, phases, question, core_skip_headings(config))
     core_ids = {section_id(s) for s in core}
     expanded = expand_terms(query_terms(question), question, notes)
     result: dict[str, list[dict[str, Any]]] = {}

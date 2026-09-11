@@ -24,6 +24,25 @@ MAX_BRIEF = 20      # one-line pages per member
 MAX_CHOSEN = 300    # the 5.3 choice from the whole table of contents: the budget caps it, this only stops a runaway
 MARKER = "## Candidate sections"     # what the statistics route on
 AGENT_NAME = "Ask the vault"         # how the nameless chooser of Ask the vault is called in the prompt
+MAX_HISTORY_CHARS = 12000            # spec 5.4, decision 1: the chooser sees the thread as the answering call does
+
+
+def history_lines(history: list[tuple[str, str]] | None, max_chars: int = MAX_HISTORY_CHARS) -> list[str]:
+    """The earlier questions and answers of a thread as prompt lines, the
+    latest turns surviving when the thread is longer than ``max_chars``
+    (spec 5.4, decision 1: the chooser saw 600 characters of each answer
+    and could not see what "the tasks you listed" pointed at)."""
+    if not history:
+        return []
+    budget = max_chars
+    kept: list[str] = []
+    for asked, answered in reversed(history):
+        chunk = f"Q: {asked.strip()}\nA: {answered.strip()}"
+        if len(chunk) > budget and kept:
+            break
+        kept.append(chunk[:budget])
+        budget -= len(chunk)
+    return list(reversed(kept))
 
 
 @dataclass
@@ -116,16 +135,21 @@ def pick(provider: AiProvider, question: str, members: dict[str, str],
 # -- spec 5.3: the model chooses from the whole table of contents ------------
 
 def choose_prompt(question: str, members: dict[str, str], pages: list[dict[str, Any]], *, trimmed: bool = False,
-                  history: list[tuple[str, str]] | None = None) -> str:
+                  history: list[tuple[str, str]] | None = None, read_before: list[str] | None = None) -> str:
     """``members`` maps a member's name to one line on what it judges; the
     empty name is Ask the vault's one agent. ``pages`` is
-    ``knowledge.contents(...)["pages"]``."""
+    ``knowledge.contents(...)["pages"]``. ``read_before`` are the pages the
+    thread has read so far (spec 5.4, decision 2): kept for this question
+    unless the chooser drops them."""
     from programmind.knowledge.knowledge import contents_lines
     lines = [load_prompt("knowledge_choose"), "", "## Question", "", question.strip(), ""]
     if history:
-        lines += ["## Earlier in this thread", ""]
-        for asked, answered in history[-3:]:
-            lines += [f"Q: {asked.strip()}", f"A: {answered.strip()[:600]}"]
+        lines += ["## Earlier in this thread", ""] + history_lines(history) + [""]
+    if read_before:
+        lines += ["## Pages already read in this thread", "",
+                  "These pages were read for earlier questions and stay with the thread: they are read again for "
+                  "this question unless you name them in `drop`. Name one in `read` to have it read first.", ""]
+        lines += [f"- {path}" for path in read_before]
         lines.append("")
     lines += ["## Members", ""]
     for member, line in members.items():
@@ -146,7 +170,10 @@ def parse_choice(text: str, members: dict[str, str], pages: list[dict[str, Any]]
     """The model's choice with Python's checks applied (5.3, decision 5):
     an id or a page must exist, a rule must match a page, everything else
     is dropped and counted. The picks come back as ``full`` in the model's
-    order, pages and rules expanded to paths; ``brief`` stays empty."""
+    order, pages and rules expanded to paths; ``brief`` stays empty.
+    ``drop`` (spec 5.4, decision 2) is the kept pages the chooser lets go,
+    as paths, with its reasons under ``drop_reasons``; the caller applies
+    it to the thread's kept list, never to the picks."""
     from programmind.knowledge.knowledge import expand_rules
     try:
         data = json.loads(text)
@@ -193,20 +220,34 @@ def parse_choice(text: str, members: dict[str, str], pages: list[dict[str, Any]]
             key = str(key).strip()
             if key in chosen and str(why).strip():
                 reasons[key] = str(why).strip()
-        result.picks[member] = {"full": chosen[:MAX_CHOSEN], "brief": [], "reasons": reasons}
+        drop: list[str] = []
+        drop_reasons: dict[str, str] = {}
+        for value in (item.get("drop") if isinstance(item.get("drop"), list) else []):
+            if isinstance(value, dict):
+                path, why = str(value.get("path") or value.get("page") or "").strip(), str(value.get("why") or "").strip()
+            else:
+                path, why = str(value).strip(), ""
+            if path and path not in drop:
+                drop.append(path)
+                if why:
+                    drop_reasons[path] = why
+        result.picks[member] = {"full": chosen[:MAX_CHOSEN], "brief": [], "reasons": reasons,
+                                "drop": drop, "drop_reasons": drop_reasons}
     for member in members:
-        result.picks.setdefault(member, {"full": [], "brief": [], "reasons": {}})
+        result.picks.setdefault(member, {"full": [], "brief": [], "reasons": {}, "drop": [], "drop_reasons": {}})
     if not result.ok:
         result.error = "the choice named nothing that is in the vault"
     return result
 
 
 def choose(provider: AiProvider, question: str, members: dict[str, str], pages: list[dict[str, Any]], *,
-           trimmed: bool = False, history: list[tuple[str, str]] | None = None) -> PickResult:
+           trimmed: bool = False, history: list[tuple[str, str]] | None = None,
+           read_before: list[str] | None = None) -> PickResult:
     """The one choosing call (5.3). A bad answer never raises: the result
     says why the word ranking stays in force. A provider failure raises,
     as every other call's does."""
-    ai_result = provider.complete(TASK_BOARD, choose_prompt(question, members, pages, trimmed=trimmed, history=history))
+    ai_result = provider.complete(TASK_BOARD, choose_prompt(question, members, pages, trimmed=trimmed, history=history,
+                                                            read_before=read_before))
     result = parse_choice(ai_result.text, members, pages)
     result.ai_result = ai_result
     return result

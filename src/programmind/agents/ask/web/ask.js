@@ -89,16 +89,33 @@
       ? `<ul>${t.sources.map((s) => `<li><a href="${obsidianLink(s.path)}" title="Open in Obsidian">${esc(s.path)}</a>${s.heading ? ` · ${esc(s.heading)}` : ""}${s.brief ? ' <span class="brief-tag" title="Only its one-line summary was sent">summary only</span>' : ""}${s.why ? ` <span class="why">${esc(s.why)}</span>` : ""}</li>`).join("")}</ul>`
       : "<span class='muted'>no page named</span>";
     const dropped = t.dropped ? `<p class="muted small">${t.dropped} source(s) the model named were not among the pages sent and were dropped.</p>` : "";
-    const gaps = (t.gaps || []).length ? `<dt>Not in the vault</dt><dd class="gaps"><ul>${t.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></dd>` : "";
+    // Spec 5.4, decision 6: a gap says the pages sent did not hold it, not that the vault does not.
+    const gaps = (t.gaps || []).length ? `<div class="gaps"><span class="gaps-title">Not in the pages read</span><ul>${t.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : "";
     const hint = t.decision_question ? `<p class="hint-board muted">This reads like a decision. <a href="/board" class="to-board">Put it to the Board</a> for an assessment by every swim lane.</p>` : "";
     const parse = t.parse_error ? `<p class="error small">${esc(t.parse_error)}; the text is shown as it came.</p>` : "";
-    const fresh = (t.new_pages || []).length
-      ? `<p class="fresh-pages small">Read from the vault for this question: ${t.new_pages.map(esc).join(" · ")}</p>` : "";
-    // A thread reads as a conversation (spec 12.2): the question as a bubble,
-    // the answer as a card with its sources under it.
+    // Spec 5.4, decision 5: the sources fold up, and the pages read for the
+    // question sit in the same fold, the kept ones marked.
+    const kept = new Set(t.kept || []);
+    const more = new Set(t.more_pages || []);
+    const read = (t.paths || []).length
+      ? `<p class="read-title">Pages read for this question · ${t.paths.length}${kept.size ? ` · ${kept.size} kept from earlier turns` : ""}${more.size ? ` · ${more.size} in the second pass` : ""}</p>
+         <ul class="read-list">${t.paths.map((p) => `<li>${esc(p)}${kept.has(p) ? ' <span class="kept-tag">kept</span>' : ""}${more.has(p) ? ' <span class="kept-tag">second pass</span>' : ""}</li>`).join("")}</ul>` : "";
+    const second = t.first_answer != null
+      ? `<p class="read-title">Second pass: the model asked for ${(t.missing || []).length} page(s)${(t.more_left || []).length ? `; ${t.more_left.length} did not fit its budget` : ""}${t.missing_dropped ? `; ${t.missing_dropped} name(s) matched no page or were already sent` : ""}.</p>
+         <details class="first-answer"><summary class="muted small">The first answer, before the second pass</summary><div class="a">${md(t.first_answer)}</div></details>` : "";
+    const count = (t.sources || []).length;
     return `<div class="bubble"><div class="q">${esc(t.question)}</div></div>
-      <div class="turn answer"><div class="a">${md(t.answer)}</div>${parse}
-      <dl class="sources"><dt>Sources</dt><dd>${sources}</dd>${gaps}</dl>${fresh}${dropped}${hint}</div>`;
+      <div class="turn answer"><div class="a">${md(t.answer)}</div>${parse}${gaps}
+      <details class="sources-fold"><summary>Sources · ${count} page${count === 1 ? "" : "s"}${(t.paths || []).length ? ` · ${t.paths.length} read` : ""}</summary>
+      <div class="sources">${sources}${dropped}${read}${second}</div></details>${hint}</div>`;
+  }
+
+  // Spec 5.4, decision 9: the steps of the running question, with real numbers.
+  function renderSteps() {
+    const steps = (thread && thread.steps) || [];
+    $("thread-steps").hidden = !steps.length;
+    $("thread-pending-text").hidden = !!steps.length;
+    $("thread-steps").innerHTML = steps.map((s, i) => `<span class="step ${s.state}"><span class="step-mark">${s.state === "done" ? "✓" : i + 1}</span>${esc(s.label)}${s.state === "current" ? "…" : ""}</span>`).join("");
   }
 
   function renderThread() {
@@ -117,9 +134,11 @@
     }
     $("thread-pending").hidden = !thread.busy;
     if (thread.busy) {
+      $("thread-pending-question").textContent = thread.pending_question || "";
       $("thread-pending-text").textContent = thread.phase === "choosing"
-        ? `Reading the table of contents and choosing what to read: ${thread.pending_question || ""}`
-        : `Reading the chosen pages and answering: ${thread.pending_question || ""}`;
+        ? "Reading the table of contents and choosing what to read…"
+        : "Reading the chosen pages and answering…";
+      renderSteps();
     }
     $("thread-form").hidden = closed || thread.busy;
     renderPicksMode();
@@ -160,6 +179,9 @@
       if (thread.picks) parts.push(`The model chose ${thread.picks.full.length} item(s) from the table of contents; its reasons are beside them.`);
       else parts.push(`The model's choice did not come back usable${thread.pick_error ? ` (${thread.pick_error})` : ""}: the word ranking chose instead.`);
       if (thread.pick_dropped) parts.push(`${thread.pick_dropped} pick(s) named nothing in the vault and were dropped.`);
+      const keptCount = (thread.kept || []).length, droppedKept = Object.keys(thread.dropped_kept || {}).length;
+      if (keptCount) parts.push(`${keptCount} page(s) read earlier in this thread are kept.`);
+      if (droppedKept) parts.push(`The model let ${droppedKept} kept page(s) go.`);
       if (thread.contents_trimmed) parts.push("The table of contents was trimmed to fit; a page may be missing.");
       parts.push(`Table of contents: ${fmtNum(thread.contents_tokens)} tokens.`);
       $("thread-picks-status").textContent = parts.join(" ");
@@ -208,18 +230,58 @@
     } catch (err) { setError("thread-close-error", err.message); }
   }
 
+  const MAX_SLIDER = 40000;
+
+  let lastEstimate = null;    // what the last estimate said, for the count of the "not chosen" group
+
+  // Spec 5.4, decision 4: four groups, each folded with a count, and the
+  // budget said out loud (decision 3) with a button that raises the slider.
   function renderAskSections(e) {
+    lastEstimate = e;
     const row = (s) => `
-      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
+      <li><input type="checkbox" data-id="${esc(s.id)}" ${askPicks.exclude.includes(s.id) ? "" : "checked"} title="Untick to leave this out"> ${esc(s.path)}${s.heading ? ` · ${esc(s.heading)}` : ""}${s.core ? ' <span class="core-tag" title="The shared core">core</span>' : ""}${s.kept ? ' <span class="kept-tag" title="Read for an earlier question of this thread">kept</span>' : ""}${s.forced ? ' <span class="forced">your pick</span>' : ""}<span class="tok">${fmtNum(s.tokens)}</span>${s.reason ? `<span class="reason">${esc(s.reason)}</span>` : ""}</li>`;
     // What the model chose that did not fit the slider (5.3, decision 4): shown, unticked; tick to send it on top.
     const overRow = (o) => `
-      <li class="over"><input type="checkbox" data-id="${esc(o.id)}" data-over="1" ${askPicks.extra.includes(o.id) ? "checked" : ""} title="Tick to send it on top of the slider"> ${esc(o.id)} <span class="over-tag">over the budget</span>${o.reason ? `<span class="reason">${esc(o.reason)}</span>` : ""}</li>`;
+      <li class="over"><input type="checkbox" data-id="${esc(o.id)}" data-over="1" ${askPicks.extra.includes(o.id) ? "checked" : ""} title="Tick to send it on top of the slider"> ${esc(o.id)}${o.kept ? ' <span class="kept-tag">kept</span>' : ""} <span class="over-tag">over the budget</span><span class="tok">${fmtNum(o.tokens || 0)}</span>${o.reason ? `<span class="reason">${esc(o.reason)}</span>` : ""}</li>`;
     const briefRow = (b) => `
       <li><input type="checkbox" data-id="${esc(b.path)}" ${askPicks.exclude.includes(b.path) ? "" : "checked"} title="Untick to leave this page out"> ${esc(b.path)} <span class="brief-tag" title="One line, not the page">summary</span>${b.summary ? `<span class="reason">${esc(b.summary)}</span>` : ""}</li>`;
-    const full = (e.sections || []).length ? `<p class="tier">In full <span class="muted small">${fmtNum(e.knowledge_tokens)} tokens · KPI notes ${fmtNum(e.kpi_tokens)} tokens</span></p><ul class="sec-list">${e.sections.map(row).join("")}</ul>` : "<span class='muted'>nothing from the vault</span>";
-    const brief = (e.briefs || []).length ? `<p class="tier">As one line each</p><ul class="sec-list">${e.briefs.map(briefRow).join("")}</ul>` : "";
-    const over = (e.over_budget || []).length ? `<p class="tier">Chosen, but over the budget <span class="muted small">raise the slider, or tick to send on top</span></p><ul class="sec-list">${e.over_budget.map(overRow).join("")}</ul>` : "";
-    $("ask-estimate-notes").innerHTML = full + over + brief;
+    const pages = (rows, key) => new Set(rows.map((r) => (r[key] || "").split("#")[0])).size;
+    const group = (key, title, count, extra, body) => `<details class="group" data-group="${key}" ${openGroups.has(key) ? "open" : ""}><summary><span class="group-title">${title}</span> <span class="count">${count}</span>${extra ? ` <span class="muted small">${extra}</span>` : ""}</summary>${body}</details>`;
+    const chosen = (e.sections || []).filter((s) => !s.kept);
+    const kept = (e.sections || []).filter((s) => s.kept);
+    const over = e.over_budget || [];
+    const who = e.picked_by === "model" ? "Chosen by the model, within the budget" : "By the word ranking, within the budget";
+    let html = group("chosen", who, `${pages(chosen, "path")} page${pages(chosen, "path") === 1 ? "" : "s"}`,
+      `${fmtNum(e.knowledge_tokens)} tokens · KPI notes ${fmtNum(e.kpi_tokens)} tokens on top`,
+      chosen.length ? `<ul class="sec-list">${chosen.map(row).join("")}</ul>` : "<p class='muted small'>Nothing from the vault.</p>");
+    const droppedKept = (thread && thread.dropped_kept) || {};
+    if (kept.length || over.some((o) => o.kept) || Object.keys(droppedKept).length) {
+      const droppedLines = Object.keys(droppedKept).map((p) => `<li class="muted">${esc(p)} <span class="over-tag">let go by the model</span>${droppedKept[p] ? `<span class="reason">${esc(droppedKept[p])}</span>` : ""}</li>`).join("");
+      html += group("kept", "Kept from earlier turns", `${pages(kept, "path")} page${pages(kept, "path") === 1 ? "" : "s"}`, "read again for this question; untick to let one go",
+        `<ul class="sec-list">${kept.map(row).join("")}${droppedLines}</ul>`);
+    }
+    if (over.length) {
+      html += group("over", "Chosen or kept, but over the budget", `${over.length} page${over.length === 1 ? "" : "s"}`, "raise the slider, or tick to send on top",
+        `<ul class="sec-list">${over.map(overRow).join("")}</ul>`);
+    }
+    if ((e.briefs || []).length) {
+      html += group("brief", "Sent as one line each", `${e.briefs.length} page${e.briefs.length === 1 ? "" : "s"}`, "the page's summary, not its text",
+        `<ul class="sec-list">${e.briefs.map(briefRow).join("")}</ul>`);
+    }
+    $("ask-estimate-notes").innerHTML = html;
+    $("ask-estimate-notes").querySelectorAll("details.group").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) openGroups.add(d.dataset.group); else openGroups.delete(d.dataset.group);
+    }));
+    // The budget, said out loud (spec 5.4, decision 3).
+    const banner = $("ask-budget-banner");
+    if (over.length) {
+      const needed = e.budget_needed || 0;
+      const fits = needed <= MAX_SLIDER;
+      banner.hidden = false;
+      banner.innerHTML = `${over.length} page${over.length === 1 ? "" : "s"} of the choice ${over.length === 1 ? "does" : "do"} not fit the slider. <button type="button" class="small-btn" id="btn-raise-budget">${fits ? `Raise the slider to ${fmtNum(needed)} tokens` : `Raise the slider to the top, ${fmtNum(MAX_SLIDER)} tokens`}</button>${fits ? "" : ` <span class="muted small">About ${fmtNum(needed - MAX_SLIDER)} tokens would still not fit: tick those pages to send them on top.</span>`}`;
+      $("btn-raise-budget").addEventListener("click", () => { $("ask-budget").value = Math.min(needed, MAX_SLIDER); requestAskEstimate(); });
+    } else { banner.hidden = true; banner.innerHTML = ""; }
+    renderNotChosenCount();
     $("ask-estimate-notes").querySelectorAll("input").forEach((box) => box.addEventListener("change", () => {
       const id = box.dataset.id;
       if (box.dataset.over) {
@@ -233,7 +295,18 @@
     }));
   }
 
+  const openGroups = new Set();     // which of the folded groups Alex has opened, kept across estimates
+
+  function renderNotChosenCount() {
+    if (!askOutlineCache) return;
+    const e = lastEstimate || {};
+    const shown = new Set([...(e.sections || []).map((s) => s.path), ...(e.over_budget || []).map((o) => o.id.split("#")[0]), ...(e.briefs || []).map((b) => b.path)]);
+    const rest = askOutlineCache.filter((n) => !shown.has(n.path)).length;
+    $("ask-not-chosen-count").textContent = `${rest} page${rest === 1 ? "" : "s"}`;
+  }
+
   function renderAskOutline() {
+    renderNotChosenCount();
     const filter = ($("ask-outline-filter").value || "").toLowerCase();
     const rows = (askOutlineCache || []).map((note) => {
       const secs = note.sections.filter((s) => !filter || note.path.toLowerCase().includes(filter) || (s.heading || "").toLowerCase().includes(filter));
@@ -266,7 +339,7 @@
         const learned = e.overhead_learned_from ? `overhead of ${fmtNum(e.overhead_per_call)} learned from ${e.overhead_learned_from} real call(s) of this thread` : `overhead of ${fmtNum(e.overhead_per_call)} assumed until the first real call`;
         const forced = e.forced_tokens ? ` · <strong>${fmtNum(e.forced_tokens)} tokens</strong> from your picks on top of the slider` : "";
         const who = e.picked_by === "model" ? "the model's choice" : "the word ranking";
-        $("ask-estimate").innerHTML = `<strong>${inPicks() ? "1 more model call" : "2 model calls"}</strong>, the read about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · pages by ${who} · ${esc(learned)} · tokens are an estimate, the call count is exact`;
+        $("ask-estimate").innerHTML = `<strong>${inPicks() ? "1 more model call, 2 if the answer asks for pages" : "2 model calls, 3 if the answer asks for pages"}</strong>, the read about <strong>${fmtNum(e.tokens_in)} tokens in</strong>${forced} · pages by ${who} · ${esc(learned)} · tokens are an estimate`;
         renderAskSections(e);
         if (e.outline) { askOutlineCache = e.outline; renderAskOutline(); }
       } catch (err) {

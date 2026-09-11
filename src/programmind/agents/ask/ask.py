@@ -29,12 +29,14 @@ from programmind.knowledge.knowledge import (
     KPI_STALE_DAYS, KPI_TOKEN_CAP, _CHARS_PER_TOKEN, _config_value, _freshness, _project_list, _roles_inside,
     active_projects, for_project, load_vault,
 )
+from programmind.knowledge.picker import MAX_HISTORY_CHARS, history_lines
 
 KIND = "ask"                              # the ``kind`` of this agent's records in the history folder
 MARKER = "## Question to the vault"       # the line the statistics recognise an ask call by
+MARKER_SECOND = "## What you asked for"   # ... and the second pass (spec 5.4, decision 8) by
 DEFAULT_TOKEN_BUDGET = 12000              # ``ask.token_budget``: twice a member's, there is only one call
-MAX_HISTORY_CHARS = 12000                 # of earlier questions and answers carried into a call
 MAX_ANSWER_CHARS = 8000
+MAX_MISSING = 20                          # pages the model may ask for in one answer (spec 5.4, decision 7)
 
 
 @dataclass
@@ -44,29 +46,32 @@ class Answer:
     gaps: list[str] = field(default_factory=list)
     dropped: int = 0                                               # sources named that were not sent
     decision_question: bool = False
+    missing: list[str] = field(default_factory=list)              # pages the model asked for (spec 5.4), as named
     ai_result: AiResult | None = None
     parse_error: str | None = None
 
 
 def ask_prompt(question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
-               project: str = "") -> str:
-    """The one prompt: instructions, the thread so far, the question, the
-    knowledge block, the KPI notes."""
+               project: str = "", *, read_before: list[str] | None = None, first_answer: "Answer | None" = None,
+               more_text: str = "") -> str:
+    """The one prompt: instructions, the thread so far, the pages read for
+    it, the question, the knowledge block, the KPI notes. The second pass
+    (spec 5.4, decision 8) carries the first answer and the pages the model
+    asked for under ``MARKER_SECOND`` instead of the first pass's block."""
     lines = [load_prompt("ask"), ""]
     if project:
         lines += [f"Project: {project}", ""]
     if history:
-        lines += ["## Earlier in this thread", ""]
-        budget = MAX_HISTORY_CHARS
-        kept: list[str] = []
-        for asked, answered in reversed(history):        # the latest turns survive when the thread is long
-            chunk = f"Q: {asked.strip()}\nA: {answered.strip()}"
-            if len(chunk) > budget and kept:
-                break
-            kept.append(chunk[:budget])
-            budget -= len(chunk)
-        lines += list(reversed(kept)) + [""]
+        lines += ["## Earlier in this thread", ""] + history_lines(history, MAX_HISTORY_CHARS) + [""]
+    if read_before:
+        lines += ["## Pages read earlier in this thread", ""] + [f"- {path}" for path in read_before] + [""]
     lines += [MARKER, "", question.strip(), ""]
+    if first_answer is not None:
+        lines += ["## Your first answer", "", first_answer.answer.strip() or "(empty)", ""]
+        if first_answer.gaps:
+            lines += ["Gaps you named: " + "; ".join(first_answer.gaps), ""]
+        lines += [MARKER_SECOND, "", more_text.strip() or "(none of the pages you named could be read)", ""]
+        return "\n".join(lines)
     if kpi_text:
         lines += ["## KPI notes of the project", "", kpi_text, ""]
     if knowledge_text:
@@ -129,15 +134,41 @@ def parse_answer(text: str, sent: dict[str, str], briefs: dict[str, str] | None 
     if isinstance(gaps, str):
         gaps = [g.strip("- ").strip() for g in gaps.splitlines()]
     gaps = [str(g).strip() for g in (gaps or []) if str(g).strip()][:10]
+    missing_raw = data.get("missing")
+    if isinstance(missing_raw, str):
+        missing_raw = [missing_raw]
+    missing: list[str] = []
+    for item in (missing_raw if isinstance(missing_raw, list) else []):
+        name = str(item.get("path") or "") if isinstance(item, dict) else str(item)
+        name = name.strip()
+        if name and name not in missing:
+            missing.append(name)
     return Answer(answer=str(data.get("answer") or "").strip()[:MAX_ANSWER_CHARS], sources=sources, gaps=gaps,
-                  dropped=dropped, decision_question=bool(data.get("decision_question")))
+                  dropped=dropped, decision_question=bool(data.get("decision_question")), missing=missing[:MAX_MISSING])
 
 
 def ask(provider: AiProvider, question: str, knowledge_text: str, kpi_text: str, history: list[tuple[str, str]],
-        sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "") -> Answer:
+        sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "", *,
+        read_before: list[str] | None = None) -> Answer:
     """One call. Raises whatever the provider raises."""
-    ai_result = provider.complete(TASK_BOARD, ask_prompt(question, knowledge_text, kpi_text, history, project))
+    ai_result = provider.complete(TASK_BOARD, ask_prompt(question, knowledge_text, kpi_text, history, project,
+                                                         read_before=read_before))
     answer = parse_answer(ai_result.text, sent, briefs)
+    answer.ai_result = ai_result
+    return answer
+
+
+def ask_again(provider: AiProvider, question: str, first: Answer, more_text: str, history: list[tuple[str, str]],
+              sent: dict[str, str], briefs: dict[str, str] | None = None, project: str = "", *,
+              read_before: list[str] | None = None) -> Answer:
+    """The second pass (spec 5.4, decision 8): the first answer and the
+    pages it asked for, one more call. ``sent`` is the pages of both
+    passes, so a source from either checks out; a ``missing`` list in this
+    answer is dropped."""
+    ai_result = provider.complete(TASK_BOARD, ask_prompt(question, "", "", history, project, read_before=read_before,
+                                                         first_answer=first, more_text=more_text))
+    answer = parse_answer(ai_result.text, sent, briefs)
+    answer.missing = []
     answer.ai_result = ai_result
     return answer
 

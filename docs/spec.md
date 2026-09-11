@@ -327,6 +327,44 @@ The choosing call is counted in the statistics as "knowledge pick", for
 either agent. The board's pick answers in the shape of 5.1 (`full`,
 `brief`) or of 5.3 (`read`); both are understood.
 
+### 5.4 Follow-ups, sticky pages and the second pass
+
+**Decided 11 September 2026, after the third day of use.** Two questions
+in one thread showed the weak spots of 5.3. The first, "which VPDS tasks
+is [a named person] responsible for", was answered well: the chooser took
+the role page and that role's tasks. The follow-up, "list the exact
+wording of the tasks you listed", went wrong twice over. The chooser saw
+only the first 600 characters of each earlier answer, so "the tasks you
+listed" pointed at text it could not see, and it chose two pages. And the
+slider could not hold twenty task pages, so the chosen pages fell out of
+the budget and the answer said the pages "were sent only as summaries",
+which the screen had not made plain. Eleven decisions, agreed one by one
+in an interview, and one concept chosen over another.
+
+| # | Decision |
+|---|---|
+| 1 | **The chooser remembers the thread the way the answering call does.** Its prompt carries the earlier questions and answers within the same limit as the answering call (12,000 characters, the latest turns surviving when the thread is long), never a 600-character cut. It also carries the list of pages the thread has read so far. Its instructions say: when the question points back at what the last answer listed ("the tasks you listed", "each of them"), read in full the pages that answer drew on. |
+| 2 | **Sticky pages (Concept B).** A page read in full once in a thread stays with the thread: it is offered to the chooser as already read, it is read again for every later question unless the chooser drops it or Alex unticks it, and the answering call gets it again. The chooser may drop a kept page it no longer needs, with a reason, and may name a kept page in its own list to read it first. When the choosing call fails, every earlier page is kept. Kept pages queue behind the chooser's own picks and before nothing else; the budget cuts them like any other pick. The alternative, Concept A - one OpenCode session per thread so the model keeps its own context - was rejected: replaying a session costs the same tokens as sending the pages again, a deleted thread would have to be deleted through OpenCode's API as well, the board's isolation of members contradicts one session, and the coding agent's own system prompt would sit under every call. |
+| 3 | **The budget is stated out loud.** When chosen or kept pages do not fit the slider, the picks screen says so in one line - "N pages of the choice do not fit the slider" - with a button that raises the slider to exactly the figure that fits them, rounded to the slider's step. Above the slider's top the line says how much would still be missing. The over-budget rows stay where 5.3 put them. |
+| 4 | **The picks screen is four groups, each collapsed with a count**: chosen by the model and within the budget (the core and Alex's own picks among them); kept from earlier turns (only when the thread has earlier turns); chosen or kept but over the budget; not chosen, the rest of the vault with the search box. Nothing is read from the fourth group unless Alex ticks it. |
+| 5 | **The answer card folds its sources.** "Sources" is a collapsed dropdown under the answer, with the pages the model cited and, inside the same dropdown, the pages read for this question and which of them were kept from earlier turns. The line "Read from the vault for this question" goes from the answer card; the record stays in the dropdown. The board keeps its line (5.2, decision 6), as nothing else on a board turn lists pages. |
+| 6 | **"Not in the vault" becomes "Not in the pages read".** A gap says that the pages sent did not hold it, which is all the model can know; the page may well be in the vault and not chosen. |
+| 7 | **The answering call may ask for pages once.** Its JSON gains `missing`: pages it needed and did not get in full - a page it saw as a one-line summary, a page an earlier answer of the thread drew on, a page it knows by name. Python resolves the names against the vault (path or file name, as it checks sources), drops what does not exist or was already sent in full, and counts what it dropped. Pages only, never a search. |
+| 8 | **The second pass runs by itself, once per question, with its own budget.** The missing pages are read within a budget equal to the slider, not a share of it, and the model is called again with its first answer, the earlier turns, the question and those pages - not the first pages again: the first answer stands for them. The second answer replaces the first on the card; the first is kept on the record. A `missing` list in the second answer is ignored. Sources of the final answer are checked against the pages of both passes. |
+| 9 | **The steps are shown with real numbers.** While a question runs the thread shows its steps and which one it is on: looking through the table of contents; the picks screen; reading N notes; writing the answer; and, when the model asked for more, reading M more notes; writing the final answer. Reading is Python's step and is done the moment the call starts, so "writing" is the step that waits; the count is the pages sent in full. The card stands in for the spinner's one line. The turn names the pages the second pass read. |
+| 10 | **The core skips two sections of the project page**: the vehicle concepts and the awarded volumes. They are long, they change the answer to almost no question, and they took the core's share of every budget. `knowledge.core_skip_headings` names the headings (matched without regard to case, by their start), default "Vehicle concepts" and "Awarded volumes". The sections stay in the table of contents and the outline, so the chooser or Alex can still read them. |
+| 11 | **The statistics count the second pass as its own call**, "ask the vault, second pass". The estimate on the picks screen says "1 or 2 more model calls": whether the second runs is the model's to decide. |
+
+**Built 11 September 2026** in `picker.choose_prompt` and `parse_choice`
+(the history block, the pages already read, `drop`), `ask.ask_prompt`
+(`missing`, the second-pass prompt with `## What you asked for`),
+`knowledge.core_sections` (the skip list), `knowledge.gather_pages` (the
+second pass's block), the server (the `kept` list on the session and the
+turn, the `reading_more` phase, the steps in the snapshot, the second
+pass in `_ask`), the thread page (four groups, the budget line and its
+button, the folded sources, the step card) and the walk. The chooser's
+`drop` is applied to the kept list, never to its own picks.
+
 ## 6. Audit trail
 
 Every completed board run is logged, whether or not the follow-up loop that

@@ -28,12 +28,20 @@ config_path.write_text(json.dumps(config))
 
 class Slow(AiProvider):
     def complete(self, task, prompt):
-        if "## Question to the vault" in prompt:
+        if "## What you asked for" in prompt:
+            # The second pass (spec 5.4, decision 8): the first answer completed with the pages asked for.
+            time.sleep(1.0)
+            text = json.dumps({"answer": "**Design freeze** is the milestone before the DV build.\n\n- The housing tooling at supplier X is six weeks late, so the freeze is at risk.\n- Lessons learned: book the EMC chamber twelve weeks ahead of DV, or the freeze is followed by a test gap.",
+                               "sources": [{"path": "Suppliers/Housing tooling.md", "heading": "", "why": "the tooling delay"}, {"path": "Lessons learned.md", "heading": "EMC chamber booking", "why": "the booking lead time"}],
+                               "gaps": ["the date of the design freeze for this project"], "missing": ["Budget 2026.md"], "decision_question": False})
+        elif "## Question to the vault" in prompt:
             time.sleep(1.0)
             later = "## Earlier in this thread" in prompt
             text = json.dumps({"answer": ("**Design freeze** is the milestone before the DV build.\n\n- The housing tooling at supplier X is six weeks late, so the freeze is at risk.\n- In general, not from the vault: a freeze slips when a supplier tool is not qualified." if not later else "The Program Lead approves it, with the swim lane project managers.\n\n- Nothing in the vault names a date for this project."),
                                "sources": [{"path": "Suppliers/Housing tooling.md", "heading": "", "why": "the tooling delay"}, {"path": "Projects/Dual DCDC.md", "heading": "", "why": "the project page"}, {"path": "Invented/Page.md", "heading": "", "why": "made up"}],
-                               "gaps": ["the date of the design freeze for this project"] if not later else [], "decision_question": later})
+                               "gaps": ["the date of the design freeze for this project"] if not later else [],
+                               "missing": [] if later else ["Lessons learned.md", "Nowhere.md"],     # the first question asks for a page it did not get
+                               "decision_question": later})
         elif "## Candidate sections" in prompt:
             # The choice from the table of contents (spec 5.3): the pages whose line shares a
             # word with the question, the tooling page always, plus the summaries of two more.

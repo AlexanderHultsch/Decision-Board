@@ -430,12 +430,28 @@ legend { padding: 0 var(--s1); font-size: var(--fs-help); font-weight: 600; colo
 .turn .sources dd { margin: var(--s1) 0 0; white-space: normal; }
 .turn .sources ul { margin: 0; padding-left: 1.1rem; }
 .turn .sources .why { color: var(--muted); }
-.turn .gaps { color: var(--warn); }
+.turn .gaps { margin-top: var(--s3); color: var(--warn); font-size: var(--fs-help); }
+.turn .gaps-title { display: block; font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.turn .gaps ul { margin: var(--s1) 0 0; padding-left: 1.1rem; }
+/* Spec 5.4, decision 5: the sources fold up under the answer. */
+.turn .sources-fold { margin-top: var(--s3); padding-top: var(--s2); border-top: 1px dashed var(--line); font-size: var(--fs-help); }
+.turn .sources-fold > summary { color: var(--muted); cursor: pointer; }
+.turn .sources-fold > summary:hover { color: var(--text); }
+.turn .sources-fold .sources { margin-top: var(--s2); }
+.turn .read-title { margin: var(--s3) 0 var(--s1); font-size: .7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.turn .read-list { margin: 0; padding-left: 1.1rem; color: var(--muted); }
+.turn .first-answer { margin-top: var(--s2); }
+.turn .first-answer summary { cursor: pointer; }
+.turn .first-answer .a { margin-top: var(--s2); padding: var(--s2) var(--s3); background: var(--bg); border-radius: var(--r); }
+.kept-tag { display: inline-block; padding: 0 var(--s2); font-size: .7rem; color: var(--accent); background: var(--accent-soft); border-radius: var(--r-pill); }
 .turn .hint-board { margin-top: var(--s2); font-size: var(--fs-help); }
 .bubble { max-width: min(46rem, 90%); margin-left: auto; padding: var(--s2) var(--s4); color: var(--accent-ink);
   background: var(--accent); border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg); }
 .bubble .q { margin: 0; font-weight: 500; }
 .fresh-pages { position: relative; margin: var(--s2) 0 0; padding-left: 1.1rem; color: var(--muted); }
+/* The steps of a running question (spec 5.4, decision 9) in the pending card */
+.ask-steps { justify-content: center; margin: var(--s2) 0 var(--s3); }
+#thread-pending .picks-question { margin-bottom: var(--s2); }
 .fresh-pages::before { content: "+"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
 
 /* The picks screen of Ask the vault (spec 5.3) */
@@ -444,6 +460,15 @@ legend { padding: 0 var(--s1); font-size: var(--fs-help); font-weight: 600; colo
 .picks-head .eyebrow { margin-top: 0; }
 .picks-question { font-weight: 600; margin-bottom: var(--s1); }
 .estimate-detail .sec-list li.over { opacity: .7; }
+/* Spec 5.4, decision 4: the groups of the picks screen, folded with a count */
+.estimate-detail details.group { margin: var(--s2) 0; padding: var(--s2) var(--s3); background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--r); }
+.estimate-detail details.group > summary { cursor: pointer; font-size: var(--fs-help); color: var(--text); }
+.estimate-detail details.group > summary .group-title { font-weight: 600; }
+.estimate-detail details.group > summary .count { display: inline-block; margin-left: var(--s1); padding: 0 var(--s2);
+  color: var(--accent); background: var(--accent-soft); border-radius: var(--r-pill); font-variant-numeric: tabular-nums; }
+.estimate-detail details.group[open] > summary { margin-bottom: var(--s1); }
+#ask-budget-banner button { margin-left: var(--s2); }
 .estimate-detail .sec-list .over-tag { font-size: .72rem; color: var(--warn); }
 
 /* The knowledge slider, estimate and outline */

@@ -442,3 +442,77 @@ class TestPicker(unittest.TestCase):
         prompt = picker.pick_prompt("Q?", {"Hardware": "the chips"}, cands)
         self.assertIn(picker.MARKER, prompt)
         self.assertIn("- id: A.md#One | A.md - One | 10 tokens", prompt)
+
+
+class TestFollowUpRound(unittest.TestCase):
+    """Spec 5.4: the core skips the vehicle concepts and the awarded
+    volumes, the second pass has a block of its own, the chooser sees the
+    thread and the pages read, and may drop a kept page."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        (self.vault / "Projects").mkdir()
+        (self.vault / "Projects" / "Dual DCDC.md").write_text(
+            "---\nkind: project\nprojects: [Dual DCDC]\n---\n# Dual DCDC\n\n## Overview\n\nSOP 2028.\n\n## Vehicle concepts\n\n"
+            + "Concept lines. " * 200 + "\n\n## Awarded volumes (2026)\n\n" + "Volumes. " * 200 + "\n\n## Gates\n\nMG3 in March.\n",
+            encoding="utf-8")
+        (self.vault / "Tasks").mkdir()
+        (self.vault / "Tasks" / "EMC.md").write_text("---\nkind: process\nprojects: [Dual DCDC]\n---\n# EMC\n\nBook the chamber.\n", encoding="utf-8")
+        (self.vault / "Tasks" / "DV testing.md").write_text("---\nkind: process\nprojects: [Dual DCDC]\n---\n# DV testing\n\n" + "Run the tests. " * 300 + "\n", encoding="utf-8")
+        self.config = {"knowledge": {"vault_path": str(self.vault), "project": "Dual DCDC", "token_budget": 4000}}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_core_skips_the_configured_headings_and_they_stay_choosable(self):
+        emc = {"": {"full": ["Tasks/EMC.md"], "reasons": {}}}             # the model's choice: the core comes with it, nothing else
+        sel = knowledge.gather_for_members(self.config, "When is MG3?", {"": []}, token_budget=4000, picks=emc)[""]
+        headings = [s.heading for s in sel.sections if s.relative == "Projects/Dual DCDC.md"]
+        self.assertIn("Gates", headings)
+        self.assertNotIn("Vehicle concepts", headings)
+        self.assertNotIn("Awarded volumes (2026)", headings)               # matched by its start, any case
+        self.assertNotIn("Projects/Dual DCDC.md#Vehicle concepts", sel.core_ids)
+        picked = knowledge.gather_for_members(self.config, "What are the vehicle concepts?", {"": []}, token_budget=4000,
+                                              picks={"": {"full": ["Projects/Dual DCDC.md#Vehicle concepts"], "reasons": {}}})[""]
+        self.assertIn("Vehicle concepts", [s.heading for s in picked.sections])   # still choosable
+        config = {"knowledge": dict(self.config["knowledge"], core_skip_headings=[])}
+        sel = knowledge.gather_for_members(config, "When is MG3?", {"": []}, token_budget=4000, picks=emc)[""]
+        self.assertIn("Vehicle concepts", [s.heading for s in sel.sections])
+        self.assertEqual(knowledge.core_skip_headings({"knowledge": {"core_skip_headings": "Vehicle concepts, Volumes"}}),
+                         ("Vehicle concepts", "Volumes"))
+
+    def test_gather_pages_reads_the_named_pages_whole_within_its_budget(self):
+        sel = knowledge.gather_pages(self.config, ["Tasks/EMC.md", "Tasks/DV testing.md", "Nowhere.md"], token_budget=300)
+        self.assertEqual(sorted(sel.sent), ["Tasks/EMC.md"])                # the long page did not fit
+        self.assertEqual(sel.left, ["Tasks/DV testing.md"])
+        self.assertIn("### Tasks/EMC.md\n", sel.text)
+        self.assertIn("Book the chamber.", sel.text)
+        self.assertIn("## Pages read for the second pass", sel.own_text)
+        self.assertNotIn("SOP 2028", sel.text)                              # no core
+        self.assertEqual(knowledge.gather_pages({}, ["Tasks/EMC.md"], token_budget=300).sent, {})
+
+    def test_page_names_resolve_by_path_or_unique_file_name(self):
+        found, dropped = knowledge.resolve_page_names(self.config, ["Tasks/EMC.md", "dv testing", "[[EMC]]", "Nowhere.md", "Projects/Dual DCDC"])
+        self.assertEqual(found, ["Tasks/EMC.md", "Tasks/DV testing.md", "Projects/Dual DCDC.md"])
+        self.assertEqual(dropped, 1)
+
+    def test_the_chooser_prompt_carries_the_thread_and_the_pages_read_and_parses_drop(self):
+        from programmind.knowledge import picker
+        table = knowledge.contents(self.config)
+        history = [("q1", "a" * 9000), ("q2", "b" * 9000)]
+        prompt = picker.choose_prompt("List them", {"": ""}, table["pages"], history=history, read_before=["Tasks/EMC.md"])
+        self.assertIn("b" * 9000, prompt)
+        self.assertNotIn("a" * 9000, prompt)                                # the latest turns survive the cap
+        self.assertIn("## Pages already read in this thread", prompt)
+        self.assertIn("- Tasks/EMC.md", prompt)
+        self.assertLess(prompt.index("## Earlier in this thread"), prompt.index("## Pages already read"))
+        result = picker.parse_choice(json.dumps({"members": [{"member": "Ask the vault", "read": ["Tasks/DV testing.md"],
+                                                             "drop": [{"path": "Tasks/EMC.md", "why": "moved on"}, "Other.md"]}]}),
+                                     {"": ""}, table["pages"])
+        self.assertTrue(result.ok)
+        self.assertEqual(result.picks[""]["full"], ["Tasks/DV testing.md"])
+        self.assertEqual(result.picks[""]["drop"], ["Tasks/EMC.md", "Other.md"])
+        self.assertEqual(result.picks[""]["drop_reasons"], {"Tasks/EMC.md": "moved on"})
+        self.assertEqual(picker.history_lines(None), [])
+
